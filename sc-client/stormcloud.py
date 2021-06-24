@@ -1,47 +1,62 @@
 from time import sleep
 from datetime import datetime, timedelta
 
+import threading
+import logging
+
+import keepalive_utils
+
 #number of seconds in between actions
-ACTION_TIMER = 90
+ACTION_TIMER = 9
+
+#updates based on number of threads created
+THREAD_NUM = 0
 
 def main():
     if not hash_db_exists():
-        print("no database found, creating")
         create_hash_db()
 
     else:
-        print("getting hash db")
         hash_db = get_hash_db()
 
     action_loop_and_sleep()
 
 def hash_db_exists():
-    pass
+    print("checking if hash db exists on machine")
 
 def create_hash_db():
-    pass
+    print("creating new hash db")
 
 def get_hash_db():
-    pass
+    print("getting hash database")
 
 def action_loop_and_sleep():
     PREV_RUN_TIME = datetime.now() - timedelta(minutes=2)
+    PREV_KEEPALIVE_FREQ = -1
 
     #daemon loop
-    #eventually change to while true
     while True:
-        sleep(ACTION_TIMER)
         settings = read_settings_file()
         CURRENT_RUN_TIME = datetime.now()
-        print("running at time %s with settings: %s" % (CURRENT_RUN_TIME,settings))
+        CUR_KEEPALIVE_FREQ = int(settings['KEEPALIVE_FREQ'])
+        BACKUP_TIME = int(settings['BACKUP_TIME'])
 
-        if check_for_backup(settings,CURRENT_RUN_TIME,PREV_RUN_TIME):
-            print("Time for the backup!")
+        #print("running at time %s with settings: %s" % (CURRENT_RUN_TIME,settings))
+
+        if check_for_backup(BACKUP_TIME,CURRENT_RUN_TIME,PREV_RUN_TIME):
             perform_backup()
-        else:
-            print("Going back to sleep...")
 
+        if keepalive_thread_is_running():
+            if CUR_KEEPALIVE_FREQ != PREV_KEEPALIVE_FREQ:
+                kill_current_keepalive_thread()
+                start_keepalive_thread(CUR_KEEPALIVE_FREQ)
+        else:
+            start_keepalive_thread(CUR_KEEPALIVE_FREQ)
+
+        PREV_KEEPALIVE_FREQ = CUR_KEEPALIVE_FREQ
         PREV_RUN_TIME = CURRENT_RUN_TIME
+
+        sleep(ACTION_TIMER)
 
 def read_settings_file(fn="settings.cfg"):
     #TODO:
@@ -57,12 +72,12 @@ def read_settings_file(fn="settings.cfg"):
 
     return settings
 
-def check_for_backup(settings_dict,current_run_time,previous_run_time):
+def check_for_backup(backup_time,current_run_time,previous_run_time):
     datetime_of_backup = datetime(
         year=datetime.now().year,
         month=datetime.now().month,
         day=datetime.now().day,
-        hour=int(settings_dict['BACKUP_TIME']),
+        hour=backup_time,
         minute=0,
         second=0
     )
@@ -77,8 +92,29 @@ def check_for_backup(settings_dict,current_run_time,previous_run_time):
         return False
 
 def perform_backup():
-    print("Backing up!")
+    print("\n\n\nBacking up!\n\n\n")
     exit()
+
+def keepalive_thread_is_running():
+    print("checking if keepalive thread is running")
+
+    if True:
+        return True
+    else:
+        return False
+
+def kill_current_keepalive_thread():
+    print("killing keepalive thread")
+
+def start_keepalive_thread(freq):
+    print("starting new keepalive thread with freq %d" % freq)
+
+    #make thread with this function as a target
+    t = threading.Thread(target=keepalive_utils.execute_ping_loop,args=(freq,THREAD_NUM))
+    t.start()
+
+    THREAD_NUM += 1
+    print("returning from start thread")
 
 if __name__ == "__main__":
     main()
