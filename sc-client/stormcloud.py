@@ -7,7 +7,7 @@ import logging
 import keepalive_utils
 
 #number of seconds in between actions
-ACTION_TIMER = 9
+ACTION_TIMER = 90
 
 #updates based on number of threads created
 THREAD_NUM = 0
@@ -33,6 +33,7 @@ def get_hash_db():
 def action_loop_and_sleep():
     PREV_RUN_TIME = datetime.now() - timedelta(minutes=2)
     PREV_KEEPALIVE_FREQ = -1
+    active_thread = None
 
     #daemon loop
     while True:
@@ -46,12 +47,15 @@ def action_loop_and_sleep():
         if check_for_backup(BACKUP_TIME,CURRENT_RUN_TIME,PREV_RUN_TIME):
             perform_backup()
 
-        if keepalive_thread_is_running():
-            if CUR_KEEPALIVE_FREQ != PREV_KEEPALIVE_FREQ:
-                kill_current_keepalive_thread()
-                start_keepalive_thread(CUR_KEEPALIVE_FREQ)
+        if active_thread is None:
+            active_thread = start_keepalive_thread(CUR_KEEPALIVE_FREQ)
         else:
-            start_keepalive_thread(CUR_KEEPALIVE_FREQ)
+            if active_thread.is_alive():
+                if CUR_KEEPALIVE_FREQ != PREV_KEEPALIVE_FREQ:
+                    kill_current_keepalive_thread(active_thread)
+                    active_thread = start_keepalive_thread(CUR_KEEPALIVE_FREQ)
+            else:
+                active_thread = start_keepalive_thread(CUR_KEEPALIVE_FREQ)
 
         PREV_KEEPALIVE_FREQ = CUR_KEEPALIVE_FREQ
         PREV_RUN_TIME = CURRENT_RUN_TIME
@@ -95,26 +99,18 @@ def perform_backup():
     print("\n\n\nBacking up!\n\n\n")
     exit()
 
-def keepalive_thread_is_running():
-    print("checking if keepalive thread is running")
-
-    if True:
-        return True
-    else:
-        return False
-
-def kill_current_keepalive_thread():
-    print("killing keepalive thread")
+def kill_current_keepalive_thread(active_thread):
+    print(active_thread)
 
 def start_keepalive_thread(freq):
     print("starting new keepalive thread with freq %d" % freq)
 
     #make thread with this function as a target
-    t = threading.Thread(target=keepalive_utils.execute_ping_loop,args=(freq,THREAD_NUM))
+    t = threading.Thread(target=keepalive_utils.execute_ping_loop,args=(freq,"keepalive_thd"))
     t.start()
 
-    THREAD_NUM += 1
     print("returning from start thread")
+    return t
 
 if __name__ == "__main__":
     main()
