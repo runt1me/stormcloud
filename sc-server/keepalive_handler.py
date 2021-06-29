@@ -15,12 +15,12 @@ while True:
     try:
         print("connection %s: %s" % (connection,client_address))
         while True:
-            data = connection.recv(16)
+            data = connection.recv(8)
             print("received %s" % data)
 
             if data:
                 print("sending response")
-                response_data = "message received"
+                response_data = b'message received'
                 connection.sendall(response_data)
             else:
                 print("no more data from client")
