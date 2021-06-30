@@ -1,4 +1,5 @@
 from time import sleep
+import random
 
 import socket
 import sys
@@ -7,6 +8,8 @@ import logging
 
 CONNECTION_SERVER = "www2.darkage.io"
 CONNECTION_PORT = 8080
+
+PACKET_LEN = 16
 
 def execute_ping_loop(interval,name):
     while True:
@@ -36,4 +39,12 @@ def execute_ping_loop(interval,name):
         sleep(interval)
 
 def wrap_keepalive_data():
-    return b'1,clienthello'
+    msg_text = b'1,%d' % random.randint(0,1000000)
+    
+    #pad message
+    len_to_pad = PACKET_LEN - len(msg_text)
+    print("adding %d characters to msg %s" % (len_to_pad,msg_text))
+
+    #encode ascii to convert str to bytes
+    final_msg = msg_text + ("." * len_to_pad).encode('ascii')
+    return final_msg
