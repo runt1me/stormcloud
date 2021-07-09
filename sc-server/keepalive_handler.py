@@ -27,6 +27,7 @@ def main():
                     client_id = parse_client_keepalive(data)
 
                     record_keepalive(client_id,current_time)
+                    display_file()
 
                 else:
                     break
@@ -52,7 +53,6 @@ def client_is_known(client_id):
     clients = []
     with open("/root/stormcloud/keepalives.csv","r") as keepalive_file:
         for line in [l for l in keepalive_file.read().split("\n") if l]:
-            print("line: %s" % line)
             clients.append(int(line.split(",")[0]))
 
     return client_id in clients
@@ -76,6 +76,11 @@ def record_keepalive_for_client(client_id,current_time):
     with open("/root/stormcloud/keepalives.csv","w") as keepalive_file:
         for line in original_lines:
             keepalive_file.write(line)
+
+def display_file():
+    with open("/root/stormcloud/keepalives.csv","r") as keepalive_file:
+        for line in [l for l in keepalive_file.read().split("\n") if l]:
+            print(line)
 
 if __name__ == "__main__":
     main()
