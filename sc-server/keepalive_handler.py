@@ -19,20 +19,16 @@ def main():
             print("connection %s: %s" % (connection,client_address))
             while True:
                 data = connection.recv(16)
-                print("received %s" % data)
                 current_time = datetime.now()
 
                 if data:
-                    print("sending response")
                     response_data = b'message received'
                     connection.sendall(response_data)
                     client_id = parse_client_keepalive(data)
-                    print("saw client id %d" % client_id)
 
                     record_keepalive(client_id,current_time)
 
                 else:
-                    print("no more data from client")
                     break
         finally:
             connection.close()
@@ -80,8 +76,6 @@ def record_keepalive_for_client(client_id,current_time):
     with open("/root/stormcloud/keepalives.csv","w") as keepalive_file:
         for line in original_lines:
             keepalive_file.write(line)
-
-    print("finished writing to /root/stormcloud/keepalives.csv")
 
 if __name__ == "__main__":
     main()
