@@ -41,6 +41,7 @@ def action_loop_and_sleep():
         CURRENT_RUN_TIME = datetime.now()
         CUR_KEEPALIVE_FREQ = int(settings['KEEPALIVE_FREQ'])
         BACKUP_TIME = int(settings['BACKUP_TIME'])
+        CLIENT_ID = int(settings['CLIENT_ID'])
 
         #print("running at time %s with settings: %s" % (CURRENT_RUN_TIME,settings))
 
@@ -48,14 +49,14 @@ def action_loop_and_sleep():
             perform_backup()
 
         if active_thread is None:
-            active_thread = start_keepalive_thread(CUR_KEEPALIVE_FREQ)
+            active_thread = start_keepalive_thread(CUR_KEEPALIVE_FREQ,CLIENT_ID)
         else:
             if active_thread.is_alive():
                 if CUR_KEEPALIVE_FREQ != PREV_KEEPALIVE_FREQ:
                     kill_current_keepalive_thread(active_thread)
-                    active_thread = start_keepalive_thread(CUR_KEEPALIVE_FREQ)
+                    active_thread = start_keepalive_thread(CUR_KEEPALIVE_FREQ,CLIENT_ID)
             else:
-                active_thread = start_keepalive_thread(CUR_KEEPALIVE_FREQ)
+                active_thread = start_keepalive_thread(CUR_KEEPALIVE_FREQ,CLIENT_ID)
 
         PREV_KEEPALIVE_FREQ = CUR_KEEPALIVE_FREQ
         PREV_RUN_TIME = CURRENT_RUN_TIME
@@ -102,11 +103,11 @@ def perform_backup():
 def kill_current_keepalive_thread(active_thread):
     print(active_thread)
 
-def start_keepalive_thread(freq):
+def start_keepalive_thread(freq,client_id):
     print("starting new keepalive thread with freq %d" % freq)
 
     #make thread with this function as a target
-    t = threading.Thread(target=keepalive_utils.execute_ping_loop,args=(freq,"keepalive_thd"))
+    t = threading.Thread(target=keepalive_utils.execute_ping_loop,args=(freq,client_id"keepalive_thd"))
     t.start()
 
     print("returning from start thread")

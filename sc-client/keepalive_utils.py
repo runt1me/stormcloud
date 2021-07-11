@@ -11,7 +11,7 @@ CONNECTION_PORT = 8080
 
 PACKET_LEN = 16
 
-def execute_ping_loop(interval,name):
+def execute_ping_loop(interval,name,client_id):
     while True:
         sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
         server_address = (CONNECTION_SERVER,CONNECTION_PORT)
@@ -19,7 +19,7 @@ def execute_ping_loop(interval,name):
         print("connecting to %s port %s" % server_address)
         sock.connect(server_address)
         try:
-            message = wrap_keepalive_data()
+            message = wrap_keepalive_data(client_id)
             print("sending message '%s'" % message)
             sock.sendall(message)
 
@@ -38,8 +38,8 @@ def execute_ping_loop(interval,name):
 
         sleep(interval)
 
-def wrap_keepalive_data():
-    msg_text = b'1,%d' % random.randint(0,1000000)
+def wrap_keepalive_data(client_id):
+    msg_text = b'%d,%d' % (client_id,random.randint(0,1000000))
     
     #pad message
     len_to_pad = PACKET_LEN - len(msg_text)
