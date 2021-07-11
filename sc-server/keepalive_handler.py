@@ -59,7 +59,7 @@ def client_is_known(client_id):
 
 def add_client_to_file(client_id):
     with open("/root/stormcloud/keepalives.csv","a") as keepalive_file:
-        keepalive_file.write("\n%d," % client_id)
+        keepalive_file.write("%d,\n" % client_id)
 
 def record_keepalive_for_client(client_id,current_time):
 
@@ -71,7 +71,7 @@ def record_keepalive_for_client(client_id,current_time):
         clients = [int(l.split(",")[0]) for l in original_lines]
         line_to_modify_idx = clients.index(client_id)
 
-        original_lines[line_to_modify_idx] = "\n%d,%s" % (client_id,current_time)
+        original_lines[line_to_modify_idx] = "%d,%s\n" % (client_id,current_time)
 
     with open("/root/stormcloud/keepalives.csv","w") as keepalive_file:
         for line in original_lines:
