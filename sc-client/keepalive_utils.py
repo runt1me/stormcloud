@@ -11,7 +11,7 @@ CONNECTION_PORT = 8080
 
 PACKET_LEN = 16
 
-def execute_ping_loop(interval,name,client_id):
+def execute_ping_loop(interval,client_id,name):
     while True:
         sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
         server_address = (CONNECTION_SERVER,CONNECTION_PORT)

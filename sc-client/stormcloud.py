@@ -107,7 +107,7 @@ def start_keepalive_thread(freq,client_id):
     print("starting new keepalive thread with freq %d" % freq)
 
     #make thread with this function as a target
-    t = threading.Thread(target=keepalive_utils.execute_ping_loop,args=(freq,client_id"keepalive_thd"))
+    t = threading.Thread(target=keepalive_utils.execute_ping_loop,args=(freq,client_id,"keepalive_thd"))
     t.start()
 
     print("returning from start thread")
