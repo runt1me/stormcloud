@@ -19,7 +19,7 @@ def main():
             print("connection %s: %s" % (connection,client_address))
             while True:
                 data = connection.recv(16)
-                current_time = datetime.now()
+                current_time = datetime.now().strftime("%Y-%M-%d %H:%M:%S")
 
                 if data:
                     response_data = b'message received'
