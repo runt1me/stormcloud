@@ -40,8 +40,8 @@ def action_loop_and_sleep():
         settings = read_settings_file()
         CURRENT_RUN_TIME = datetime.now()
         CUR_KEEPALIVE_FREQ = int(settings['KEEPALIVE_FREQ'])
+        CUR_CLIENT_ID = int(settings['CLIENT_ID'])
         BACKUP_TIME = int(settings['BACKUP_TIME'])
-        CLIENT_ID = int(settings['CLIENT_ID'])
 
         #print("running at time %s with settings: %s" % (CURRENT_RUN_TIME,settings))
 
@@ -49,16 +49,17 @@ def action_loop_and_sleep():
             perform_backup()
 
         if active_thread is None:
-            active_thread = start_keepalive_thread(CUR_KEEPALIVE_FREQ,CLIENT_ID)
+            active_thread = start_keepalive_thread(CUR_KEEPALIVE_FREQ,CUR_CLIENT_ID)
         else:
             if active_thread.is_alive():
-                if CUR_KEEPALIVE_FREQ != PREV_KEEPALIVE_FREQ:
+                if settings_have_changed(CUR_KEEPALIVE_FREQ,PREV_KEEPALIVE_FREQ,CUR_CLIENT_ID,PREV_CLIENT_ID):
                     kill_current_keepalive_thread(active_thread)
-                    active_thread = start_keepalive_thread(CUR_KEEPALIVE_FREQ,CLIENT_ID)
+                    active_thread = start_keepalive_thread(CUR_KEEPALIVE_FREQ,CUR_CLIENT_ID)
             else:
-                active_thread = start_keepalive_thread(CUR_KEEPALIVE_FREQ,CLIENT_ID)
+                active_thread = start_keepalive_thread(CUR_KEEPALIVE_FREQ,CUR_CLIENT_ID)
 
         PREV_KEEPALIVE_FREQ = CUR_KEEPALIVE_FREQ
+        PREV_CLIENT_ID = CUR_CLIENT_ID
         PREV_RUN_TIME = CURRENT_RUN_TIME
 
         sleep(ACTION_TIMER)
@@ -100,8 +101,16 @@ def perform_backup():
     print("\n\n\nBacking up!\n\n\n")
     exit()
 
+def settings_have_changed(CUR_KEEPALIVE_FREQ,PREV_KEEPALIVE_FREQ,CUR_CLIENT_ID,PREV_CLIENT_ID):
+    if CUR_KEEPALIVE_FREQ != PREV_KEEPALIVE_FREQ:
+        return True
+    elif CUR_CLIENT_ID != PREV_CLIENT_ID:
+        return True
+    else:
+        return False
+
 def kill_current_keepalive_thread(active_thread):
-    print(active_thread)
+    print("killing %s" % active_thread)
 
 def start_keepalive_thread(freq,client_id):
     print("starting new keepalive thread with freq %d" % freq)
