@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 from os import walk
+from time import sleep
 import pathlib
 
 import socket
@@ -7,7 +8,7 @@ import socket
 import logging
 
 #connection port for file backup
-CONNECTION_PORT = 8082
+CONNECTION_PORT = 8083
 CONNECTION_SERVER = "www2.darkage.io"
 
 HEADER_PORTION_CLIENT_LEN = 16
@@ -91,8 +92,9 @@ def ship_file_to_server(client_id,path,content,size):
         print("\tPATH: %s" %path)
         print("\tSIZE: %d" %size)
         message = wrap_file_for_delivery(client_id,path,content,size)
-        #sock.sendall(message)
+        sock.sendall(message)
 
+        """
         #bytes expected to be sent and recvd
         amount_recvd = 0
         amount_expected = 16
@@ -101,19 +103,17 @@ def ship_file_to_server(client_id,path,content,size):
             data = sock.recv(16)
             amount_recvd += len(data)
             print("received %s" % data)
+        """
 
     finally:
         print("closing socket")
         sock.close()
 
-    sleep(interval)
+    sleep(3)
 
 def wrap_file_for_delivery(client_id,path,content,size):
     wrapped_header = wrap_header(client_id,path,size)
-    print("header %s" % wrapped_header)
-    print(type(wrapped_header))
-    exit()
-    return b'%s%s%b' % (wrapped_header,DELIMITER,content)
+    return wrapped_header + DELIMITER.encode('ascii') + content
 
 def wrap_header(client_id,path,size):
     # HEADER PACKET BREAKDOWN
