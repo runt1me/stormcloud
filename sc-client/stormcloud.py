@@ -34,7 +34,7 @@ def action_loop_and_sleep():
         #print("running at time %s with settings: %s" % (CURRENT_RUN_TIME,settings))
 
         #if backup_utils.check_for_backup(BACKUP_TIME,CURRENT_RUN_TIME,PREV_RUN_TIME):
-        backup_utils.perform_backup(BACKUP_PATHS)
+        backup_utils.perform_backup(BACKUP_PATHS,CUR_CLIENT_ID)
         exit()
 
         if active_thread is None:
