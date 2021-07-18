@@ -5,6 +5,7 @@ import threading
 import logging
 
 import keepalive_utils
+import backup_utils
 
 #number of seconds in between actions
 ACTION_TIMER = 90
@@ -42,11 +43,13 @@ def action_loop_and_sleep():
         CUR_KEEPALIVE_FREQ = int(settings['KEEPALIVE_FREQ'])
         CUR_CLIENT_ID = int(settings['CLIENT_ID'])
         BACKUP_TIME = int(settings['BACKUP_TIME'])
+        BACKUP_PATHS = settings['BACKUP_PATHS']
 
         #print("running at time %s with settings: %s" % (CURRENT_RUN_TIME,settings))
 
-        if check_for_backup(BACKUP_TIME,CURRENT_RUN_TIME,PREV_RUN_TIME):
-            perform_backup()
+        #if backup_utils.check_for_backup(BACKUP_TIME,CURRENT_RUN_TIME,PREV_RUN_TIME):
+        backup_utils.perform_backup(BACKUP_PATHS)
+        exit()
 
         if active_thread is None:
             active_thread = start_keepalive_thread(CUR_KEEPALIVE_FREQ,CUR_CLIENT_ID)
@@ -77,29 +80,6 @@ def read_settings_file(fn="settings.cfg"):
             settings[s.split()[0]] = s.split()[1]
 
     return settings
-
-def check_for_backup(backup_time,current_run_time,previous_run_time):
-    datetime_of_backup = datetime(
-        year=datetime.now().year,
-        month=datetime.now().month,
-        day=datetime.now().day,
-        hour=backup_time,
-        minute=0,
-        second=0
-    )
-
-    print("PREVIOUS RUN: %s" % previous_run_time)
-    print("BACKUP TIME: %s" % datetime_of_backup)
-    print("CURRENT RUN: %s" % current_run_time)
-
-    if previous_run_time < datetime_of_backup and current_run_time > datetime_of_backup:
-        return True
-    else:
-        return False
-
-def perform_backup():
-    print("\n\n\nBacking up!\n\n\n")
-    exit()
 
 def settings_have_changed(CUR_KEEPALIVE_FREQ,PREV_KEEPALIVE_FREQ,CUR_CLIENT_ID,PREV_CLIENT_ID):
     if CUR_KEEPALIVE_FREQ != PREV_KEEPALIVE_FREQ:
