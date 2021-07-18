@@ -7,8 +7,15 @@ import socket
 import logging
 
 #connection port for file backup
-CONNECTION_PORT = 8081
+CONNECTION_PORT = 8082
 CONNECTION_SERVER = "www2.darkage.io"
+
+HEADER_PORTION_CLIENT_LEN = 16
+HEADER_PORTION_PATH_LEN   = 512
+HEADER_PORTION_SIZE_LEN   = 32
+
+#I love you, T :)
+DELIMITER="~||~TWT~||~"
 
 #return codes for checking hash db
 BACKUP_STATUS_NO_CHANGE = 0
@@ -67,14 +74,13 @@ def process_file(file_path_obj,client_id):
     elif status == BACKUP_STATUS_CHANGE:
         print("proceeding to backup file %s" %file_path_obj.name)
 
-        file_name = file_path_obj.name
         file_path = file_path_obj.resolve()
         file_content = file_path_obj.read_bytes()
         file_size = file_path_obj.stat().st_size
         
-        ship_file_to_server(client_id,file_name,file_path,file_content,file_size)
+        ship_file_to_server(client_id,file_path,file_content,file_size)
 
-def ship_file_to_server(client_id,name,path,content,size):
+def ship_file_to_server(client_id,path,content,size):
     sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
     server_address = (CONNECTION_SERVER,CONNECTION_PORT)
 
@@ -82,10 +88,9 @@ def ship_file_to_server(client_id,name,path,content,size):
     sock.connect(server_address)
     try:
         print("==== SENDING FILE : INFO ====")
-        print("\tNAME: %s" %name)
         print("\tPATH: %s" %path)
         print("\tSIZE: %d" %size)
-        message = wrap_file_for_delivery(client_id,name,path,content,size)
+        message = wrap_file_for_delivery(client_id,path,content,size)
         #sock.sendall(message)
 
         #bytes expected to be sent and recvd
@@ -103,8 +108,41 @@ def ship_file_to_server(client_id,name,path,content,size):
 
     sleep(interval)
 
-def wrap_file_for_delivery(client_id,name,path,content,size):
-    return b'%d,%s,%s,%d,%b' % (client_id,name,path,size,content)
-    
+def wrap_file_for_delivery(client_id,path,content,size):
+    wrapped_header = wrap_header(client_id,path,size)
+    print("header %s" % wrapped_header)
+    print(type(wrapped_header))
+    exit()
+    return b'%s%s%b' % (wrapped_header,DELIMITER,content)
+
+def wrap_header(client_id,path,size):
+    # HEADER PACKET BREAKDOWN
+    # +-----------------------------------------+
+    # | client_id    -> padded to 16 bytes      |
+    # | path         -> padded to 512 bytes     |
+    # | size of file -> padded to 32 bytes      |
+    # +-----------------------------------------+
+    # Total header size: 560 bytes
+    padded_client_id = pad_client_id(client_id)
+    padded_path      = pad_path(path)
+    padded_size      = pad_size(size)
+
+    return padded_client_id + padded_path + padded_size
+
+def pad_client_id(client_id):
+    len_to_pad = HEADER_PORTION_CLIENT_LEN - len(str(client_id))
+    print("adding %d characters to client id %s" % (len_to_pad,client_id))
+    return str(client_id).encode('ascii') + ('\x00' * len_to_pad).encode('ascii')
+
+def pad_path(path):
+    len_to_pad = HEADER_PORTION_PATH_LEN - len(str(path))
+    print("adding %d characters to path %s" % (len_to_pad,path))
+    return str(path).encode('ascii') + ('\x00' * len_to_pad).encode('ascii')
+
+def pad_size(size):
+    len_to_pad = HEADER_PORTION_SIZE_LEN - len(str(size))
+    print("adding %d characters to size %s" % (len_to_pad,size))
+    return str(size).encode('ascii') + ('\x00' * len_to_pad).encode('ascii')
+
 def check_hash_db(file_path_obj):
     return 1
