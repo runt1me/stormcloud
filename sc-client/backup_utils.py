@@ -82,9 +82,9 @@ def ship_file_to_server(client_id,name,path,content,size):
     sock.connect(server_address)
     try:
         print("==== SENDING FILE : INFO ====")
-        print("\t%sNAME: %s" %name)
-        print("\t%sPATH: %s" %path)
-        print("\t%sSIZE: %s" %size)
+        print("\tNAME: %s" %name)
+        print("\tPATH: %s" %path)
+        print("\tSIZE: %d" %size)
         message = wrap_file_for_delivery(client_id,name,path,content,size)
         #sock.sendall(message)
 
@@ -106,6 +106,5 @@ def ship_file_to_server(client_id,name,path,content,size):
 def wrap_file_for_delivery(client_id,name,path,content,size):
     return b'%d,%s,%s,%d,%b' % (client_id,name,path,size,content)
     
-
 def check_hash_db(file_path_obj):
     return 1
