@@ -14,22 +14,8 @@ ACTION_TIMER = 90
 THREAD_NUM = 0
 
 def main():
-    if not hash_db_exists():
-        create_hash_db()
-
-    else:
-        hash_db = get_hash_db()
-
+    hash_db = get_or_create_hash_db()
     action_loop_and_sleep()
-
-def hash_db_exists():
-    print("checking if hash db exists on machine")
-
-def create_hash_db():
-    print("creating new hash db")
-
-def get_hash_db():
-    print("getting hash database")
 
 def action_loop_and_sleep():
     PREV_RUN_TIME = datetime.now() - timedelta(minutes=2)
@@ -101,6 +87,22 @@ def start_keepalive_thread(freq,client_id):
 
     print("returning from start thread")
     return t
+
+def get_or_create_hash_db():
+    if not hash_db_exists():
+        return create_hash_db()
+
+    else:
+        return get_hash_db()
+
+def hash_db_exists():
+    print("checking if hash db exists on machine")
+
+def create_hash_db():
+    print("creating new hash db")
+
+def get_hash_db():
+    print("getting hash database")
 
 if __name__ == "__main__":
     main()

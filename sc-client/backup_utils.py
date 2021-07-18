@@ -2,6 +2,9 @@ from datetime import datetime, timedelta
 from os import walk
 import pathlib
 
+BACKUP_STATUS_NO_CHANGE = 0
+BACKUP_STATUS_CHANGE    = 1
+
 def check_for_backup(backup_time,current_run_time,previous_run_time):
     datetime_of_backup = datetime(
         year=datetime.now().year,
@@ -46,11 +49,23 @@ def perform_backup(paths):
 
 
 def process_file(file_path_obj):
-    file_name = file_path_obj.name
-    file_content = file_path_obj.read_bytes()
-    file_size = file_path_obj.stat().st_size
-    
-    ship_file_to_server(file_name,file_content,file_size)
+    status = check_hash_db(file_path_obj)
+
+    if status == BACKUP_STATUS_NO_CHANGE:
+        print("no change to file, continuing")
+        return
+
+    elif status == BACKUP_STATUS_CHANGE:
+        print("proceeding to backup file")
+
+        file_name = file_path_obj.name
+        file_content = file_path_obj.read_bytes()
+        file_size = file_path_obj.stat().st_size
+        
+        ship_file_to_server(file_name,file_content,file_size)
 
 def ship_file_to_server(name,content,size):
     print("mailing file")
+
+def check_hash_db(file_path_obj):
+    return 1
