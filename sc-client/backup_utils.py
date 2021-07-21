@@ -47,23 +47,16 @@ def perform_backup(paths,client_id):
         print("==   %s   ==" % path)
         path_obj = pathlib.Path(path)
 
+        #TODO: find a way to do this recursively
         if path_obj.is_file():
             print("%s is a file" % path)
             process_file(path_obj,client_id)
 
         elif path_obj.is_dir():
             print("%s is a dir" % path)
+            #[d for d in path_obj.iterdir() if d.is_dir()] ??? <- handle dirs so it keeps going into subdirs
             for file_obj in [p for p in path_obj.iterdir() if p.is_file()]:
                 process_file(file_obj,client_id)
-
-        dirns = []
-        for (dirpath, dirnames, filenames) in walk(path):
-            dirns.extend(dirnames)
-            break
-
-        for dirn in dirns:
-            print("dir: %s" % dirn)
-
 
 def process_file(file_path_obj,client_id):
     status = check_hash_db(file_path_obj)
@@ -112,6 +105,15 @@ def ship_file_to_server(client_id,path,content,size):
     sleep(3)
 
 def wrap_file_for_delivery(client_id,path,content,size):
+    # PACKET STRUCTURE
+    # +-----------------------------------------+
+    # | HEADER       = 560 bytes                |
+    # | DELIMITER    =  11 bytes                |
+    # | CONTENT      =   n bytes*               |
+    # | *content size defined                   |
+    # |  in size field of header (offset 528)   |
+    # +-----------------------------------------+
+    # content begins at offset 571
     wrapped_header = wrap_header(client_id,path,size)
     return wrapped_header + DELIMITER.encode('ascii') + content
 
