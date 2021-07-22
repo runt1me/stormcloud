@@ -19,9 +19,9 @@ def execute_ping_loop(interval,client_id,name):
         print("connecting to %s port %s" % server_address)
         sock.connect(server_address)
         try:
-            message = wrap_keepalive_data(client_id)
-            print("sending message '%s'" % message)
-            sock.sendall(message)
+            ka = wrap_keepalive_data(client_id)
+            print("sending keepalive")
+            sock.sendall(ka)
 
             #bytes expected to be sent and recvd
             amount_recvd = 0
@@ -46,5 +46,5 @@ def wrap_keepalive_data(client_id):
     print("adding %d characters to msg %s" % (len_to_pad,msg_text))
 
     #encode ascii to convert str to bytes
-    final_msg = msg_text + ("." * len_to_pad).encode('ascii')
+    final_msg = (msg_text + ("." * len_to_pad)).encode('ascii')
     return final_msg
