@@ -39,6 +39,7 @@ def execute_ping_loop(interval,client_id,name):
         sleep(interval)
 
 def wrap_keepalive_data(client_id):
+    #TODO: encrypt!!
     msg_text = b'%d,%d' % (client_id,random.randint(0,1000000))
     
     #pad message

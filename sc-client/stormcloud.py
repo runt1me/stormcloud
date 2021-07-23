@@ -14,6 +14,7 @@ ACTION_TIMER = 90
 THREAD_NUM = 0
 
 def main():
+    #TODO: check for updates???
     hash_db = get_or_create_hash_db()
     action_loop_and_sleep()
 
@@ -76,6 +77,8 @@ def settings_have_changed(CUR_KEEPALIVE_FREQ,PREV_KEEPALIVE_FREQ,CUR_CLIENT_ID,P
         return False
 
 def kill_current_keepalive_thread(active_thread):
+    #TODO: this function
+    #maybe change to multiprocessing instead of multithreading???
     print("killing %s" % active_thread)
 
 def start_keepalive_thread(freq,client_id):
@@ -96,12 +99,15 @@ def get_or_create_hash_db():
         return get_hash_db()
 
 def hash_db_exists():
+    #TODO: this function
     print("checking if hash db exists on machine")
 
 def create_hash_db():
+    #TODO: this function
     print("creating new hash db")
 
 def get_hash_db():
+    #TODO: this function
     print("getting hash database")
 
 if __name__ == "__main__":

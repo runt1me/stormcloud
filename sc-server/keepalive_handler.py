@@ -3,7 +3,6 @@ import sys
 from datetime import datetime
 
 def main():
-
     addr = ("", 8080)
     sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
 
@@ -44,6 +43,8 @@ def parse_client_keepalive(client_pkt):
 def record_keepalive(client_id,current_time):
     print("recording keepalive")
 
+    #TODO: for the love of God just use a database
+    #i never want to see this csv file again
     if not client_is_known(client_id):
         add_client_to_file(client_id)
 

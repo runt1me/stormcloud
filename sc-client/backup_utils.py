@@ -5,9 +5,15 @@ import pathlib
 
 import socket
 
+#TODO: change all prints to logging
+#TODO: change client to log locally and maybe send logs to remote?
+#      opt out of this maybe?
 import logging
 
 #connection port for file backup
+#TODO: maybe have the server use multiple ports for clients?
+#idea: clients could first reach out to the "request port" which would ask the server
+#for a port to communicate on for the transfers, and then it could go from there
 CONNECTION_PORT = 8083
 CONNECTION_SERVER = "www2.darkage.io"
 
@@ -42,7 +48,7 @@ def check_for_backup(backup_time,current_run_time,previous_run_time):
         return False
 
 def perform_backup(paths,client_id):
-    print("\n\n\nBacking up!\n\n\n")
+    print("Beginning backup!")
     for path in paths.split(","):
         print("==   %s   ==" % path)
         path_obj = pathlib.Path(path)
@@ -75,6 +81,7 @@ def process_file(file_path_obj,client_id):
         ship_file_to_server(client_id,file_path,file_content,file_size)
 
 def ship_file_to_server(client_id,path,content,size):
+    #TODO: encrypt!!
     sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
     server_address = (CONNECTION_SERVER,CONNECTION_PORT)
 
@@ -87,16 +94,9 @@ def ship_file_to_server(client_id,path,content,size):
         message = wrap_file_for_delivery(client_id,path,content,size)
         sock.sendall(message)
 
-        """
-        #bytes expected to be sent and recvd
-        amount_recvd = 0
-        amount_expected = 16
-
-        while amount_recvd < amount_expected:
-            data = sock.recv(16)
-            amount_recvd += len(data)
-            print("received %s" % data)
-        """
+        #TODO: server response to client??
+        #maybe respond with hash as verification check?
+        #or is the security of tcp enough?
 
     finally:
         print("closing socket")
@@ -147,4 +147,5 @@ def pad_size(size):
     return str(size).encode('ascii') + ('\x00' * len_to_pad).encode('ascii')
 
 def check_hash_db(file_path_obj):
+    #TODO: this function
     return 1
