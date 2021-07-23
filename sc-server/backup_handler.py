@@ -11,51 +11,59 @@ def main():
     #listen for incoming connections
     sock.listen(1)
     while True:
-        print("waiting for a connection")
+        print("Listening for connections...")
         connection, client_address = sock.accept()
 
         try:
             print("connection %s: %s" % (connection,client_address))
-            while True:
-                header = connection.recv(560)
-                current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            header = connection.recv(560)
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-                if header:
-                    client_field = header[0:16]
-                    file_path_field = header[16:528]
-                    length_field = header[528:560]
+            if header:
+                client = get_client_id(header[0:16])
+                file_path = header[16:528].decode('ascii')
+                length = get_content_length(header[528:560])
 
-                    print('Receiving file from client %s' % client_field.decode('ascii'))
-                    print(file_path_field.decode('ascii'))
+                print('Receiving file from client %d' % client)
+                print(file_path)
 
-                delimiter = connection.recv(11)
-                if delimiter:
-                    print(delimiter.decode('ascii'))
+            #not doing anything with this field right now,
+            #good verification check tho
+            delimiter = connection.recv(11)
+            print("received delimiter %s" % delimiter.decode('ascii'))
 
-                raw_content = connection.recv(get_content_length(length_field))
+            bytes_to_receive = length
+            raw_content = b''
+
+            while bytes_to_receive > 0:
+                bytes_recvd = connection.recv(bytes_to_receive)
+                raw_content += bytes_recvd
                 if raw_content:
-                    print("==RAW BYTES==")
-                    print(raw_content)
-                    print(len(raw_content))
+                    print("(Received %d bytes)" % len(bytes_recvd))
 
-        finally:
+                bytes_to_receive = bytes_to_receive - len(bytes_recvd)
+
+            #store file
+            store_file(client,file_path,length,raw_content)
+
+        except:
+            print("exception")
+            print("closing socket")
             connection.close()
-            exit()
 
 def get_content_length(length_field):
     #replace null characters with '' for the purpose of converting string -> int
-    print("receiving %d bytes" % int(length_field.decode('ascii').replace('\x00','')))
-    return int(length_field.decode('ascii').replace('\x00',''))
+    length_field_as_string = length_field.decode('ascii').replace('\x00','')
+    return int(length_field_as_string)
 
-def parse_client_keepalive(client_pkt):
-    #clean up byte array by removing b''
-    client_pkt_clean = str(client_pkt).replace("b","").replace("'","")
+def get_client_id(client_id_field):
+    client_id_as_string = client_id_field.decode('ascii').replace('\x00','')
+    return int(client_id_as_string)
 
-    client_id = int(client_pkt_clean.split(",")[0])
-    return client_id
-
-
-
+def store_file(client_id,file_path,file_length,file_raw_content):
+    print("== STORING FILE : %s ==" %file_path)
+    print("Client ID:\t%d" % client_id)
+    print("File Length:\t%d" % file_length)
 
 if __name__ == "__main__":
     main()
