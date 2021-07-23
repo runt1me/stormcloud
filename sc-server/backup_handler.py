@@ -28,6 +28,7 @@ def main():
 
         #not doing anything with this field right now,
         #good verification check tho
+        #TODO: delimiter integrity check
         delimiter = connection.recv(11)
         print("received delimiter %s" % delimiter.decode('ascii'))
 
