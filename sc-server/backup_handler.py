@@ -26,11 +26,11 @@ def main():
             print('Receiving file from client %d' % client)
             print(file_path)
 
-        #not doing anything with this field right now,
-        #good verification check tho
-        #TODO: delimiter integrity check
-        delimiter = connection.recv(11)
-        print("received delimiter %s" % delimiter.decode('ascii'))
+        check_result = perform_integrity_check_delimiter(connection.recv(11))
+        if check_result:
+            print("delimiter validated, continuing")
+        else:
+            print("invalid delimiter")
 
         bytes_to_receive = length
         raw_content = b''
@@ -77,6 +77,10 @@ def store_file(client_id,file_path,file_length,file_raw_content):
     print("writing content to %s" % path_on_server)
     with open(path_on_server,'wb') as outfile:
         outfile.write(file_raw_content)
+
+def perform_integrity_check_delimiter(delim):
+    return delim == "~||~TWT~||~"
+
 
 if __name__ == "__main__":
     main()
