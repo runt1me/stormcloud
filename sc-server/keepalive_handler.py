@@ -2,20 +2,19 @@ import socket
 import sys
 from datetime import datetime
 
+import logging
+
 def main():
-    addr = ("", 8080)
-    sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    initialize_logging()
+    sock = initialize_socket()
 
-    sock.bind(addr)
-
-    #listen for incoming connections
     sock.listen(1)
     while True:
-        print("waiting for a connection")
+        logging.log(logging.INFO,"KEEPALIVE_HANDLER is waiting for a connection")
         connection, client_address = sock.accept()
 
         try:
-            print("connection %s: %s" % (connection,client_address))
+            logging.log(logging.INFO,"connection %s: %s" % (connection,client_address))
             while True:
                 data = connection.recv(16)
                 current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -41,7 +40,7 @@ def parse_client_keepalive(client_pkt):
     return client_id
 
 def record_keepalive(client_id,current_time):
-    print("recording keepalive")
+    logging.log(logging.INFO,"recording keepalive")
 
     #TODO: for the love of God just use a database
     #i never want to see this csv file again
@@ -63,7 +62,6 @@ def add_client_to_file(client_id):
         keepalive_file.write("%d,\n" % client_id)
 
 def record_keepalive_for_client(client_id,current_time):
-
     #in order to update the file, read the whole thing first,
     #find the line to modify and change it, and then rewrite the whole file
     #this is a quick and dirty approach that wont apply once we implement a database
@@ -81,7 +79,23 @@ def record_keepalive_for_client(client_id,current_time):
 def display_file():
     with open("/root/stormcloud/keepalives.csv","r") as keepalive_file:
         for line in [l for l in keepalive_file.read().split("\n") if l]:
-            print(line)
+            logging.log(logging.INFO,line)
+
+def initialize_logging():
+    logging.basicConfig(
+            filename='/var/log/stormcloud_ka.log',
+            filemode='a',
+            format='%(asctime)s %(levelname)-8s %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S',
+            level=logging.DEBUG
+    )
+
+def initialize_socket():
+    addr = ("", 8080)
+    sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+
+    sock.bind(addr)
+    return sock
 
 if __name__ == "__main__":
     main()

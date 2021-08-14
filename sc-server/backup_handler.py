@@ -7,7 +7,7 @@ import logging
 def main():
     initialize_logging()
     sock = initialize_socket()
-    #listen for incoming connections
+
     sock.listen(1)
     while True:
         logging.log(logging.INFO, "Listening for connections...")
@@ -42,7 +42,6 @@ def main():
 
             bytes_to_receive = bytes_to_receive - len(bytes_recvd)
 
-        #store file
         store_file(client,file_path,length,raw_content)
 
 def get_content_length(length_field):
