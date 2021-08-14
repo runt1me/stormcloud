@@ -36,7 +36,6 @@ def action_loop_and_sleep():
 
         #if backup_utils.check_for_backup(BACKUP_TIME,CURRENT_RUN_TIME,PREV_RUN_TIME):
         backup_utils.perform_backup(BACKUP_PATHS,CUR_CLIENT_ID)
-        exit()
 
         if active_thread is None:
             active_thread = start_keepalive_thread(CUR_KEEPALIVE_FREQ,CUR_CLIENT_ID)
