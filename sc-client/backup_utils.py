@@ -10,6 +10,8 @@ import socket
 #      opt out of this maybe?
 import logging
 
+import crypto_utils
+
 #connection port for file backup
 #TODO: maybe have the server use multiple ports for clients?
 #idea: clients could first reach out to the "request port" which would ask the server
@@ -84,7 +86,8 @@ def process_file(file_path_obj,client_id):
             ship_file_to_server(client_id,file_path,file_content,file_size)
 
 def ship_file_to_server(client_id,path,content,size):
-    #TODO: encrypt!!
+    encrypted_content, encrypted_size = crypto_utils.encrypt_file(path)
+
     sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
     server_address = (CONNECTION_SERVER,CONNECTION_PORT)
 

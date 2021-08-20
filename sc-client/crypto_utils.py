@@ -10,7 +10,7 @@ def create_key():
     #with open('id_rsa','wb') as privkeyfile:
     #    privkeyfile.write(key.export_key('DER'))
 
-def encrypt_content_with_public_key(content):
+def encrypt_content(content):
     with open('secret_key.pem','r') as keyfile:
         key = RSA.import_key(keyfile.read())
 
@@ -27,6 +27,26 @@ def encrypt_content_with_public_key(content):
 
     print("===\n%s" % decrypted)
     assert(msg == decrypted)
+    return encrypted
+
+def encrypt_file(file_path):
+    with open('secret_key.pem','r') as keyfile:
+        key = RSA.import_key(keyfile.read())
+
+    file_content = file_path.read_bytes()
+    print("original file: %s" % file_content)
+
+    encryptor = PKCS1_OAEP.new(key)
+    encrypted = encryptor.encrypt(file_content)
+
+    print(encrypted)
+
+    decryptor = PKCS1_OAEP.new(key)
+    decrypted = decryptor.decrypt(ast.literal_eval(str(encrypted)))
+
+    print("===\n%s" % decrypted)
+    assert(file_content == decrypted)
+    return encrypted, len(encrypted)
 
 def bin2hex(binStr):
     return binascii.hexlify(binStr)
