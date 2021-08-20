@@ -72,13 +72,16 @@ def process_file(file_path_obj,client_id):
         return
 
     elif status == BACKUP_STATUS_CHANGE:
-        print("proceeding to backup file %s" %file_path_obj.name)
+        if not verify_file_integrity(file_path_obj):
+            print("WARNING: FILE INTEGRITY CHECK FAILED!!!")
+        else: 
+            print("proceeding to backup file %s" %file_path_obj.name)
 
-        file_path = file_path_obj.resolve()
-        file_content = file_path_obj.read_bytes()
-        file_size = file_path_obj.stat().st_size
+            file_path = file_path_obj.resolve()
+            file_content = file_path_obj.read_bytes()
+            file_size = file_path_obj.stat().st_size
         
-        ship_file_to_server(client_id,file_path,file_content,file_size)
+            ship_file_to_server(client_id,file_path,file_content,file_size)
 
 def ship_file_to_server(client_id,path,content,size):
     #TODO: encrypt!!
@@ -148,4 +151,8 @@ def pad_size(size):
 
 def check_hash_db(file_path_obj):
     #TODO: this function
+    return 1
+
+def verify_file_integrity(file_path_obj):
+    #TODO: make sure there is no ransomware in the file, anything wrong etc.
     return 1
