@@ -97,6 +97,7 @@ def ship_file_to_server(client_id,path,content,size):
         print("==== SENDING FILE : INFO ====")
         print("\tPATH: %s" %path)
         print("\tSIZE: %d" %size)
+        print("\tENCRYPTED SIZE: %d" %encrypted_size)
         message = wrap_file_for_delivery(client_id,path,content,size)
         sock.sendall(message)
 

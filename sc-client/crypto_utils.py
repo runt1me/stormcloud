@@ -2,32 +2,33 @@ from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_OAEP
 import ast
 
-def create_key():
-    key = RSA.generate(2048)
-    with open('secret_key.pem','wb') as keyfile:
-        keyfile.write(key.export_key('PEM'))
+from cryptography.fernet import Fernet
 
-    #with open('id_rsa','wb') as privkeyfile:
-    #    privkeyfile.write(key.export_key('DER'))
+def create_key():
+    key = Fernet.generate_key()
+
+    with open('secret.key', 'wb') as mykey:
+        mykey.write(key)
 
 def encrypt_content(content):
-    with open('secret_key.pem','r') as keyfile:
-        key = RSA.import_key(keyfile.read())
+    with open('secret.key', 'rb') as mykey:
+        key = mykey.read()
+
+    f = Fernet(key)
 
     msg = content.encode('ascii')
     print("using message: %s" % msg)
 
-    encryptor = PKCS1_OAEP.new(key)
-    encrypted = encryptor.encrypt(msg)
+    encrypted = f.encrypt(msg)
 
     print(encrypted)
 
-    decryptor = PKCS1_OAEP.new(key)
-    decrypted = decryptor.decrypt(ast.literal_eval(str(encrypted)))
+    decrypted = f.decrypt(encrypted)
 
     print("===\n%s" % decrypted)
+    print(type(decrypted))
     assert(msg == decrypted)
-    return encrypted
+    #return encrypted
 
 def encrypt_file(file_path):
     with open('secret_key.pem','r') as keyfile:
