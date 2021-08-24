@@ -1,10 +1,9 @@
-from Crypto.PublicKey import RSA
-from Crypto.Cipher import PKCS1_OAEP
-import ast
-
 from cryptography.fernet import Fernet
 
 def create_key():
+    #This should only be called once,
+    #during the installation of the client!
+    #unless we have some recurring changing key generation every X days
     key = Fernet.generate_key()
 
     with open('secret.key', 'wb') as mykey:
@@ -19,15 +18,7 @@ def encrypt_content(content):
     msg = content.encode('ascii')
     print("using message: %s" % msg)
 
-    encrypted = f.encrypt(msg)
-    print(encrypted)
-
-    decrypted = f.decrypt(encrypted)
-
-    print("===\n%s" % decrypted)
-    print(type(decrypted))
-    assert(msg == decrypted)
-    #return encrypted
+    return f.encrypt(msg)
 
 def encrypt_file(file_path):
     with open('secret.key','rb') as keyfile:
@@ -36,16 +27,16 @@ def encrypt_file(file_path):
     f = Fernet(key)
 
     file_content = file_path.read_bytes()
-    print("original file: %s" % file_content)
+    print("original file: %s (...)" % file_content[0:100])
 
     encrypted = f.encrypt(file_content)
-    print(encrypted)
+    verify_decrypt_integrity_check(f, file_content, encrypted)
 
-    decrypted = f.decrypt(encrypted)
-
-    print("===\n%s" % decrypted)
-    assert(file_content == decrypted)
     return encrypted, len(encrypted)
+
+def verify_decrypt_integrity_check(f, orig, encrypted):
+    decrypted = f.decrypt(encrypted)
+    assert(orig == decrypted)
 
 def bin2hex(binStr):
     return binascii.hexlify(binStr)
