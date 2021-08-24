@@ -11,8 +11,8 @@ def create_key():
         mykey.write(key)
 
 def encrypt_content(content):
-    with open('secret.key', 'rb') as mykey:
-        key = mykey.read()
+    with open('secret.key', 'rb') as keyfile:
+        key = keyfile.read()
 
     f = Fernet(key)
 
@@ -20,7 +20,6 @@ def encrypt_content(content):
     print("using message: %s" % msg)
 
     encrypted = f.encrypt(msg)
-
     print(encrypted)
 
     decrypted = f.decrypt(encrypted)
@@ -31,19 +30,18 @@ def encrypt_content(content):
     #return encrypted
 
 def encrypt_file(file_path):
-    with open('secret_key.pem','r') as keyfile:
-        key = RSA.import_key(keyfile.read())
+    with open('secret.key','rb') as keyfile:
+        key = keyfile.read()
+
+    f = Fernet(key)
 
     file_content = file_path.read_bytes()
     print("original file: %s" % file_content)
 
-    encryptor = PKCS1_OAEP.new(key)
-    encrypted = encryptor.encrypt(file_content)
-
+    encrypted = f.encrypt(file_content)
     print(encrypted)
 
-    decryptor = PKCS1_OAEP.new(key)
-    decrypted = decryptor.decrypt(ast.literal_eval(str(encrypted)))
+    decrypted = f.decrypt(encrypted)
 
     print("===\n%s" % decrypted)
     assert(file_content == decrypted)
