@@ -57,6 +57,8 @@ def get_client_id(client_id_field):
     return int(client_id_as_string)
 
 def store_file(client_id,file_path,file_length,file_raw_content):
+    #TODO: decrypt before storage
+
     logging.log(logging.INFO,"== STORING FILE : %s ==" %file_path)
     logging.log(logging.INFO,"Client ID:\t%d" % client_id)
     logging.log(logging.INFO,"File Length:\t%d" % file_length)
