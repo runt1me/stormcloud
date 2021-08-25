@@ -94,11 +94,8 @@ def ship_file_to_server(client_id,path,content,size):
     print("connecting to %s port %s" % server_address)
     sock.connect(server_address)
     try:
-        print("==== SENDING FILE : INFO ====")
-        print("\tPATH: %s" %path)
-        print("\tSIZE: %d" %size)
-        print("\tENCRYPTED SIZE: %d" %encrypted_size)
-        message = wrap_file_for_delivery(client_id,path,content,size)
+        dump_file_info(path,size,encrypted_size)
+        message = wrap_file_for_delivery(client_id,path,encrypted_content,encrypted_size)
         sock.sendall(message)
 
         #TODO: server response to client??
@@ -152,6 +149,12 @@ def pad_size(size):
     len_to_pad = HEADER_PORTION_SIZE_LEN - len(str(size))
     print("adding %d characters to size %s" % (len_to_pad,size))
     return str(size).encode('ascii') + ('\x00' * len_to_pad).encode('ascii')
+
+def dump_file_info(path,size,encrypted_size):
+    print("==== SENDING FILE : INFO ====")
+    print("\tPATH: %s" %path)
+    print("\tSIZE: %d" %size)
+    print("\tENCRYPTED SIZE: %d" %encrypted_size)
 
 def check_hash_db(file_path_obj):
     #TODO: this function
