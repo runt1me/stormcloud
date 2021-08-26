@@ -4,6 +4,8 @@ from datetime import datetime
 
 import logging
 
+from cryptography.fernet import Fernet
+
 def main():
     initialize_logging()
     sock = initialize_socket()
@@ -57,11 +59,11 @@ def get_client_id(client_id_field):
     return int(client_id_as_string)
 
 def store_file(client_id,file_path,file_length,file_raw_content):
-    #TODO: decrypt before storage
+    decrypted_raw_content, decrypted_length = decrypt_file(client_id,file_length,file_raw_content)
 
     logging.log(logging.INFO,"== STORING FILE : %s ==" %file_path)
     logging.log(logging.INFO,"Client ID:\t%d" % client_id)
-    logging.log(logging.INFO,"File Length:\t%d" % file_length)
+    logging.log(logging.INFO,"File Length:\t%d" % decrypted_length)
 
     #TODO: check and authenticate that its a legitimate client id
     #to prevent against spoofed packets and attacks
@@ -76,9 +78,20 @@ def store_file(client_id,file_path,file_length,file_raw_content):
 
     logging.log(logging.INFO,"writing content to %s" % path_on_server)
     with open(path_on_server,'wb') as outfile:
-        outfile.write(file_raw_content)
+        outfile.write(decrypted_raw_content)
+
+def decrypt_file(client_id,file_length,file_raw_content):
+    path_to_client_key = "/keys/%d/secret.key" % client_id
+    with open(path_to_client_key,'rb') as keyfile:
+        key = keyfile.read()
+
+    f = Fernet(key)
+    decrypted = f.decrypt(file_raw_content)
+
+    return decrypted, len(decrypted)
 
 def perform_integrity_check_delimiter(delim):
+    logging.log(logging.INFO,"%s (type %s)" % (delim,type(delim)))
     return delim == "~||~TWT~||~"
 
 def initialize_logging():
