@@ -92,7 +92,7 @@ def decrypt_file(client_id,file_length,file_raw_content):
 
 def perform_integrity_check_delimiter(delim):
     logging.log(logging.INFO,"%s (type %s)" % (delim,type(delim)))
-    return delim == "~||~TWT~||~"
+    return delim == b'~||~TWT~||~'
 
 def initialize_logging():
     logging.basicConfig(
