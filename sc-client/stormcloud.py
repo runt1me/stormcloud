@@ -6,6 +6,7 @@ import logging
 
 import keepalive_utils
 import backup_utils
+import logging_utils
 
 #number of seconds in between actions
 ACTION_TIMER = 90
@@ -15,8 +16,10 @@ THREAD_NUM = 0
 
 def main():
     settings = read_settings_file()
+    logging_utils.initialize_logging(int(settings['CLIENT_ID']))
+
     if int(settings['SEND_LOGS']):
-        initialize_logging(int(settings['CLIENT_ID']))
+        logging_utils.send_logfile_to_server()
 
     #TODO: check for updates???
     hash_db = get_or_create_hash_db()
@@ -111,15 +114,6 @@ def create_hash_db():
 def get_hash_db():
     #TODO: this function
     logging.log(logging.INFO,"getting hash database")
-
-def initialize_logging(client_id):
-    logging.basicConfig(
-        filename='client_%s_%s.log' % (client_id,datetime.now().strftime("%Y-%m-%d")),
-        filemode='a',
-        format='%(asctime)s %(levelname)-8s %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S',
-        level=logging.DEBUG
-    )
 
 if __name__ == "__main__":
     main()
