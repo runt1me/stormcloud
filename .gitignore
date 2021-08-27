@@ -4,3 +4,4 @@
 keepalives.csv
 *.pem
 *.key
+*.log
