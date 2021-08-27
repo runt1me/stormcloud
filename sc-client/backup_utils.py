@@ -40,9 +40,9 @@ def check_for_backup(backup_time,current_run_time,previous_run_time):
         second=0
     )
 
-    print("PREVIOUS RUN: %s" % previous_run_time)
-    print("BACKUP TIME: %s" % datetime_of_backup)
-    print("CURRENT RUN: %s" % current_run_time)
+    logging.log(logging.INFO,"PREVIOUS RUN: %s" % previous_run_time)
+    logging.log(logging.INFO,"BACKUP TIME: %s" % datetime_of_backup)
+    logging.log(logging.INFO,"CURRENT RUN: %s" % current_run_time)
 
     if previous_run_time < datetime_of_backup and current_run_time > datetime_of_backup:
         return True
@@ -50,18 +50,18 @@ def check_for_backup(backup_time,current_run_time,previous_run_time):
         return False
 
 def perform_backup(paths,client_id):
-    print("Beginning backup!")
+    logging.log(logging.INFO,"Beginning backup!")
     for path in paths.split(","):
-        print("==   %s   ==" % path)
+        logging.log(logging.INFO,"==   %s   ==" % path)
         path_obj = pathlib.Path(path)
 
         #TODO: find a way to do this recursively
         if path_obj.is_file():
-            print("%s is a file" % path)
+            logging.log(logging.INFO,"%s is a file" % path)
             process_file(path_obj,client_id)
 
         elif path_obj.is_dir():
-            print("%s is a dir" % path)
+            logging.log(logging.INFO,"%s is a dir" % path)
             #[d for d in path_obj.iterdir() if d.is_dir()] ??? <- handle dirs so it keeps going into subdirs
             for file_obj in [p for p in path_obj.iterdir() if p.is_file()]:
                 process_file(file_obj,client_id)
@@ -70,14 +70,14 @@ def process_file(file_path_obj,client_id):
     status = check_hash_db(file_path_obj)
 
     if status == BACKUP_STATUS_NO_CHANGE:
-        print("no change to file, continuing")
+        logging.log(logging.INFO,"no change to file, continuing")
         return
 
     elif status == BACKUP_STATUS_CHANGE:
         if not verify_file_integrity(file_path_obj):
-            print("WARNING: FILE INTEGRITY CHECK FAILED!!!")
+            logging.log(logging.INFO,"WARNING: FILE INTEGRITY CHECK FAILED!!!")
         else: 
-            print("proceeding to backup file %s" %file_path_obj.name)
+            logging.log(logging.INFO,"proceeding to backup file %s" %file_path_obj.name)
 
             file_path = file_path_obj.resolve()
             file_content = file_path_obj.read_bytes()
@@ -91,7 +91,7 @@ def ship_file_to_server(client_id,path,content,size):
     sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
     server_address = (CONNECTION_SERVER,CONNECTION_PORT)
 
-    print("connecting to %s port %s" % server_address)
+    logging.log(logging.INFO,"connecting to %s port %s" % server_address)
     sock.connect(server_address)
     try:
         dump_file_info(path,size,encrypted_size)
@@ -103,7 +103,7 @@ def ship_file_to_server(client_id,path,content,size):
         #or is the security of tcp enough?
 
     finally:
-        print("closing socket")
+        logging.log(logging.INFO,"closing socket")
         sock.close()
 
     sleep(3)
@@ -137,24 +137,24 @@ def wrap_header(client_id,path,size):
 
 def pad_client_id(client_id):
     len_to_pad = HEADER_PORTION_CLIENT_LEN - len(str(client_id))
-    print("adding %d characters to client id %s" % (len_to_pad,client_id))
+    logging.log(logging.INFO,"adding %d characters to client id %s" % (len_to_pad,client_id))
     return str(client_id).encode('ascii') + ('\x00' * len_to_pad).encode('ascii')
 
 def pad_path(path):
     len_to_pad = HEADER_PORTION_PATH_LEN - len(str(path))
-    print("adding %d characters to path %s" % (len_to_pad,path))
+    logging.log(logging.INFO,"adding %d characters to path %s" % (len_to_pad,path))
     return str(path).encode('ascii') + ('\x00' * len_to_pad).encode('ascii')
 
 def pad_size(size):
     len_to_pad = HEADER_PORTION_SIZE_LEN - len(str(size))
-    print("adding %d characters to size %s" % (len_to_pad,size))
+    logging.log(logging.INFO,"adding %d characters to size %s" % (len_to_pad,size))
     return str(size).encode('ascii') + ('\x00' * len_to_pad).encode('ascii')
 
 def dump_file_info(path,size,encrypted_size):
-    print("==== SENDING FILE : INFO ====")
-    print("\tPATH: %s" %path)
-    print("\tSIZE: %d" %size)
-    print("\tENCRYPTED SIZE: %d" %encrypted_size)
+    logging.log(logging.INFO,"==== SENDING FILE : INFO ====")
+    logging.log(logging.INFO,"\tPATH: %s" %path)
+    logging.log(logging.INFO,"\tSIZE: %d" %size)
+    logging.log(logging.INFO,"\tENCRYPTED SIZE: %d" %encrypted_size)
 
 def check_hash_db(file_path_obj):
     #TODO: this function

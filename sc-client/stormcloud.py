@@ -14,25 +14,28 @@ ACTION_TIMER = 90
 THREAD_NUM = 0
 
 def main():
+    settings = read_settings_file()
+    if int(settings['SEND_LOGS']):
+        initialize_logging(int(settings['CLIENT_ID']))
+
     #TODO: check for updates???
     hash_db = get_or_create_hash_db()
-    action_loop_and_sleep()
+    action_loop_and_sleep(settings=settings)
 
-def action_loop_and_sleep():
+def action_loop_and_sleep(settings):
     PREV_RUN_TIME = datetime.now() - timedelta(minutes=2)
     PREV_KEEPALIVE_FREQ = -1
     active_thread = None
 
     #daemon loop
     while True:
-        settings = read_settings_file()
         CURRENT_RUN_TIME = datetime.now()
         CUR_KEEPALIVE_FREQ = int(settings['KEEPALIVE_FREQ'])
         CUR_CLIENT_ID = int(settings['CLIENT_ID'])
         BACKUP_TIME = int(settings['BACKUP_TIME'])
         BACKUP_PATHS = settings['BACKUP_PATHS']
 
-        #print("running at time %s with settings: %s" % (CURRENT_RUN_TIME,settings))
+        logging.log(logging.INFO,"running at time %s with settings: %s" % (CURRENT_RUN_TIME,settings))
 
         #if backup_utils.check_for_backup(BACKUP_TIME,CURRENT_RUN_TIME,PREV_RUN_TIME):
         backup_utils.perform_backup(BACKUP_PATHS,CUR_CLIENT_ID)
@@ -78,16 +81,16 @@ def settings_have_changed(CUR_KEEPALIVE_FREQ,PREV_KEEPALIVE_FREQ,CUR_CLIENT_ID,P
 def kill_current_keepalive_thread(active_thread):
     #TODO: this function
     #maybe change to multiprocessing instead of multithreading???
-    print("killing %s" % active_thread)
+    logging.log(logging.INFO,"killing %s" % active_thread)
 
 def start_keepalive_thread(freq,client_id):
-    print("starting new keepalive thread with freq %d" % freq)
+    logging.log(logging.INFO,"starting new keepalive thread with freq %d" % freq)
 
     #make thread with this function as a target
     t = threading.Thread(target=keepalive_utils.execute_ping_loop,args=(freq,client_id,"keepalive_thd"))
     t.start()
 
-    print("returning from start thread")
+    logging.log(logging.INFO,"returning from start thread")
     return t
 
 def get_or_create_hash_db():
@@ -99,15 +102,24 @@ def get_or_create_hash_db():
 
 def hash_db_exists():
     #TODO: this function
-    print("checking if hash db exists on machine")
+    logging.log(logging.INFO,"checking if hash db exists on machine")
 
 def create_hash_db():
     #TODO: this function
-    print("creating new hash db")
+    logging.log(logging.INFO,"creating new hash db")
 
 def get_hash_db():
     #TODO: this function
-    print("getting hash database")
+    logging.log(logging.INFO,"getting hash database")
+
+def initialize_logging(client_id):
+    logging.basicConfig(
+        filename='client_%s_%s.log' % (client_id,datetime.now().strftime("%Y-%m-%d")),
+        filemode='a',
+        format='%(asctime)s %(levelname)-8s %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S',
+        level=logging.DEBUG
+    )
 
 if __name__ == "__main__":
     main()

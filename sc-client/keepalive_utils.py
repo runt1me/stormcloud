@@ -16,11 +16,11 @@ def execute_ping_loop(interval,client_id,name):
         sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
         server_address = (CONNECTION_SERVER,CONNECTION_PORT)
 
-        print("connecting to %s port %s" % server_address)
+        logging.log(logging.INFO,"connecting to %s port %s" % server_address)
         sock.connect(server_address)
         try:
             ka = wrap_keepalive_data(client_id)
-            print("sending keepalive")
+            logging.log(logging.INFO,"sending keepalive")
             sock.sendall(ka)
 
             #bytes expected to be sent and recvd
@@ -30,10 +30,10 @@ def execute_ping_loop(interval,client_id,name):
             while amount_recvd < amount_expected:
                 data = sock.recv(16)
                 amount_recvd += len(data)
-                print("received %s" % data)
+                logging.log(logging.INFO,"received %s" % data)
 
         finally:
-            print("closing socket")
+            logging.log(logging.INFO,"closing socket")
             sock.close()
 
         sleep(interval)
@@ -44,7 +44,7 @@ def wrap_keepalive_data(client_id):
     
     #pad message
     len_to_pad = PACKET_LEN - len(msg_text)
-    print("adding %d characters to msg %s" % (len_to_pad,msg_text))
+    logging.log(logging.INFO,"adding %d characters to msg %s" % (len_to_pad,msg_text))
 
     #encode ascii to convert str to bytes
     final_msg = (msg_text + ("." * len_to_pad)).encode('ascii')
