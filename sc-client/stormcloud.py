@@ -16,10 +16,10 @@ THREAD_NUM = 0
 
 def main():
     settings = read_settings_file()
-    logging_utils.initialize_logging(int(settings['CLIENT_ID']))
-
     if int(settings['SEND_LOGS']):
-        logging_utils.send_logfile_to_server(int(settings['CLIENT_ID']))
+        logging_utils.send_logs_to_server(int(settings['CLIENT_ID']))
+    
+    logging_utils.initialize_logging(int(settings['CLIENT_ID']))
 
     #TODO: check for updates???
     hash_db = get_or_create_hash_db()

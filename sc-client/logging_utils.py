@@ -2,6 +2,7 @@ from time import sleep
 from datetime import datetime, timedelta
 import socket
 import sys
+import os
 import glob
 import pathlib
 
@@ -10,20 +11,21 @@ import logging
 import crypto_utils
 import network_utils
 
-CONNECTION_PORT = 8081
+LOGGING_PORT = 8081
 
-def send_logfile_to_server(client_id):
-    filepath = pathlib.Path(get_most_recent_logfile(client_id=client_id))    
-    network_utils.ship_file_to_server(client_id,filepath,port=CONNECTION_PORT)
+def send_logs_to_server(client_id):
+    #random note
+    #make sure that there isnt an issue with initializing logging
+    #creating new files and then immediately sending them up as blank files
+    #and deleting them immediately
+    logfiles_list = get_logfiles(client_id=client_id)
+    for logfile in logfiles_list:
+        filepath = pathlib.Path(logfile)    
+        network_utils.ship_file_to_server(client_id,filepath,port=LOGGING_PORT)
+        os.remove(logfile)
 
-def get_most_recent_logfile(client_id):
-    #TODO: look for all files that have name patterned client_CID*.log
-    #send most recent logfile
-    path = "client_%s*.log" % client_id
-    all_bytes = []
-    for filename in glob.glob(path):
-        print("using filename %s" % filename)
-        return filename
+def get_logfiles(client_id):
+    return glob.glob("client_%s*.log" % client_id)
 
 def initialize_logging(client_id):
     logging.basicConfig(
