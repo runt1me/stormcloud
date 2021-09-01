@@ -9,6 +9,8 @@ def main():
     sock = initialize_socket()
 
     sock.listen(1)
+    #TODO: handle random junk coming into 8080
+    #or maybe pick a different port?
     while True:
         logging.log(logging.INFO,"KEEPALIVE_HANDLER is waiting for a connection")
         connection, client_address = sock.accept()
