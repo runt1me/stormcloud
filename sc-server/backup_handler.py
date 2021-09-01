@@ -1,14 +1,15 @@
 import socket
 import sys
 from datetime import datetime
+import argparse
 
 import logging
 
 from cryptography.fernet import Fernet
 
-def main():
+def main(LISTEN_PORT):
     initialize_logging()
-    sock = initialize_socket()
+    sock = initialize_socket(LISTEN_PORT)
 
     sock.listen(1)
     while True:
@@ -103,12 +104,16 @@ def initialize_logging():
             level=logging.DEBUG
     )
 
-def initialize_socket():
-    addr = ("", 8083)
+def initialize_socket(LISTEN_PORT):
+    addr = ("", LISTEN_PORT)
     sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
 
     sock.bind(addr)
     return sock
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-p", "--port", type=int, help="port to listen on for backup handling")
+    args = parser.parse_args()
+
+    main(args.port)
