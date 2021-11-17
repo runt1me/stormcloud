@@ -4,10 +4,6 @@ from time import sleep
 import pathlib
 
 import socket
-
-#TODO: change all prints to logging
-#TODO: change client to log locally and maybe send logs to remote?
-#      opt out of this maybe?
 import logging
 
 import crypto_utils
@@ -23,6 +19,7 @@ DELIMITER="~||~TWT~||~"
 
 def ship_file_to_server(client_id,path,port):
     encrypted_content, encrypted_size = crypto_utils.encrypt_file(path)
+    encrypted_path, encrypted_path_size = crypto_utils.encrypt_content(path)
 
     sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
     server_address = (CONNECTION_SERVER,port)
@@ -31,7 +28,13 @@ def ship_file_to_server(client_id,path,port):
     sock.connect(server_address)
     try:
         dump_file_info(path,encrypted_size)
-        message = wrap_file_for_delivery(client_id,path,encrypted_content,encrypted_size)
+        message = wrap_file_for_delivery(
+            client_id,
+            encrypted_path,
+            encrypted_content,
+            encrypted_size
+        )
+        
         sock.sendall(message)
 
         #TODO: server response to client??
@@ -42,9 +45,9 @@ def ship_file_to_server(client_id,path,port):
         logging.log(logging.INFO,"closing socket")
         sock.close()
 
-    sleep(3)
+    sleep(1)
 
-def wrap_file_for_delivery(client_id,path,content,size):
+def wrap_file_for_delivery(client_id,path,content,content_size):
     # PACKET STRUCTURE
     # +-----------------------------------------+
     # | HEADER       = 560 bytes                |
@@ -54,7 +57,7 @@ def wrap_file_for_delivery(client_id,path,content,size):
     # |  in size field of header (offset 528)   |
     # +-----------------------------------------+
     # content begins at offset 571
-    wrapped_header = wrap_header(client_id,path,size)
+    wrapped_header = wrap_header(client_id,path,content_size)
     return wrapped_header + DELIMITER.encode('ascii') + content
 
 def wrap_header(client_id,path,size):

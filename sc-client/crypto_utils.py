@@ -18,7 +18,10 @@ def encrypt_content(content):
     f = Fernet(key)
 
     msg = content.encode('ascii')
-    return f.encrypt(msg)
+    encrypted = f.encrypt(msg)
+    verify_decrypt_integrity_check(f,content,encrypted)
+
+    return encrypted, len(encrypted)
 
 def encrypt_file(file_path):
     with open('secret.key','rb') as keyfile:
