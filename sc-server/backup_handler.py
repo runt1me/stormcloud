@@ -7,6 +7,14 @@ import logging
 
 from cryptography.fernet import Fernet
 
+#packet data constants
+HEADER_SIZE_BYTES=560
+
+#offsets in the packet
+CLIENT_FIELD_END_POS=16
+FILE_PATH_FIELD_END_POS=528
+LENGTH_FIELD_END_POS=560
+
 def main(LISTEN_PORT):
     initialize_logging()
     sock = initialize_socket(LISTEN_PORT)
@@ -17,13 +25,14 @@ def main(LISTEN_PORT):
         connection, client_address = sock.accept()
 
         logging.log(logging.INFO, "connection %s: %s" % (connection,client_address))
-        header = connection.recv(560)
+        header = connection.recv(HEADER_SIZE_BYTES)
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         if header:
-            client = get_client_id(header[0:16])
-            file_path = get_file_path(header[16:528])
-            length = get_content_length(header[528:560])
+            print("entire header: %s" % header)
+            client = get_client_id(header[0:CLIENT_FIELD_END_POS])
+            file_path = get_file_path(client,header[CLIENT_FIELD_END_POS:FILE_PATH_FIELD_END_POS])
+            length = get_content_length(header[FILE_PATH_FIELD_END_POS:LENGTH_FIELD_END_POS])
 
             logging.log(logging.INFO,'Receiving file from client %d' % client)
             logging.log(logging.INFO, file_path)
@@ -52,7 +61,8 @@ def get_content_length(length_field):
     length_field_as_string = length_field.decode('ascii').replace('\x00','')
     return int(length_field_as_string)
 
-def get_file_path(path_field):
+def get_file_path(client_id,path_field):
+    #path,_ = decrypt_msg(client_id,path_field)
     return path_field.decode('ascii').replace('\x00','')
 
 def get_client_id(client_id_field):
@@ -82,14 +92,33 @@ def store_file(client_id,file_path,file_length,file_raw_content):
         outfile.write(decrypted_raw_content)
 
 def decrypt_file(client_id,file_length,file_raw_content):
+    print(file_raw_content)
+    print(type(file_raw_content))
+
+    f = get_fernet(client_id)
+    decrypted = f.decrypt(file_raw_content)
+
+    return decrypted, len(decrypted)
+
+def decrypt_msg(client_id,msg_encrypted):
+    print(msg_encrypted)
+    print(type(msg_encrypted))
+    print(len(msg_encrypted))
+
+    f = get_fernet(client_id)
+
+    print(f)
+    print(client_id)
+    decrypted = f.decrypt(msg_encrypted)
+
+    return decrypted, len(decrypted)
+
+def get_fernet(client_id):
     path_to_client_key = "/keys/%d/secret.key" % client_id
     with open(path_to_client_key,'rb') as keyfile:
         key = keyfile.read()
 
-    f = Fernet(key)
-    decrypted = f.decrypt(file_raw_content)
-
-    return decrypted, len(decrypted)
+    return Fernet(key)
 
 def perform_integrity_check_delimiter(delim):
     logging.log(logging.INFO,"%s (type %s)" % (delim,type(delim)))
