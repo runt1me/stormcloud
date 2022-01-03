@@ -5,3 +5,4 @@ keepalives.csv
 *.pem
 *.key
 *.log
+*.sql
