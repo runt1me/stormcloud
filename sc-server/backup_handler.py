@@ -4,6 +4,7 @@ from datetime import datetime
 import argparse
 
 import logging
+import database_utils as db
 
 from cryptography.fernet import Fernet
 
