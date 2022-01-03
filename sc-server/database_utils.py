@@ -6,6 +6,7 @@ import os
 # REMEMBER TO cnx.commit()!
 
 def run():
+  # Worked as of 1/3/2022
   print("update_callback_for_device(1,'2022-01-03 10:52:00',0)")
   print(update_callback_for_device(1,'2022-01-03 10:52:00',0))
   print("add_or_update_file_for_device(1,'foo.txt','C:\\','C:\\foo.txt',11,'txt','/storage/1/foo.txt')")
@@ -16,7 +17,7 @@ def run():
 def update_callback_for_device(device_id, callback_time, status_code):
   # IN DID INT, IN callback_time varchar(512), IN device_status INT
   ret = []
-  cnx = connect_to_db()
+  cnx = __connect_to_db__()
   cursor = cnx.cursor(buffered=True)
 
   try:
@@ -33,7 +34,7 @@ def update_callback_for_device(device_id, callback_time, status_code):
 
   finally:
     cnx.commit()
-    teardown(cursor,cnx)
+    __teardown__(cursor,cnx)
     return ret
 
 def add_or_update_file_for_device(device_id, file_name, file_path, client_full_name_and_path, file_size, file_type, stormcloud_full_name_and_path):
@@ -46,7 +47,7 @@ def add_or_update_file_for_device(device_id, file_name, file_path, client_full_n
   # IN stormcloud_full_name_and_path varchar(1024)
 
   ret = []
-  cnx = connect_to_db()
+  cnx = __connect_to_db__()
   cursor = cnx.cursor(buffered=True)
 
   try:
@@ -63,7 +64,7 @@ def add_or_update_file_for_device(device_id, file_name, file_path, client_full_n
 
   finally:
     cnx.commit()
-    teardown(cursor,cnx)
+    __teardown__(cursor,cnx)
     return ret
 
 def add_or_update_device_for_customer(customer_id, device_name, device_type, ip_address, operating_system, device_status, last_callback):
@@ -76,7 +77,7 @@ def add_or_update_device_for_customer(customer_id, device_name, device_type, ip_
   # IN last_callback varchar(512)
 
   ret = []
-  cnx = connect_to_db()
+  cnx = __connect_to_db__()
   cursor = cnx.cursor(buffered=True)
 
   try:
@@ -93,13 +94,13 @@ def add_or_update_device_for_customer(customer_id, device_name, device_type, ip_
 
   finally:
     cnx.commit()
-    teardown(cursor,cnx)
+    __teardown__(cursor,cnx)
     return ret
 
 def get_last_10_callbacks_for_device(device_ip,device_name):
   ret = []
 
-  cnx = connect_to_db()
+  cnx = __connect_to_db__()
   cursor = cnx.cursor(buffered=True)
 
   device_id = -1
@@ -124,10 +125,10 @@ def get_last_10_callbacks_for_device(device_ip,device_name):
     print(e)
 
   finally:
-    teardown(cursor,cnx)
+    __teardown__(cursor,cnx)
     return ret
 
-def connect_to_db():
+def __connect_to_db__():
   mysql_username = os.getenv('MYSQLUSER')
   mysql_password = os.getenv('MYSQLPASSWORD')
   mysql_db_name  = os.getenv('MYSQLDBNAME')
@@ -142,7 +143,7 @@ def connect_to_db():
           port=mysql_db_port
          )
 
-def teardown(cursor,cnx):
+def __teardown__(cursor,cnx):
   if cnx.is_connected():
     cursor.close()
     cnx.close()
