@@ -17,9 +17,9 @@ def encrypt_content(content):
 
     f = Fernet(key)
 
-    msg = content.encode('ascii')
+    msg = str(content).encode('ascii')
     encrypted = f.encrypt(msg)
-    verify_decrypt_integrity_check(f,content,encrypted)
+    verify_decrypt_integrity_check(f,str(content).encode('ascii'),encrypted)
 
     return encrypted, len(encrypted)
 
