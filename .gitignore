@@ -6,3 +6,4 @@ keepalives.csv
 *.key
 *.log
 *.sql
+*.vscode*
