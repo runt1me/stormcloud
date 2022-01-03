@@ -102,6 +102,9 @@ def decrypt_file(client_id,file_length,file_raw_content):
     return decrypted, len(decrypted)
 
 def decrypt_msg(client_id,msg_encrypted):
+    raw_msg = b''
+    raw_msg += msg_encrypted
+
     print(msg_encrypted)
     print(type(msg_encrypted))
     print(len(msg_encrypted))
@@ -110,7 +113,7 @@ def decrypt_msg(client_id,msg_encrypted):
 
     print(f)
     print(client_id)
-    decrypted = f.decrypt(msg_encrypted)
+    decrypted = f.decrypt(raw_msg)
 
     return decrypted, len(decrypted)
 
