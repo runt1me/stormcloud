@@ -59,7 +59,7 @@ def get_content_length(length_field):
 
 def get_file_path(client_id,path_field):
     path,_ = decrypt_msg(client_id,path_field)
-    return path.decode('ascii').replace('\x00','')
+    return path.decode('ascii')
 
 def get_client_id(client_id_field):
     client_id_as_string = client_id_field.decode('ascii').replace('\x00','')
@@ -88,25 +88,17 @@ def store_file(client_id,file_path,file_length,file_raw_content):
         outfile.write(decrypted_raw_content)
 
 def decrypt_file(client_id,file_length,file_raw_content):
-    print(file_raw_content)
-    print(type(file_raw_content))
-
     f = get_fernet(client_id)
     decrypted = f.decrypt(file_raw_content)
 
     return decrypted, len(decrypted)
 
 def decrypt_msg(client_id,raw_msg):
-    print(raw_msg)
-    print(len(raw_msg))
+    #converts raw_msg (which is a byte string) to a byte array with \x00 (null bytes) removed
     raw_stripped_as_list = [i.to_bytes(1,sys.byteorder) for i in raw_msg if i.to_bytes(1,sys.byteorder)!=b'\x00']
 
-    #strip the b''
+    #strip the b'' and convert raw_stripped_as_list back to a bytestring
     raw_stripped = b''.join(raw_stripped_as_list[2:-1])
-
-    print(raw_stripped)
-    print(type(raw_stripped))
-    print(len(raw_stripped))
 
     f = get_fernet(client_id)
     decrypted = f.decrypt(raw_stripped)
