@@ -12,7 +12,7 @@ def run():
   print("add_or_update_file_for_device(1,'foo.txt','C:\\','C:\\foo.txt',11,'txt','/storage/1/foo.txt')")
   print(add_or_update_file_for_device(1,'foo.txt','C:\\','C:\\foo.txt',11,'txt','/storage/1/foo.txt'))
   print("add_or_update_device_for_customer(1,'important.server.com','important server','123.234.123.234','Windows 10 Pro',0,'2021-01-03 10:55:00')")
-  print(add_or_update_device_for_customer(1,'important.server.com','important server','123.234.123.234','Windows 10 Pro',0,'2021-01-03 10:55:00'))
+  print(add_or_update_device_for_customer(1,'important.server.com','important server','123.234.123.234','Windows 10 Pro',0,'2021-01-03 10:55:00','/keys/105/secret.key'))
 
 def update_callback_for_device(device_id, callback_time, status_code):
   # IN DID INT, IN callback_time varchar(512), IN device_status INT
@@ -67,14 +67,15 @@ def add_or_update_file_for_device(device_id, file_name, file_path, client_full_n
     __teardown__(cursor,cnx)
     return ret
 
-def add_or_update_device_for_customer(customer_id, device_name, device_type, ip_address, operating_system, device_status, last_callback):
+def add_or_update_device_for_customer(customer_id, device_name, device_type, ip_address, operating_system, device_status, last_callback, stormcloud_path_to_secrey_key):
   # IN CID INT,
   # IN device_name varchar(512),
   # IN device_type varchar(512),
   # IN ip_address varchar(256),
   # IN operating_system varchar(512),
   # IN device_status INT,
-  # IN last_callback varchar(512)
+  # IN last_callback varchar(512),
+  # IN stormcloud_path_to_secrey_key varchar(1024)
 
   ret = []
   cnx = __connect_to_db__()
@@ -82,7 +83,7 @@ def add_or_update_device_for_customer(customer_id, device_name, device_type, ip_
 
   try:
     cursor.callproc('add_or_update_device_for_customer',
-      (customer_id, device_name, device_type, ip_address, operating_system, device_status, last_callback)
+      (customer_id, device_name, device_type, ip_address, operating_system, device_status, last_callback, stormcloud_path_to_secrey_key)
     )
 
     for result in cursor.stored_results():
