@@ -11,11 +11,6 @@ from cryptography.fernet import Fernet
 #packet data constants
 HEADER_SIZE_BYTES=560
 
-#offsets in the packet
-CLIENT_FIELD_END_POS=16
-FILE_PATH_FIELD_END_POS=528
-LENGTH_FIELD_END_POS=560
-
 def main(LISTEN_PORT):
     initialize_logging()
     sock = initialize_socket(LISTEN_PORT)
@@ -31,9 +26,9 @@ def main(LISTEN_PORT):
 
         if header:
             print("entire header: %s" % header)
-            client = get_client_id(header[0:CLIENT_FIELD_END_POS])
-            file_path = get_file_path(client,header[CLIENT_FIELD_END_POS:FILE_PATH_FIELD_END_POS])
-            length = get_content_length(header[FILE_PATH_FIELD_END_POS:LENGTH_FIELD_END_POS])
+            client = get_client_id(header[0:16])
+            file_path = get_file_path(client,header[16:528])
+            length = get_content_length(header[528:560])
 
             logging.log(logging.INFO,'Receiving file from client %d' % client)
             logging.log(logging.INFO, file_path)
@@ -63,8 +58,8 @@ def get_content_length(length_field):
     return int(length_field_as_string)
 
 def get_file_path(client_id,path_field):
-    #path,_ = decrypt_msg(client_id,path_field)
-    return path_field.decode('ascii').replace('\x00','')
+    path,_ = decrypt_msg(client_id,path_field)
+    return path.decode('ascii')
 
 def get_client_id(client_id_field):
     client_id_as_string = client_id_field.decode('ascii').replace('\x00','')
@@ -93,27 +88,20 @@ def store_file(client_id,file_path,file_length,file_raw_content):
         outfile.write(decrypted_raw_content)
 
 def decrypt_file(client_id,file_length,file_raw_content):
-    print(file_raw_content)
-    print(type(file_raw_content))
-
     f = get_fernet(client_id)
     decrypted = f.decrypt(file_raw_content)
 
     return decrypted, len(decrypted)
 
-def decrypt_msg(client_id,msg_encrypted):
-    raw_msg = b''
-    raw_msg += msg_encrypted
+def decrypt_msg(client_id,raw_msg):
+    #converts raw_msg (which is a byte string) to a byte array with \x00 (null bytes) removed
+    raw_stripped_as_list = [i.to_bytes(1,sys.byteorder) for i in raw_msg if i.to_bytes(1,sys.byteorder)!=b'\x00']
 
-    print(msg_encrypted)
-    print(type(msg_encrypted))
-    print(len(msg_encrypted))
+    #strip the b'' and convert raw_stripped_as_list back to a bytestring
+    raw_stripped = b''.join(raw_stripped_as_list[2:-1])
 
     f = get_fernet(client_id)
-
-    print(f)
-    print(client_id)
-    decrypted = f.decrypt(raw_msg)
+    decrypted = f.decrypt(raw_stripped)
 
     return decrypted, len(decrypted)
 
