@@ -25,7 +25,6 @@ def main(LISTEN_PORT):
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         if header:
-            print("entire header: %s" % header)
             client = get_client_id(header[0:16])
             file_path = get_file_path(client,header[16:528])
             length = get_content_length(header[528:560])

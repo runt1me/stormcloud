@@ -4,6 +4,8 @@ from datetime import datetime
 
 import logging
 
+import database_utils as db
+
 def main():
     initialize_logging()
     sock = initialize_socket()
@@ -24,11 +26,9 @@ def main():
                 if data:
                     response_data = b'message received'
                     connection.sendall(response_data)
+
                     client_id = parse_client_keepalive(data)
-
                     record_keepalive(client_id,current_time)
-                    display_file()
-
                 else:
                     break
         finally:
@@ -42,46 +42,8 @@ def parse_client_keepalive(client_pkt):
     return client_id
 
 def record_keepalive(client_id,current_time):
-    logging.log(logging.INFO,"recording keepalive")
-
-    #TODO: for the love of God just use a database
-    #i never want to see this csv file again
-    if not client_is_known(client_id):
-        add_client_to_file(client_id)
-
-    record_keepalive_for_client(client_id,current_time)
-
-def client_is_known(client_id):
-    clients = []
-    with open("/root/stormcloud/keepalives.csv","r") as keepalive_file:
-        for line in [l for l in keepalive_file.read().split("\n") if l]:
-            clients.append(int(line.split(",")[0]))
-
-    return client_id in clients
-
-def add_client_to_file(client_id):
-    with open("/root/stormcloud/keepalives.csv","a") as keepalive_file:
-        keepalive_file.write("%d,\n" % client_id)
-
-def record_keepalive_for_client(client_id,current_time):
-    #in order to update the file, read the whole thing first,
-    #find the line to modify and change it, and then rewrite the whole file
-    #this is a quick and dirty approach that wont apply once we implement a database
-    with open("/root/stormcloud/keepalives.csv","r") as keepalive_file:
-        original_lines = [l for l in keepalive_file.read().split("\n") if l]
-        clients = [int(l.split(",")[0]) for l in original_lines]
-        line_to_modify_idx = clients.index(client_id)
-
-        original_lines[line_to_modify_idx] = "%d,%s\n" % (client_id,current_time)
-
-    with open("/root/stormcloud/keepalives.csv","w") as keepalive_file:
-        for line in original_lines:
-            keepalive_file.write(line)
-
-def display_file():
-    with open("/root/stormcloud/keepalives.csv","r") as keepalive_file:
-        for line in [l for l in keepalive_file.read().split("\n") if l]:
-            logging.log(logging.INFO,line)
+    logging.log(logging.INFO,"recording keepalive for device %d" %client_id)
+    db.update_callback_for_device(client_id,current_time,0)
 
 def initialize_logging():
     logging.basicConfig(

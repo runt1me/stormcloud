@@ -148,4 +148,3 @@ def __teardown__(cursor,cnx):
   if cnx.is_connected():
     cursor.close()
     cnx.close()
-    print("closed cnx")
