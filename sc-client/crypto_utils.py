@@ -30,7 +30,7 @@ def encrypt_file(file_path):
     f = Fernet(key)
 
     file_content = file_path.read_bytes()
-    logging.log(logging.INFO,"original file: %s (...)" % file_content[0:100])
+    #logging.log(logging.INFO,"original file: %s (...)" % file_content[0:100])
 
     encrypted = f.encrypt(file_content)
     verify_decrypt_integrity_check(f, file_content, encrypted)

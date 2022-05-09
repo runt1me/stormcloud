@@ -21,9 +21,6 @@ def ship_file_to_server(client_id,path,port):
     encrypted_content, encrypted_size = crypto_utils.encrypt_file(path)
     encrypted_path, encrypted_path_size = crypto_utils.encrypt_content(path)
 
-    print(encrypted_content)
-    print(encrypted_path)
-
     sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
     server_address = (CONNECTION_SERVER,port)
 

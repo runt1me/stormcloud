@@ -68,7 +68,7 @@ def process_file(file_path_obj,client_id):
 
     elif status == BACKUP_STATUS_CHANGE:
         if not verify_file_integrity(file_path_obj):
-            logging.log(logging.INFO,"WARNING: FILE INTEGRITY CHECK FAILED!!!")
+            logging.log(logging.WARNING,"File integrity check failed for file %s." %file_path_obj)
         else: 
             logging.log(logging.INFO,"proceeding to backup file %s" %file_path_obj.name)
 
