@@ -1,7 +1,5 @@
 from cryptography.fernet import Fernet
 
-import logging
-
 def create_key():
     #This should only be called once,
     #during the installation of the client!
@@ -30,7 +28,6 @@ def encrypt_file(file_path):
     f = Fernet(key)
 
     file_content = file_path.read_bytes()
-    #logging.log(logging.INFO,"original file: %s (...)" % file_content[0:100])
 
     encrypted = f.encrypt(file_content)
     verify_decrypt_integrity_check(f, file_content, encrypted)
