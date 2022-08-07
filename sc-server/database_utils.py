@@ -67,7 +67,7 @@ def add_or_update_file_for_device(device_id, file_name, file_path, client_full_n
     __teardown__(cursor,cnx)
     return ret
 
-def add_or_update_device_for_customer(customer_id, device_name, device_type, ip_address, operating_system, device_status, last_callback, stormcloud_path_to_secrey_key):
+def add_or_update_device_for_customer(customer_id, device_name, device_type, ip_address, operating_system, device_status, last_callback, stormcloud_path_to_secret_key):
   # IN CID INT,
   # IN device_name varchar(512),
   # IN device_type varchar(512),
@@ -75,7 +75,7 @@ def add_or_update_device_for_customer(customer_id, device_name, device_type, ip_
   # IN operating_system varchar(512),
   # IN device_status INT,
   # IN last_callback varchar(512),
-  # IN stormcloud_path_to_secrey_key varchar(1024)
+  # IN stormcloud_path_to_secret_key varchar(1024)
 
   ret = []
   cnx = __connect_to_db__()
@@ -83,7 +83,7 @@ def add_or_update_device_for_customer(customer_id, device_name, device_type, ip_
 
   try:
     cursor.callproc('add_or_update_device_for_customer',
-      (customer_id, device_name, device_type, ip_address, operating_system, device_status, last_callback, stormcloud_path_to_secrey_key)
+      (customer_id, device_name, device_type, ip_address, operating_system, device_status, last_callback, stormcloud_path_to_secret_key)
     )
 
     for result in cursor.stored_results():
@@ -91,7 +91,7 @@ def add_or_update_device_for_customer(customer_id, device_name, device_type, ip_
         ret.append(row)
 
   except Error as e:
-    print(e)
+    print("Error: %s" %e)
 
   finally:
     cnx.commit()
@@ -128,6 +128,29 @@ def get_last_10_callbacks_for_device(device_ip,device_name):
   finally:
     __teardown__(cursor,cnx)
     return ret
+
+def get_next_device_id():
+    ret = []
+
+    cnx = __connect_to_db__()
+    cursor = cnx.cursor(buffered=True)
+
+    try:
+        cursor.callproc('get_next_device_id', ())
+
+        for result in cursor.stored_results():
+            # Comes back as a list of tuples, hence row[0][0]
+            row = result.fetchall()
+            highest_device_id = row[0][0]
+
+        ret = int(highest_device_id)
+
+    except Error as e:
+        print(e)
+
+    finally:
+        __teardown__(cursor,cnx)
+        return ret
 
 def __connect_to_db__():
   mysql_username = os.getenv('MYSQLUSER')

@@ -72,9 +72,7 @@ def store_file(client_id,file_path,file_length,file_raw_content):
     logging.log(logging.INFO,"File Length:\t%d" % decrypted_length)
 
     #TODO: check and authenticate that its a legitimate client id
-    #to prevent against spoofed packets and attacks
-    #encryption should help with this, but also should have a 2-factor key
-    #RSA style??
+    #TODO: customer id and device id in backup data packets
     client_id_root_folder = "/storage/%d/" % client_id
 
     #TODO: figure out a way to manage the directory structure so that the hierarchy is preserved

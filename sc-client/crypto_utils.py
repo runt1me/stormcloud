@@ -1,14 +1,5 @@
 from cryptography.fernet import Fernet
 
-def create_key():
-    #This should only be called once,
-    #during the installation of the client!
-    #unless we have some recurring changing key generation every X days
-    key = Fernet.generate_key()
-
-    with open('secret.key', 'wb') as mykey:
-        mykey.write(key)
-
 def encrypt_content(content):
     with open('secret.key', 'rb') as keyfile:
         key = keyfile.read()
