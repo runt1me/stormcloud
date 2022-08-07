@@ -2,6 +2,7 @@ from datetime import datetime
 import socket, ssl
 import json
 import platform
+from subprocess import Popen, PIPE
 
 import logging
 
@@ -12,13 +13,9 @@ SERVER_PORT=8443
 STORMCLOUD_VERSION="1.0.0"
 
 def main(device_type="Important Server (from installer)"):
-    # Initialize install logging
     initialize_logging()
-    logging.log(
-        logging.INFO, "Beginning install of Stormcloud v%s" % STORMCLOUD_VERSION
-    )
+    logging.log(logging.INFO, "Beginning install of Stormcloud v%s" % STORMCLOUD_VERSION)
 
-    # Conduct connectivity test with server
     ret, _ = conduct_connectivity_test(SERVER_NAME, SERVER_PORT)
     if ret != 0:
         logging.log(
@@ -26,25 +23,16 @@ def main(device_type="Important Server (from installer)"):
         )
         exit()
     
-    logging.log(
-        logging.INFO, "Successfully conducted connectivity test with server."
-    )
-
-    logging.log(
-        logging.INFO, "Conducting initial device survey."
-    )
+    logging.log(logging.INFO, "Successfully conducted connectivity test with server.")
+    logging.log(logging.INFO, "Conducting initial device survey.")
     
     survey_data = conduct_device_initial_survey(device_type)
-    ret, response_data = tls_send_json_data(survey_data, "RAT", SERVER_NAME, SERVER_PORT)
+    ret, response_data = tls_send_json_data(survey_data, "register_new_device-response", SERVER_NAME, SERVER_PORT)
     if ret != 0:
-        logging.log(
-            logging.ERROR, "Install failed (Unable to send survey data to server). Return code: %d" % ret
-        )
+        logging.log(logging.ERROR, "Install failed (Unable to send survey data to server). Return code: %d" % ret)
         exit()
     
-    logging.log(
-        logging.INFO, "Successfully sent new device registration request to server. Received response data: %s" % response_data
-    )
+    logging.log(logging.INFO, "Successfully sent new device registration request to server. Received response data: %s" % response_data)
     
     # Save key from server as secret key
     secret_key = response_data['secret_key']
@@ -58,26 +46,30 @@ def conduct_connectivity_test(server_name, server_port):
         logging.INFO, "Attempting connectivity test with server: %s:%d" % (server_name, server_port)
     )
 
-    send_hello_data = json.dumps({'hello': 'TWT',})
-    return tls_send_json_data(send_hello_data, 'RAT', server_name, server_port)
+    send_hello_data = json.dumps({'request_type': 'Hello'})
+    return tls_send_json_data(send_hello_data, 'hello-response', server_name, server_port)
 
 def conduct_device_initial_survey(dtype):
     try:
+        operating_system = platform.platform()
+        if 'macOS' in operating_system:
+            device_name, ip_address = get_name_and_address_info_mac()
+        elif 'Windows' in operating_system:
+            device_name, ip_address = get_name_and_address_info_windows()
+
         customer_id = 1
         device_type = dtype
-        device_name = socket.gethostname()
-        ip_address = socket.gethostbyname(device_name)
-        operating_system = platform.platform()
-        device_status = "Green"
+        device_status = 1
 
     except Exception as e:
+        print("Exception")
         logging.log(
             logging.ERROR, "Initial survey failed: %s" % e
         )
 
     finally:
         return json.dumps({
-            'new_device_register': 1,
+            'request_type': "register_new_device",
             'customer_id': customer_id,
             'device_type': device_type,
             'device_name': device_name,
@@ -85,6 +77,30 @@ def conduct_device_initial_survey(dtype):
             'operating_system': operating_system,
             'device_status': device_status
         })
+
+def get_name_and_address_info_mac():
+    # Originally I tried to do socket.gethostbyname() on the hostname, but that usually spit out localhost
+    # This way runs netstat -rn -f inet and gets the interface associated with the default route
+    # Then runs ifconfig <interface> and gets the inet address on that interface
+    # TODO: handle if netstat doesn't work to get the routing table (maybe net-tools is not installed?)
+    device_name = socket.gethostname()
+
+    process = Popen(['netstat', '-rn', '-f', 'inet'], stdout=PIPE, stderr=PIPE)
+    stdout, stderr = process.communicate()
+
+    default_route_line = [l for l in str(stdout).split("\\n") if 'default' in l][0]
+    default_route_interface = default_route_line.split()[3]
+
+    process = Popen(['ifconfig', default_route_interface], stdout=PIPE, stderr=PIPE)
+    stdout, stderr = process.communicate()
+
+    ifconfig_inet_line = [l for l in str(stdout).split('\\n\\t') if l.split()[0] == "inet"][0]
+    ip_address = ifconfig_inet_line.split()[1]
+
+    return device_name, ip_address
+
+def get_name_and_address_info_windows():
+    return socket.gethostname(), socket.gethostbyname(device_name)
 
 def tls_send_json_data(json_data, expected_response_data, server_name, server_port):
     s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
@@ -111,8 +127,11 @@ def tls_send_json_data(json_data, expected_response_data, server_name, server_po
 
     finally:
         wrappedSocket.close()
+
         if receive_data:
-            if expected_response_data in receive_data.decode("utf-8"):
+            data_json = json.loads(receive_data)
+            print(data_json)
+            if expected_response_data in data_json:
                 return (0, receive_data)
         else:
             return (1, receive_data)
