@@ -12,7 +12,7 @@ SERVER_NAME="www2.darkage.io"
 SERVER_PORT=8443
 STORMCLOUD_VERSION="1.0.0"
 
-def main(device_type="Important Server (from installer)"):
+def main(device_type, send_logs, backup_time, keepalive_freq, backup_paths):
     initialize_logging()
     logging.log(logging.INFO, "Beginning install of Stormcloud v%s" % STORMCLOUD_VERSION)
 
@@ -24,21 +24,27 @@ def main(device_type="Important Server (from installer)"):
         exit()
     
     logging.log(logging.INFO, "Successfully conducted connectivity test with server.")
-    logging.log(logging.INFO, "Conducting initial device survey.")
+    logging.log(logging.INFO, "Conducting initial device survey...")
     
     survey_data = conduct_device_initial_survey(device_type)
+
+    logging.log(logging.INFO, "Device survey complete.")
+
+    logging.log(logging.INFO, "Sending device registration request to server...")
     ret, response_data = tls_send_json_data(survey_data, "register_new_device-response", SERVER_NAME, SERVER_PORT)
     if ret != 0:
         logging.log(logging.ERROR, "Install failed (Unable to send survey data to server). Return code: %d" % ret)
         exit()
     
-    logging.log(logging.INFO, "Successfully sent new device registration request to server.")
+    logging.log(logging.INFO, "Device successfully registered.")
+
     _ = save_key(response_data['secret_key'])
-
-    logging.log(logging.INFO, "Successfully wrote device encryption key to ./secret.key")
+    logging.log(logging.INFO, "Received device encryption key and wrote to ./secret.key")
     
-    # Configure settings
+    logging.log(logging.INFO, "Configuring backup process and writing settings file.")
+    ret = configure_settings(send_logs, backup_time, keepalive_freq, backup_paths)
 
+    logging.log(logging.INFO, "Ready to launch stormcloud!")
     # Launch stormcloud.py program and begin comms with the server
 
 def conduct_connectivity_test(server_name, server_port):
@@ -98,9 +104,52 @@ def get_name_and_address_info_mac():
     ip_address = ifconfig_inet_line.split()[1]
 
     return device_name, ip_address
-
+ 
 def get_name_and_address_info_windows():
     return socket.gethostname(), socket.gethostbyname(device_name)
+
+def save_key(key):
+    key = key.encode("utf-8")
+
+    with open('secret.key', 'wb') as keyfile:
+        keyfile.write(key)
+
+    return 0
+
+def configure_settings(send_logs, backup_time, keepalive_freq, backup_paths):
+    backup_time    = int(backup_time)
+    keepalive_freq = int(keepalive_freq)
+
+    with open("settings.cfg", "w") as settings_file:
+        lines_to_write = []
+
+        # Logging
+        lines_to_write.append("# send logging and error information to dark age servers")
+        lines_to_write.append("# to assist with development/bug fixes/discovery of errors")
+        lines_to_write.append("# 1 = ON, 0 = OFF")
+        if send_logs:
+            lines_to_write.append("SEND_LOGS 1")
+        else:
+            lines_to_write.append("SEND_LOGS 0")
+
+        # Backup time
+        lines_to_write.append("# controls backup time of day")
+        lines_to_write.append("# hour of the day/24hr time")
+        lines_to_write.append("# i.e. 23 = 11PM (system time)")
+        lines_to_write.append("BACKUP_TIME %d" % backup_time)
+
+        # Keepalive frequency
+        lines_to_write.append("# controls how frequently this device will send keepalive message to the stormcloud servers.")
+        lines_to_write.append("# Interval in seconds (90=send keepalive every 90 seconds)")
+        lines_to_write.append("KEEPALIVE_FREQ %d" % keepalive_freq)
+
+        # Backup paths
+        lines_to_write.append("# paths to backup")
+        for bp in backup_paths:
+            lines_to_write.append("%s" % bp)
+
+        output_string = "\n".join(lines_to_write)
+        settings_file.write(output_string)
 
 def tls_send_json_data(json_data, expected_response_data, server_name, server_port):
     s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
@@ -145,17 +194,18 @@ def initialize_logging():
         level=logging.DEBUG
     )
 
-def save_key(key):
-    key = key.encode("utf-8")
-
-    with open('secret.key', 'wb') as keyfile:
-        keyfile.write(key)
-
-    return 0
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("-d", "--device-type", type=str, help="device type that stormcloud is being installed on (freeform text)")
+    parser.add_argument("-d", "--device-type", type=str, required=True, help="device type that stormcloud is being installed on (freeform text)")
+    parser.add_argument("-l", "--send-logs", type=int, default=1, help="send logs to assist with debugging/development of Stormcloud (1 or 0)")
+    parser.add_argument("-t", "--backup-time", type=int, default=20, help="time of day (24hr) to perform the daily Stormcloud backup process")
+    parser.add_argument("-k", "--keepalive-freq", type=int, default=100, help="frequency (in seconds) to send keepalives for this device to the Stormcloud servers")
+    parser.add_argument("-p", "--backup-paths", type=str, required=True, help="Filesystem paths to backup, comma-separated")
+
     args = parser.parse_args()
 
-    main(args.device_type)
+    backup_paths_parsed = []
+    for path in args.backup_paths.split(","):
+        backup_paths_parsed.append(path)
+
+    main(args.device_type, args.send_logs, args.backup_time, args.keepalive_freq, backup_paths_parsed)
