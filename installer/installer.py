@@ -32,11 +32,11 @@ def main(device_type="Important Server (from installer)"):
         logging.log(logging.ERROR, "Install failed (Unable to send survey data to server). Return code: %d" % ret)
         exit()
     
-    logging.log(logging.INFO, "Successfully sent new device registration request to server. Received response data: %s" % response_data)
-    
-    # Save key from server as secret key
-    secret_key = response_data['secret_key']
+    logging.log(logging.INFO, "Successfully sent new device registration request to server.")
+    _ = save_key(response_data['secret_key'])
 
+    logging.log(logging.INFO, "Successfully wrote device encryption key to ./secret.key")
+    
     # Configure settings
 
     # Launch stormcloud.py program and begin comms with the server
@@ -132,7 +132,7 @@ def tls_send_json_data(json_data, expected_response_data, server_name, server_po
             data_json = json.loads(receive_data)
             print(data_json)
             if expected_response_data in data_json:
-                return (0, receive_data)
+                return (0, data_json)
         else:
             return (1, receive_data)
 
@@ -144,6 +144,14 @@ def initialize_logging():
         datefmt='%Y-%m-%d %H:%M:%S',
         level=logging.DEBUG
     )
+
+def save_key(key):
+    key = key.encode("utf-8")
+
+    with open('secret.key', 'wb') as keyfile:
+        keyfile.write(key)
+
+    return 0
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
