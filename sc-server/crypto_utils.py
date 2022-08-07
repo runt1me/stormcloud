@@ -10,3 +10,5 @@ def create_key(key_path):
     os.makedirs(os.path.dirname(key_path), exist_ok=True)
     with open(key_path, "wb") as mykey:
         mykey.write(key)
+
+    return key

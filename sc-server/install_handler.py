@@ -20,6 +20,8 @@ def main():
 
     try:
         while True:
+            # TODO: use actual signed cert for SSL
+            # and use TLS 1.3
             connection, client_address = s.accept()
             wrappedSocket = ssl.wrap_socket(
                     connection,
@@ -113,19 +115,17 @@ def handle_register_new_device_request(request):
         print("Device is already in database, device id: %s" % ret)
 
     # TODO: probably separate all of the above code into a "validate_request" or some similar type of function
-    # Generate key for new device
-
     last_callback = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    next_device_id = db.get_next_device_id()
-    stormcloud_path_to_secret_key = "/keys/%s/device/%s/secret.key" % (customer_id,next_device_id)
+    stormcloud_path_to_secret_key = "/keys/%s/device/%s/secret.key" % (customer_id,db.get_next_device_id())
 
     # Create crypt key before pushing to database
-    crypto_utils.create_key(stormcloud_path_to_secret_key)
+    key = crypto_utils.create_key(stormcloud_path_to_secret_key)
 
     ret = db.add_or_update_device_for_customer(customer_id, device_name, device_type, ip_address, operating_system, device_status, last_callback, stormcloud_path_to_secret_key)
 
     response_data = json.dumps({
-        'register_new_device-response': 'thanks for the device'
+        'register_new_device-response': 'thanks for the device',
+        'secret_key': key.decode("utf-8")
     })
 
     return 0, response_data
