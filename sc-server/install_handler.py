@@ -75,10 +75,10 @@ def handle_request(request):
     print(request)
 
     if 'request_type' not in request.keys():
-        return -1,'Bad request.'
+        return -1,json.dumps({'response':'Bad request.'})
 
     if 'api_key' not in request.keys():
-        return -1,'Unable to authorize request: no api key presented.'
+        return -1,json.dumps({'response':'Unable to authorize request (no api key presented)'})
 
     if request['request_type'] == 'Hello':
         ret_code, response_data = handle_hello_request(request)
@@ -97,7 +97,6 @@ def handle_hello_request(request):
 
 def handle_register_new_device_request(request):
     print("Server handling new device request.")
-
     customer_id      = db.get_customer_id_by_api_key(request['api_key'])
 
     if not customer_id:
