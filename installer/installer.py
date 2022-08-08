@@ -17,7 +17,6 @@ def main(device_type, send_logs, backup_time, keepalive_freq, backup_paths, api_
     logging.log(logging.INFO, "Beginning install of Stormcloud v%s" % STORMCLOUD_VERSION)
 
     api_key = read_api_key_file(api_key_file_path)
-    api_key = api_key.decode("utf-8")
 
     ret, _ = conduct_connectivity_test(api_key, SERVER_NAME, SERVER_PORT)
     if ret != 0:
@@ -43,7 +42,10 @@ def main(device_type, send_logs, backup_time, keepalive_freq, backup_paths, api_
 
     _ = save_secret_key(response_data['secret_key'])
     logging.log(logging.INFO, "Received device encryption key and wrote to ./secret.key")
-    
+
+    _ = save_agent_id(response_data['agent_id'])
+    logging.log(logging.INFO, "Received agent ID and wrote to ./agent_id")
+
     logging.log(logging.INFO, "Configuring backup process and writing settings file.")
     ret = configure_settings(send_logs, backup_time, keepalive_freq, backup_paths)
 
@@ -117,11 +119,19 @@ def save_secret_key(key):
 
     return 0
 
+def save_agent_id(agent_id):
+    agent_id = agent_id.encode("utf-8")
+
+    with open('agent_id','wb') as idfile:
+        idfile.write(agent_id)
+
+    return 0
+
 def read_api_key_file(keyfile_path):
     with open(keyfile_path,'rb') as keyfile:
         api_key = keyfile.read()
 
-    return api_key
+    return api_key.decode("utf-8")
 
 def configure_settings(send_logs, backup_time, keepalive_freq, backup_paths):
     backup_time    = int(backup_time)
@@ -152,6 +162,7 @@ def configure_settings(send_logs, backup_time, keepalive_freq, backup_paths):
 
         # Backup paths
         lines_to_write.append("# paths to backup")
+        lines_to_write.append("BACKUP_PATHS")
         for bp in backup_paths:
             lines_to_write.append("%s" % bp)
 
