@@ -37,6 +37,34 @@ def update_callback_for_device(device_id, callback_time, status_code):
     __teardown__(cursor,cnx)
     return ret
 
+def add_or_update_customer_for_team(customer_name,username,password,team_id,api_key):
+  # IN customer_name varchar(256),
+  # IN username varchar(256),
+  # IN password varchar(256),
+  # IN team_id int,
+  # IN api_key varchar(64)
+
+  ret = []
+  cnx = __connect_to_db__()
+  cursor = cnx.cursor(buffered=True)
+
+  try:
+    cursor.callproc('add_or_update_customer_for_team',
+      (customer_name,username,password,team_id,api_key)
+    )
+
+    for result in cursor.stored_results():
+      row = result.fetchall()
+      ret.append(row)
+
+  except Error as e:
+    print(e)
+
+  finally:
+    cnx.commit()
+    __teardown__(cursor,cnx)
+    return ret
+
 def add_or_update_file_for_device(device_id, file_name, file_path, client_full_name_and_path, file_size, file_type, stormcloud_full_name_and_path):
   # IN DID INT,
   # IN file_name varchar(512),
@@ -151,6 +179,52 @@ def get_next_device_id():
     finally:
         __teardown__(cursor,cnx)
         return ret
+
+def get_next_customer_id():
+    ret = []
+
+    cnx = __connect_to_db__()
+    cursor = cnx.cursor(buffered=True)
+
+    try:
+        cursor.callproc('get_next_customer_id', ())
+
+        for result in cursor.stored_results():
+            # Comes back as a list of tuples, hence row[0][0]
+            row = result.fetchall()
+            highest_customer_id = row[0][0]
+
+        ret = int(highest_customer_id)
+
+    except Error as e:
+        print(e)
+
+    finally:
+        __teardown__(cursor,cnx)
+        return ret
+
+def get_customer_id_by_api_key(api_key):
+  ret = []
+
+  cnx = __connect_to_db__()
+  cursor = cnx.cursor(buffered=True)
+
+  customer_id = -1
+  try:
+    cursor.callproc('get_customer_id_by_api_key', (api_key,))
+
+    for result in cursor.stored_results():
+        row = result.fetchall()
+        customer_id = row[0][0]
+
+        ret = customer_id
+
+  except Error as e:
+    print(e)
+
+  finally:
+    __teardown__(cursor,cnx)
+    return ret
 
 def __connect_to_db__():
   mysql_username = os.getenv('MYSQLUSER')
