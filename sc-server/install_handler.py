@@ -121,14 +121,16 @@ def handle_register_new_device_request(request):
     last_callback = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     stormcloud_path_to_secret_key = "/keys/%s/device/%s/secret.key" % (customer_id,db.get_next_device_id())
 
-    # Create crypt key before pushing to database
-    key = crypto_utils.create_key(stormcloud_path_to_secret_key)
+    # Create crypt key and agent id before pushing to database
+    key      = crypto_utils.create_key(stormcloud_path_to_secret_key)
+    agent_id = crypto_utils.generate_agent_id()
 
-    ret = db.add_or_update_device_for_customer(customer_id, device_name, device_type, ip_address, operating_system, device_status, last_callback, stormcloud_path_to_secret_key)
+    ret = db.add_or_update_device_for_customer(customer_id, device_name, device_type, ip_address, operating_system, device_status, last_callback, stormcloud_path_to_secret_key, agent_id)
 
     response_data = json.dumps({
         'register_new_device-response': 'thanks for the device',
-        'secret_key': key.decode("utf-8")
+        'secret_key': key.decode("utf-8"),
+        'agent_id': agent_id
     })
 
     return 0, response_data
