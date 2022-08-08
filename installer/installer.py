@@ -16,7 +16,10 @@ def main(device_type, send_logs, backup_time, keepalive_freq, backup_paths):
     initialize_logging()
     logging.log(logging.INFO, "Beginning install of Stormcloud v%s" % STORMCLOUD_VERSION)
 
-    ret, _ = conduct_connectivity_test(SERVER_NAME, SERVER_PORT)
+    api_key = read_api_key_file('api.key')
+    api_key = api_key.decode("utf-8")
+
+    ret, _ = conduct_connectivity_test(api_key, SERVER_NAME, SERVER_PORT)
     if ret != 0:
         logging.log(
             logging.ERROR, "Install failed (Unable to conduct connectivity test with server). Return code: %d" % ret
@@ -26,7 +29,7 @@ def main(device_type, send_logs, backup_time, keepalive_freq, backup_paths):
     logging.log(logging.INFO, "Successfully conducted connectivity test with server.")
     logging.log(logging.INFO, "Conducting initial device survey...")
     
-    survey_data = conduct_device_initial_survey(device_type)
+    survey_data = conduct_device_initial_survey(api_key,device_type)
 
     logging.log(logging.INFO, "Device survey complete.")
 
@@ -38,7 +41,7 @@ def main(device_type, send_logs, backup_time, keepalive_freq, backup_paths):
     
     logging.log(logging.INFO, "Device successfully registered.")
 
-    _ = save_key(response_data['secret_key'])
+    _ = save_secret_key(response_data['secret_key'])
     logging.log(logging.INFO, "Received device encryption key and wrote to ./secret.key")
     
     logging.log(logging.INFO, "Configuring backup process and writing settings file.")
@@ -47,15 +50,15 @@ def main(device_type, send_logs, backup_time, keepalive_freq, backup_paths):
     logging.log(logging.INFO, "Ready to launch stormcloud!")
     # Launch stormcloud.py program and begin comms with the server
 
-def conduct_connectivity_test(server_name, server_port):
+def conduct_connectivity_test(api_key,server_name, server_port):
     logging.log(
         logging.INFO, "Attempting connectivity test with server: %s:%d" % (server_name, server_port)
     )
 
-    send_hello_data = json.dumps({'request_type': 'Hello'})
+    send_hello_data = json.dumps({'request_type': 'Hello','api_key':api_key})
     return tls_send_json_data(send_hello_data, 'hello-response', server_name, server_port)
 
-def conduct_device_initial_survey(dtype):
+def conduct_device_initial_survey(api_key,dtype):
     try:
         operating_system = platform.platform()
         if 'macOS' in operating_system:
@@ -63,7 +66,6 @@ def conduct_device_initial_survey(dtype):
         elif 'Windows' in operating_system:
             device_name, ip_address = get_name_and_address_info_windows()
 
-        customer_id = 1
         device_type = dtype
         device_status = 1
 
@@ -76,7 +78,7 @@ def conduct_device_initial_survey(dtype):
     finally:
         return json.dumps({
             'request_type': "register_new_device",
-            'customer_id': customer_id,
+            'api_key': api_key,
             'device_type': device_type,
             'device_name': device_name,
             'ip_address': ip_address,
@@ -108,13 +110,19 @@ def get_name_and_address_info_mac():
 def get_name_and_address_info_windows():
     return socket.gethostname(), socket.gethostbyname(device_name)
 
-def save_key(key):
+def save_secret_key(key):
     key = key.encode("utf-8")
 
     with open('secret.key', 'wb') as keyfile:
         keyfile.write(key)
 
     return 0
+
+def read_api_key_file(keyfile_path):
+    with open(keyfile_path,'rb') as keyfile:
+        api_key = keyfile.read()
+
+    return api_key
 
 def configure_settings(send_logs, backup_time, keepalive_freq, backup_paths):
     backup_time    = int(backup_time)
