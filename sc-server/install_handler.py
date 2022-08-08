@@ -77,6 +77,9 @@ def handle_request(request):
     if 'request_type' not in request.keys():
         return -1,'Bad request.'
 
+    if 'api_key' not in request.keys():
+        return -1,'Unable to authorize request: no api key presented.'
+
     if request['request_type'] == 'Hello':
         ret_code, response_data = handle_hello_request(request)
     elif request['request_type'] == 'register_new_device':
@@ -93,12 +96,13 @@ def handle_hello_request(request):
     return 0, response_data
 
 def handle_register_new_device_request(request):
-    # TODO: need to guard this request with an API key.
-    # API key will probably have to be one per account.
-    # Account credentials will need to be passed into the installer
     print("Server handling new device request.")
 
-    customer_id      = request['customer_id']
+    customer_id      = db.get_customer_id_by_api_key(request['api_key'])
+
+    if not customer_id:
+        print("Could not find customer ID for the given API key: %s" % request['api_key'])
+
     device_name      = request['device_name']
     ip_address       = request['ip_address']
     device_type      = request['device_type']
