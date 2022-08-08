@@ -12,11 +12,11 @@ SERVER_NAME="www2.darkage.io"
 SERVER_PORT=8443
 STORMCLOUD_VERSION="1.0.0"
 
-def main(device_type, send_logs, backup_time, keepalive_freq, backup_paths):
+def main(device_type, send_logs, backup_time, keepalive_freq, backup_paths, api_key_file_path):
     initialize_logging()
     logging.log(logging.INFO, "Beginning install of Stormcloud v%s" % STORMCLOUD_VERSION)
 
-    api_key = read_api_key_file('api.key')
+    api_key = read_api_key_file(api_key_file_path)
     api_key = api_key.decode("utf-8")
 
     ret, _ = conduct_connectivity_test(api_key, SERVER_NAME, SERVER_PORT)
@@ -48,14 +48,13 @@ def main(device_type, send_logs, backup_time, keepalive_freq, backup_paths):
     ret = configure_settings(send_logs, backup_time, keepalive_freq, backup_paths)
 
     logging.log(logging.INFO, "Ready to launch stormcloud!")
-    # Launch stormcloud.py program and begin comms with the server
 
-def conduct_connectivity_test(api_key,server_name, server_port):
+def conduct_connectivity_test(api_key,server_name,server_port):
     logging.log(
         logging.INFO, "Attempting connectivity test with server: %s:%d" % (server_name, server_port)
     )
 
-    send_hello_data = json.dumps({'request_type': 'Hello','api_key':api_key})
+    send_hello_data = json.dumps({'request_type':'Hello','api_key':api_key})
     return tls_send_json_data(send_hello_data, 'hello-response', server_name, server_port)
 
 def conduct_device_initial_survey(api_key,dtype):
@@ -209,6 +208,7 @@ if __name__ == '__main__':
     parser.add_argument("-t", "--backup-time", type=int, default=20, help="time of day (24hr) to perform the daily Stormcloud backup process")
     parser.add_argument("-k", "--keepalive-freq", type=int, default=100, help="frequency (in seconds) to send keepalives for this device to the Stormcloud servers")
     parser.add_argument("-p", "--backup-paths", type=str, required=True, help="Filesystem paths to backup, comma-separated")
+    parser.add_argument("-a", "--api-key", type=str, default="api.key", help="Path to API key file (default=./api.key)")
 
     args = parser.parse_args()
 
@@ -216,4 +216,4 @@ if __name__ == '__main__':
     for path in args.backup_paths.split(","):
         backup_paths_parsed.append(path)
 
-    main(args.device_type, args.send_logs, args.backup_time, args.keepalive_freq, backup_paths_parsed)
+    main(args.device_type, args.send_logs, args.backup_time, args.keepalive_freq, backup_paths_parsed, args.api_key)
