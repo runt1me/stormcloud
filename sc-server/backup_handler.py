@@ -63,21 +63,18 @@ def handle_request(request):
 def handle_backup_file_request(request):
     print_request_no_file(request)
 
-    # Query database to verify API key
     customer_id = db.get_customer_id_by_api_key(request['api_key'])
 
     if not customer_id:
         return 1,json.dumps({'response': 'Could not find Customer associated with API key.'})
 
-    # Query database to verify agent ID and get device ID
     results = db.get_device_by_agent_id(request['agent_id'])
     if not results:
         return 1,json.dumps({'response': 'Could not find device associated with Agent ID.'})
 
     device_id,_,_,_,_,_,_,_,path_to_device_secret_key,_ = results
-    print("got device id %s and path %s" % (device_id,path_to_device_secret_key))
 
-    store_file(
+    path_on_server, device_root_directory_on_server, path_on_device, file_size = store_file(
         customer_id,
         device_id,
         path_to_device_secret_key,
@@ -85,22 +82,46 @@ def handle_backup_file_request(request):
         request['file_content'].encode("utf-8")
     )
 
-    # Add file metadata record to database
+    file_name = get_file_name(path_on_server)
+    file_path = get_file_path_without_name(path_on_server)
+    file_type = get_file_type(path_on_server)
+
+    ret = db.add_or_update_file_for_device(
+        device_id,
+        file_name,
+        file_path,
+        path_on_device,
+        file_size,
+        file_type,
+        path_on_server
+    )
+
+    return 0,json.dumps({'backup_file-response':'hell yeah brother'})
 
 def store_file(customer_id,device_id,path_to_device_secret_key,file_path,file_raw_content):
     decrypted_raw_content, _ = crypto_utils.decrypt_msg(path_to_device_secret_key,file_raw_content,decode=False)
     decrypted_path, _        = crypto_utils.decrypt_msg(path_to_device_secret_key,file_path,decode=True)
 
-    path_on_server = get_server_path(customer_id,device_id,decrypted_path)
+    path_on_server, device_root_directory_on_server = get_server_path(customer_id,device_id,decrypted_path)
     write_file_to_disk(path_on_server,decrypted_raw_content)
-
-    #verify_hash()
-    #send_response_to_client()
 
     log_file_info(decrypted_path,device_id,path_on_server)
 
     with open(path_on_server,'wb') as outfile:
         outfile.write(decrypted_raw_content)
+
+    print(decrypted_path)
+    return path_on_server, device_root_directory_on_server, decrypted_path, len(decrypted_raw_content)
+
+def get_file_name(path_on_server):
+    return path_on_server.split("/")[-1]
+
+def get_file_path_without_name(path_on_server):
+    return "/".join(path_on_server.split("/")[0:-1]) + "/"
+
+def get_file_type(path_on_server):
+    _, file_extension = os.path.splitext(path_on_server)
+    return file_extension
 
 def get_server_path(customer_id,device_id,decrypted_path):
     device_root_directory_on_server = "/storage/%s/device/%s/" % (customer_id,device_id)
@@ -109,16 +130,13 @@ def get_server_path(customer_id,device_id,decrypted_path):
     if "\\" in decrypted_path:
         # Replace \ with /
         p = pathlib.PureWindowsPath(r'%s'%decrypted_path)
-        print(p)
         path = device_root_directory_on_server + str(p.as_posix())
 
     elif "\\" not in decrypted_path:
         path = device_root_directory_on_server + decrypted_path
 
-    # Remove any double slashes with single slashes
     path = path.replace("//","/")
-    print(path)
-    return path
+    return path, device_root_directory_on_server
 
 def write_file_to_disk(path,content):
     os.makedirs(os.path.dirname(path), exist_ok=True)
