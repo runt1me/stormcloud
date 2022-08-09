@@ -8,61 +8,92 @@ import database_utils as db
 
 from cryptography.fernet import Fernet
 
-#packet data constants
-HEADER_SIZE_BYTES=560
-
 def main(LISTEN_PORT):
     initialize_logging()
-    sock = initialize_socket(LISTEN_PORT)
 
-    sock.listen(1)
-    while True:
-        logging.log(logging.INFO, "Listening for connections...")
-        connection, client_address = sock.accept()
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS)
+    context.load_cert_chain(certfile="/root/certs/cert.pem")
 
-        logging.log(logging.INFO, "connection %s: %s" % (connection,client_address))
-        header = connection.recv(HEADER_SIZE_BYTES)
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    s.bind(('0.0.0.0',BIND_PORT))
+    s.listen(5)
 
-        if header:
-            client = get_client_id(header[0:16])
-            file_path = get_file_path(client,header[16:528])
-            length = get_content_length(header[528:560])
+    try:
+        while True:
+            # TODO: use actual signed cert for SSL
+            # and use TLS 1.3
+            connection, client_address = s.accept()
+            wrappedSocket = ssl.wrap_socket(
+                    connection,
+                    server_side=True,
+                    certfile="/root/certs/cert.pem",
+                    keyfile="/root/certs/cert.pem",
+                    ssl_version=ssl.PROTOCOL_TLS
+            )
+    
+            request = recv_json_until_eol(wrappedSocket)
+    
+            if request:
+              ret_code, response_data = handle_request(request)
+              # Send the length of the serialized data first, then send the data
+              # wrappedSocket.send(bytes('%d\n',encoding="utf-8") % len(response_data))
+              wrappedSocket.sendall(bytes(response_data,encoding="utf-8"))
 
-            logging.log(logging.INFO,'Receiving file from client %d' % client)
-            logging.log(logging.INFO, file_path)
+            else:
+                break
+    finally:
+        wrappedSocket.close()
 
-        check_result = perform_integrity_check_delimiter(connection.recv(11))
-        if check_result:
-            logging.log(logging.INFO,"delimiter validated, continuing")
-        else:
-            logging.log(logging.INFO,"invalid delimiter")
 
-        bytes_to_receive = length
-        raw_content = b''
+def recv_json_until_eol(socket):
+    # Borrowed from https://github.com/mdebbar/jsonsocket
 
-        while bytes_to_receive > 0:
-            bytes_recvd = connection.recv(bytes_to_receive)
-            raw_content += bytes_recvd
-            if raw_content:
-                logging.log(logging.INFO,"(Received %d bytes)" % len(bytes_recvd))
+    # read the length of the data, letter by letter until we reach EOL
+    length_bytes = bytearray()
+    char = socket.recv(1)
+    while char != bytes('\n',encoding="UTF-8"):
+      length_bytes += char
 
-            bytes_to_receive = bytes_to_receive - len(bytes_recvd)
+      char = socket.recv(1)
+    total = int(length_bytes)
 
-        store_file(client,file_path,length,raw_content)
+    # use a memoryview to receive the data chunk by chunk efficiently
+    view = memoryview(bytearray(total))
+    next_offset = 0
+    while total - next_offset > 0:
+      recv_size = socket.recv_into(view[next_offset:], total - next_offset)
+      next_offset += recv_size
 
-def get_content_length(length_field):
-    #replace null characters with '' for the purpose of converting string -> int
-    length_field_as_string = length_field.decode('ascii').replace('\x00','')
-    return int(length_field_as_string)
+    try:
+      deserialized = json.loads(view.tobytes())
+    except (TypeError, ValueError) as e:
+      # TODO: Send error code back to client
+      raise Exception('Data received was not in JSON format')
 
-def get_file_path(client_id,path_field):
-    path,_ = decrypt_msg(client_id,path_field)
-    return path.decode('ascii')
+    return deserialized
 
-def get_client_id(client_id_field):
-    client_id_as_string = client_id_field.decode('ascii').replace('\x00','')
-    return int(client_id_as_string)
+
+
+
+def handle_request(request):
+
+    print(request)
+
+    if 'request_type' not in request.keys():
+        return -1,json.dumps({'response':'Bad request.'})
+    if 'api_key' not in request.keys():
+        return -1,json.dumps({'response':'Unable to authorize request (no api key presented)'})
+
+    if request['request_type'] == 'Hello':
+        ret_code, response_data = handle_hello_request(request)
+    elif request['request_type'] == 'register_new_device':
+        ret_code, response_data = handle_register_new_device_request(request)
+
+    return ret_code, response_data
+
+    store_file(client,file_path,length,raw_content)
+
+
 
 def store_file(client_id,file_path,file_length,file_raw_content):
     decrypted_raw_content, decrypted_length = decrypt_file(client_id,file_length,file_raw_content)
@@ -109,10 +140,6 @@ def get_fernet(client_id):
 
     return Fernet(key)
 
-def perform_integrity_check_delimiter(delim):
-    logging.log(logging.INFO,"%s (type %s)" % (delim,type(delim)))
-    return delim == b'~||~TWT~||~'
-
 def initialize_logging():
     logging.basicConfig(
             filename='/var/log/stormcloud.log',
@@ -121,13 +148,6 @@ def initialize_logging():
             datefmt='%Y-%m-%d %H:%M:%S',
             level=logging.DEBUG
     )
-
-def initialize_socket(LISTEN_PORT):
-    addr = ("", LISTEN_PORT)
-    sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-
-    sock.bind(addr)
-    return sock
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
