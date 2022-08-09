@@ -8,88 +8,66 @@ import logging
 
 import crypto_utils
 
-CONNECTION_SERVER = "www2.darkage.io"
+SERVER_NAME = "www2.darkage.io"
+SERVER_PORT = 9443
 
-HEADER_PORTION_CLIENT_LEN = 16
-HEADER_PORTION_PATH_LEN   = 512
-HEADER_PORTION_SIZE_LEN   = 32
-
-#I love you, T :)
-DELIMITER="~||~TWT~||~"
-
-def ship_file_to_server(client_id,path,port):
+def ship_file_to_server(api_key,agent_id,path):
     encrypted_content, encrypted_size = crypto_utils.encrypt_file(path)
     encrypted_path, encrypted_path_size = crypto_utils.encrypt_content(path)
 
-    sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-    server_address = (CONNECTION_SERVER,port)
+    file_backup_request_data = json.dumps({
+        'request_type': "backup_file",
+        'api_key': api_key,
+        'agent_id': agent_id,
+        'file_content': encrypted_content,
+        'file_num_bytes_when_encrypted': encrypted_size,
+        'file_path': encrypted_path,
+    })
 
     logging.log(logging.INFO,"connecting to %s port %s" % server_address)
-    sock.connect(server_address)
-    try:
-        dump_file_info(path,encrypted_size)
-        message = wrap_file_for_delivery(
-            client_id,
-            encrypted_path,
-            encrypted_content,
-            encrypted_size
-        )
-        
-        sock.sendall(message)
+    logging.log(logging.INFO,dump_file_info(path,encrypted_size))
+    ret, response_data = tls_send_json_data(file_backup_request_data, "backup_file-response", SERVER_NAME, SERVER_PORT)
 
-        #TODO: server response to client??
-        #maybe respond with hash as verification check?
-        #or is the security of tcp enough?
-
-    finally:
-        logging.log(logging.INFO,"closing socket")
-        sock.close()
-
+    print(response_data)
     sleep(1)
 
-def wrap_file_for_delivery(client_id,path,content,content_size):
-    # PACKET STRUCTURE
-    # +-----------------------------------------+
-    # | HEADER       = 560 bytes                |
-    # | DELIMITER    =  11 bytes                |
-    # | CONTENT      =   n bytes*               |
-    # | *content size defined                   |
-    # |  in size field of header (offset 528)   |
-    # +-----------------------------------------+
-    # content begins at offset 571
-    wrapped_header = wrap_header(client_id,path,content_size)
-    return wrapped_header + DELIMITER.encode('ascii') + content
+def tls_send_json_data(json_data, expected_response_data, server_name, server_port, show_json=False):
+    s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    s.settimeout(10)
 
-def wrap_header(client_id,path,size):
-    # HEADER PACKET BREAKDOWN
-    # +-----------------------------------------+
-    # | client_id    -> padded to 16 bytes      |
-    # | path         -> padded to 512 bytes     |
-    # | size of file -> padded to 32 bytes      |
-    # +-----------------------------------------+
-    # Total header size: 560 bytes
-    padded_client_id = pad_client_id(client_id)
-    padded_path      = pad_path(path)
-    padded_size      = pad_size(size)
+    wrappedSocket = ssl.wrap_socket(s, ssl_version=ssl.PROTOCOL_TLS)
+    receive_data = None
 
-    return padded_client_id + padded_path + padded_size
+    try:
+        wrappedSocket.connect((server_name,server_port))
 
-def pad_client_id(client_id):
-    len_to_pad = HEADER_PORTION_CLIENT_LEN - len(str(client_id))
-    logging.log(logging.INFO,"adding %d characters to client id %s" % (len_to_pad,client_id))
-    return str(client_id).encode('ascii') + ('\x00' * len_to_pad).encode('ascii')
+        if show_json:
+            print("Sending %s" % json_data)
 
-def pad_path(path):
-    len_to_pad = HEADER_PORTION_PATH_LEN - len(str(path))
-    logging.log(logging.INFO,"adding %d characters to path %s" % (len_to_pad,path))
-    return str(path).encode('ascii') + ('\x00' * len_to_pad).encode('ascii')
+        # Send the length of the serialized data first, then send the data
+        wrappedSocket.send(bytes('%d\n',encoding="utf-8") % len(json_data))
+        wrappedSocket.sendall(bytes(json_data,encoding="utf-8"))
 
-def pad_size(size):
-    len_to_pad = HEADER_PORTION_SIZE_LEN - len(str(size))
-    logging.log(logging.INFO,"adding %d characters to size %s" % (len_to_pad,size))
-    return str(size).encode('ascii') + ('\x00' * len_to_pad).encode('ascii')
+        receive_data = wrappedSocket.recv(1024)
+
+    except Exception as e:
+        logging.log(
+            logging.ERROR, "Send data failed: %s" % (e)
+        )
+
+    finally:
+        wrappedSocket.close()
+
+        if receive_data:
+            data_json = json.loads(receive_data)
+            print(data_json)
+            if expected_response_data in data_json:
+                return (0, data_json)
+        else:
+            return (1, receive_data)
 
 def dump_file_info(path,encrypted_size):
     logging.log(logging.INFO,"==== SENDING FILE : INFO ====")
     logging.log(logging.INFO,"\tPATH: %s" %path)
-    logging.log(logging.INFO,"\tENCRYPTED SIZE: %d" %encrypted_size)
+    logging.log(logging.INFO,"\tSIZE WHEN ENCRYPTED: %d" %encrypted_size)
+
