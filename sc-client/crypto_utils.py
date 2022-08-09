@@ -8,6 +8,8 @@ def encrypt_content(content):
 
     msg = str(content).encode('ascii')
     encrypted = f.encrypt(msg)
+    print(encrypted)
+
     verify_decrypt_integrity_check(f,str(content).encode('ascii'),encrypted)
 
     return encrypted, len(encrypted)
