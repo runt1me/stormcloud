@@ -22,3 +22,6 @@ def generate_api_key(key_path):
         api_key_file.write(api_key.encode("utf-8"))
 
     return api_key
+
+def generate_agent_id():
+    return secrets.token_urlsafe(8) + "-" + secrets.token_urlsafe(8)
