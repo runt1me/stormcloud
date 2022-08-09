@@ -46,17 +46,17 @@ def action_loop_and_sleep(settings, api_key, agent_id):
         logging.log(logging.INFO,"Stormcloud is running with settings: %s" % (settings))
 
         #if backup_utils.check_for_backup(backup_time,cur_run_time,prev_run_time):
-        backup_utils.perform_backup(backup_paths,api_key,agent_id)
+        #backup_utils.perform_backup(backup_paths,api_key,agent_id)
 
         if active_thread is None:
-            active_thread = start_keepalive_thread(cur_keepalive_freq,api_key)
+            active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id)
         else:
             if active_thread.is_alive():
                 if settings_have_changed(cur_keepalive_freq,prev_keepalive_freq):
                     kill_current_keepalive_thread(active_thread)
-                    active_thread = start_keepalive_thread(cur_keepalive_freq,api_key)
+                    active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id)
             else:
-                active_thread = start_keepalive_thread(cur_keepalive_freq,api_key)
+                active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id)
 
         prev_keepalive_freq = cur_keepalive_freq
         prev_run_time = cur_run_time
@@ -98,11 +98,11 @@ def kill_current_keepalive_thread(active_thread):
     #maybe change to multiprocessing instead of multithreading???
     logging.log(logging.INFO,"killing %s" % active_thread)
 
-def start_keepalive_thread(freq,api_key):
+def start_keepalive_thread(freq,api_key,agent_id):
     logging.log(logging.INFO,"starting new keepalive thread with freq %d" % freq)
 
     #make thread with this function as a target
-    t = threading.Thread(target=keepalive_utils.execute_ping_loop,args=(freq,api_key,"keepalive_thd"))
+    t = threading.Thread(target=keepalive_utils.execute_ping_loop,args=(freq,api_key,agent_id,"keepalive_thd"))
     t.start()
 
     logging.log(logging.INFO,"returning from start thread")
