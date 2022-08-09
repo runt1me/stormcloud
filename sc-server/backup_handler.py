@@ -1,12 +1,15 @@
-import socket
+import socket, ssl
 import sys
 from datetime import datetime
 import argparse
-
+import pathlib
 import logging
-import database_utils as db
+import os
+import json
 
-from cryptography.fernet import Fernet
+import database_utils as db
+import network_utils  as scnet
+import crypto_utils
 
 def main(LISTEN_PORT):
     initialize_logging()
@@ -15,8 +18,10 @@ def main(LISTEN_PORT):
     context.load_cert_chain(certfile="/root/certs/cert.pem")
 
     s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-    s.bind(('0.0.0.0',BIND_PORT))
+    s.bind(('0.0.0.0',LISTEN_PORT))
     s.listen(5)
+
+    print('Listening for connections')
 
     try:
         while True:
@@ -31,7 +36,7 @@ def main(LISTEN_PORT):
                     ssl_version=ssl.PROTOCOL_TLS
             )
     
-            request = recv_json_until_eol(wrappedSocket)
+            request = scnet.recv_json_until_eol(wrappedSocket)
     
             if request:
               ret_code, response_data = handle_request(request)
@@ -44,101 +49,87 @@ def main(LISTEN_PORT):
     finally:
         wrappedSocket.close()
 
-
-def recv_json_until_eol(socket):
-    # Borrowed from https://github.com/mdebbar/jsonsocket
-
-    # read the length of the data, letter by letter until we reach EOL
-    length_bytes = bytearray()
-    char = socket.recv(1)
-    while char != bytes('\n',encoding="UTF-8"):
-      length_bytes += char
-
-      char = socket.recv(1)
-    total = int(length_bytes)
-
-    # use a memoryview to receive the data chunk by chunk efficiently
-    view = memoryview(bytearray(total))
-    next_offset = 0
-    while total - next_offset > 0:
-      recv_size = socket.recv_into(view[next_offset:], total - next_offset)
-      next_offset += recv_size
-
-    try:
-      deserialized = json.loads(view.tobytes())
-    except (TypeError, ValueError) as e:
-      # TODO: Send error code back to client
-      raise Exception('Data received was not in JSON format')
-
-    return deserialized
-
-
-
-
 def handle_request(request):
-
-    print(request)
-
     if 'request_type' not in request.keys():
         return -1,json.dumps({'response':'Bad request.'})
     if 'api_key' not in request.keys():
         return -1,json.dumps({'response':'Unable to authorize request (no api key presented)'})
 
-    if request['request_type'] == 'Hello':
-        ret_code, response_data = handle_hello_request(request)
-    elif request['request_type'] == 'register_new_device':
-        ret_code, response_data = handle_register_new_device_request(request)
+    if request['request_type'] == 'backup_file':
+        ret_code, response_data = handle_backup_file_request(request)
 
     return ret_code, response_data
 
-    store_file(client,file_path,length,raw_content)
+def handle_backup_file_request(request):
+    print_request_no_file(request)
 
+    # Query database to verify API key
+    customer_id = db.get_customer_id_by_api_key(request['api_key'])
 
+    if not customer_id:
+        return 1,json.dumps({'response': 'Could not find Customer associated with API key.'})
 
-def store_file(client_id,file_path,file_length,file_raw_content):
-    decrypted_raw_content, decrypted_length = decrypt_file(client_id,file_length,file_raw_content)
+    # Query database to verify agent ID and get device ID
+    results = db.get_device_by_agent_id(request['agent_id'])
+    if not results:
+        return 1,json.dumps({'response': 'Could not find device associated with Agent ID.'})
 
-    logging.log(logging.INFO,"== STORING FILE : %s ==" %file_path)
-    logging.log(logging.INFO,"Client ID:\t%d" % client_id)
-    logging.log(logging.INFO,"File Length:\t%d" % decrypted_length)
+    device_id,_,_,_,_,_,_,_,path_to_device_secret_key,_ = results
+    print("got device id %s and path %s" % (device_id,path_to_device_secret_key))
 
-    #TODO: check and authenticate that its a legitimate client id
-    #TODO: customer id and device id in backup data packets
-    client_id_root_folder = "/storage/%d/" % client_id
+    store_file(
+        customer_id,
+        device_id,
+        path_to_device_secret_key,
+        request['file_path'].encode("utf-8"),
+        request['file_content'].encode("utf-8")
+    )
 
-    #TODO: figure out a way to manage the directory structure so that the hierarchy is preserved
-    #for now i am stripping out the directory structure and just doing the filename
-    file_path_stripped = file_path.split("\\")[-1]
-    path_on_server = client_id_root_folder + file_path_stripped
+    # Add file metadata record to database
 
-    logging.log(logging.INFO,"writing content to %s" % path_on_server)
+def store_file(customer_id,device_id,path_to_device_secret_key,file_path,file_raw_content):
+    decrypted_raw_content, _ = crypto_utils.decrypt_msg(path_to_device_secret_key,file_raw_content,decode=False)
+    decrypted_path, _        = crypto_utils.decrypt_msg(path_to_device_secret_key,file_path,decode=True)
+
+    path_on_server = get_server_path(customer_id,device_id,decrypted_path)
+    write_file_to_disk(path_on_server,decrypted_raw_content)
+
+    #verify_hash()
+    #send_response_to_client()
+
+    log_file_info(decrypted_path,device_id,path_on_server)
+
     with open(path_on_server,'wb') as outfile:
         outfile.write(decrypted_raw_content)
 
-def decrypt_file(client_id,file_length,file_raw_content):
-    f = get_fernet(client_id)
-    decrypted = f.decrypt(file_raw_content)
+def get_server_path(customer_id,device_id,decrypted_path):
+    device_root_directory_on_server = "/storage/%s/device/%s/" % (customer_id,device_id)
+   
+    print("Combining %s with %s" % (device_root_directory_on_server,decrypted_path))
+    if "\\" in decrypted_path:
+        # Replace \ with /
+        p = pathlib.PureWindowsPath(r'%s'%decrypted_path)
+        print(p)
+        path = device_root_directory_on_server + str(p.as_posix())
 
-    return decrypted, len(decrypted)
+    elif "\\" not in decrypted_path:
+        path = device_root_directory_on_server + decrypted_path
 
-def decrypt_msg(client_id,raw_msg):
-    #converts raw_msg (which is a byte string) to a byte array with \x00 (null bytes) removed
-    raw_stripped_as_list = [i.to_bytes(1,sys.byteorder) for i in raw_msg if i.to_bytes(1,sys.byteorder)!=b'\x00']
+    # Remove any double slashes with single slashes
+    path = path.replace("//","/")
+    print(path)
+    return path
 
-    #strip the b'' and convert raw_stripped_as_list back to a bytestring
-    raw_stripped = b''.join(raw_stripped_as_list[2:-1])
+def write_file_to_disk(path,content):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as outfile:
+        outfile.write(content)
 
-    f = get_fernet(client_id)
-    decrypted = f.decrypt(raw_stripped)
-
-    return decrypted, len(decrypted)
-
-def get_fernet(client_id):
-    path_to_client_key = "/keys/%d/secret.key" % client_id
-    with open(path_to_client_key,'rb') as keyfile:
-        key = keyfile.read()
-
-    return Fernet(key)
+def print_request_no_file(request):
+    print("== RECEIVED NEW REQUEST ==")
+    print("Request type: %s" % request['request_type'])
+    print("Agent ID: %s"     % request['agent_id'])
+    print("API key: %s\n"    % request['api_key'])
 
 def initialize_logging():
     logging.basicConfig(
@@ -149,9 +140,14 @@ def initialize_logging():
             level=logging.DEBUG
     )
 
+def log_file_info(decrypted_path,device_id,path_on_server):
+    logging.log(logging.INFO,"== STORING FILE : %s ==" % decrypted_path)
+    logging.log(logging.INFO,"Device ID:\t%d" % device_id)
+    logging.log(logging.INFO,"writing content to %s" % path_on_server)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("-p", "--port", type=int, help="port to listen on for backup handling")
+    parser.add_argument("-p", "--port", default=9443, type=int, help="port to listen on for backup handling")
     args = parser.parse_args()
 
     main(args.port)

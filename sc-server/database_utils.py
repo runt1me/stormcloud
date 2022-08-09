@@ -128,6 +128,7 @@ def add_or_update_device_for_customer(customer_id, device_name, device_type, ip_
     return ret
 
 def get_last_10_callbacks_for_device(device_ip,device_name):
+  # TODO: change this to use get_device_by_agent_id
   ret = []
 
   cnx = __connect_to_db__()
@@ -219,6 +220,26 @@ def get_customer_id_by_api_key(api_key):
         customer_id = row[0][0]
 
         ret = customer_id
+
+  except Error as e:
+    print(e)
+
+  finally:
+    __teardown__(cursor,cnx)
+    return ret
+
+def get_device_by_agent_id(agent_id):
+  ret = []
+
+  cnx = __connect_to_db__()
+  cursor = cnx.cursor(buffered=True)
+
+  try:
+    cursor.callproc('get_device_by_agent_id', (agent_id,))
+
+    for result in cursor.stored_results():
+        row = result.fetchall()
+        ret = row[0]
 
   except Error as e:
     print(e)

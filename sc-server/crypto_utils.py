@@ -1,4 +1,5 @@
 import os
+import sys
 
 import secrets
 from cryptography.fernet import Fernet
@@ -25,3 +26,19 @@ def generate_api_key(key_path):
 
 def generate_agent_id():
     return secrets.token_urlsafe(8) + "-" + secrets.token_urlsafe(8)
+
+def decrypt_msg(path_to_device_secret_key,raw_msg,decode):
+    f = get_fernet(path_to_device_secret_key)
+    decrypted = f.decrypt(raw_msg)
+
+    if decode:
+        decrypted = decrypted.decode("utf-8")
+
+    return decrypted, len(decrypted)
+
+def get_fernet(path_to_device_secret_key):
+    with open(path_to_device_secret_key,'rb') as keyfile:
+        key = keyfile.read()
+
+    return Fernet(key)
+
