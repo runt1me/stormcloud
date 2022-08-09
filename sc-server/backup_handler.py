@@ -57,6 +57,9 @@ def handle_request(request):
 
     if request['request_type'] == 'backup_file':
         ret_code, response_data = handle_backup_file_request(request)
+    else:
+        ret_code = 1
+        response_data = json.dumps({'response':'Unknown request type.'})
 
     return ret_code, response_data
 
