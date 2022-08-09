@@ -31,7 +31,7 @@ def main(settings_file_path,api_key_file_path,agent_id_file_path):
     agent_id                = read_agent_id_file(agent_id_file_path)
 
     if int(settings['SEND_LOGS']):
-        logging_utils.send_logs_to_server(uuid=agent_id)
+        logging_utils.send_logs_to_server(api_key,agent_id)
     
     logging_utils.initialize_logging(uuid=agent_id)
 
@@ -143,7 +143,7 @@ def read_api_key_file(keyfile_path):
     return api_key.decode("utf-8")
 
 def read_agent_id_file(agent_id_file_path):
-    with open(agentfile_path, 'rb') as agentfile:
+    with open(agent_id_file_path, 'rb') as agentfile:
         agent_id = agentfile.read()
 
     return agent_id.decode("utf-8")

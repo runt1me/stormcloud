@@ -3,7 +3,9 @@ from os import walk
 from time import sleep
 import pathlib
 
-import socket
+import json
+
+import socket, ssl
 import logging
 
 import crypto_utils
@@ -12,19 +14,18 @@ SERVER_NAME = "www2.darkage.io"
 SERVER_PORT = 9443
 
 def ship_file_to_server(api_key,agent_id,path):
-    encrypted_content, encrypted_size = crypto_utils.encrypt_file(path)
+    encrypted_content, encrypted_size   = crypto_utils.encrypt_file(path)
     encrypted_path, encrypted_path_size = crypto_utils.encrypt_content(path)
 
     file_backup_request_data = json.dumps({
         'request_type': "backup_file",
         'api_key': api_key,
         'agent_id': agent_id,
-        'file_content': encrypted_content,
-        'file_num_bytes_when_encrypted': encrypted_size,
-        'file_path': encrypted_path,
+        'file_content': encrypted_content.decode("utf-8"),
+        'file_path': encrypted_path.decode("utf-8")
     })
 
-    logging.log(logging.INFO,"connecting to %s port %s" % server_address)
+    logging.log(logging.INFO,"Sending to %s:%s" % (SERVER_NAME,SERVER_PORT))
     logging.log(logging.INFO,dump_file_info(path,encrypted_size))
     ret, response_data = tls_send_json_data(file_backup_request_data, "backup_file-response", SERVER_NAME, SERVER_PORT)
 

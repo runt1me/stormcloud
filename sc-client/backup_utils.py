@@ -34,7 +34,7 @@ def check_for_backup(backup_time,current_run_time,previous_run_time):
 
 def perform_backup(paths,api_key,agent_id):
     logging.log(logging.INFO,"Beginning backup!")
-    for path in paths.split(","):
+    for path in paths:
         logging.log(logging.INFO,"==   %s   ==" % path)
         path_obj = pathlib.Path(path)
 

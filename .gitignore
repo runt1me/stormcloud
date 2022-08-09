@@ -7,3 +7,5 @@ keepalives.csv
 *.log
 *.sql
 *.vscode*
+*agent_id*
+*.DS_Store*
