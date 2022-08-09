@@ -16,15 +16,6 @@ ACTION_TIMER = 90
 #updates based on number of threads created
 THREAD_NUM = 0
 
-# TODOs (general)
-# Need to address the device identification problem
-# i.e. if a device DHCPs to a new address, will it be able to backup files?
-# may need to auto-create new devices if they come in via a valid API key without known hostname/ip.
-# that potentially carries some security risk though, i.e. if the API key is compromised.
-# Side note, may need to prevent new devices from being added through the API if only the API key is provided.
-# Maybe I need an API secret per user instead of just per device.
-# also probably just need to get better at the device identification problem in general. sigh.
-
 def main(settings_file_path,api_key_file_path,agent_id_file_path):
     settings                = read_settings_file(settings_file_path)
     api_key                 = read_api_key_file(api_key_file_path)

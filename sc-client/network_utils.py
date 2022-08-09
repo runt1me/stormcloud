@@ -29,7 +29,6 @@ def ship_file_to_server(api_key,agent_id,path):
     logging.log(logging.INFO,dump_file_info(path,encrypted_size))
     ret, response_data = tls_send_json_data(file_backup_request_data, "backup_file-response", SERVER_NAME, SERVER_PORT)
 
-    print(response_data)
     sleep(1)
 
 def tls_send_json_data(json_data, expected_response_data, server_name, server_port, show_json=False):
