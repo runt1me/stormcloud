@@ -1,47 +1,22 @@
-import socket, ssl
-import sys
-from datetime import datetime
 import argparse
-import pathlib
-import logging
-import os
 import json
 
 import database_utils as db
 import network_utils  as scnet
 import crypto_utils
+import backup_utils
 
-def main(LISTEN_PORT):
-    initialize_logging()
-
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS)
-    context.load_cert_chain(certfile="/root/certs/cert.pem")
-
-    s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-    s.bind(('0.0.0.0',LISTEN_PORT))
-    s.listen(5)
-
-    print('Listening for connections')
+def main(listen_port):
+    backup_utils.initialize_logging()
+    s = scnet.initialize_socket(listen_port=listen_port)
 
     try:
         while True:
-            # TODO: use actual signed cert for SSL
-            # and use TLS 1.3
-            connection, client_address = s.accept()
-            wrappedSocket = ssl.wrap_socket(
-                    connection,
-                    server_side=True,
-                    certfile="/root/certs/cert.pem",
-                    keyfile="/root/certs/cert.pem",
-                    ssl_version=ssl.PROTOCOL_TLS
-            )
-    
-            request = scnet.recv_json_until_eol(wrappedSocket)
+            wrappedSocket = scnet.accept_and_wrap_socket(s)
+            request       = scnet.recv_json_until_eol(wrappedSocket)
     
             if request:
               ret_code, response_data = handle_request(request)
-              # Send the length of the serialized data first, then send the data
-              # wrappedSocket.send(bytes('%d\n',encoding="utf-8") % len(response_data))
               wrappedSocket.sendall(bytes(response_data,encoding="utf-8"))
 
             else:
@@ -64,7 +39,7 @@ def handle_request(request):
     return ret_code, response_data
 
 def handle_backup_file_request(request):
-    print_request_no_file(request)
+    backup_utils.print_request_no_file(request)
 
     customer_id = db.get_customer_id_by_api_key(request['api_key'])
 
@@ -77,7 +52,7 @@ def handle_backup_file_request(request):
 
     device_id,_,_,_,_,_,_,_,path_to_device_secret_key,_ = results
 
-    path_on_server, device_root_directory_on_server, path_on_device, file_size = store_file(
+    path_on_server, device_root_directory_on_server, path_on_device, file_size = backup_utils.store_file(
         customer_id,
         device_id,
         path_to_device_secret_key,
@@ -85,9 +60,9 @@ def handle_backup_file_request(request):
         request['file_content'].encode("utf-8")
     )
 
-    file_name = get_file_name(path_on_server)
-    file_path = get_file_path_without_name(path_on_server)
-    file_type = get_file_type(path_on_server)
+    file_name = backup_utils.get_file_name(path_on_server)
+    file_path = backup_utils.get_file_path_without_name(path_on_server)
+    file_type = backup_utils.get_file_type(path_on_server)
 
     ret = db.add_or_update_file_for_device(
         device_id,
@@ -100,71 +75,6 @@ def handle_backup_file_request(request):
     )
 
     return 0,json.dumps({'backup_file-response':'hell yeah brother'})
-
-def store_file(customer_id,device_id,path_to_device_secret_key,file_path,file_raw_content):
-    decrypted_raw_content, _ = crypto_utils.decrypt_msg(path_to_device_secret_key,file_raw_content,decode=False)
-    decrypted_path, _        = crypto_utils.decrypt_msg(path_to_device_secret_key,file_path,decode=True)
-
-    path_on_server, device_root_directory_on_server = get_server_path(customer_id,device_id,decrypted_path)
-    write_file_to_disk(path_on_server,decrypted_raw_content)
-
-    log_file_info(decrypted_path,device_id,path_on_server)
-
-    with open(path_on_server,'wb') as outfile:
-        outfile.write(decrypted_raw_content)
-
-    print(decrypted_path)
-    return path_on_server, device_root_directory_on_server, decrypted_path, len(decrypted_raw_content)
-
-def get_file_name(path_on_server):
-    return path_on_server.split("/")[-1]
-
-def get_file_path_without_name(path_on_server):
-    return "/".join(path_on_server.split("/")[0:-1]) + "/"
-
-def get_file_type(path_on_server):
-    _, file_extension = os.path.splitext(path_on_server)
-    return file_extension
-
-def get_server_path(customer_id,device_id,decrypted_path):
-    device_root_directory_on_server = "/storage/%s/device/%s/" % (customer_id,device_id)
-   
-    print("Combining %s with %s" % (device_root_directory_on_server,decrypted_path))
-    if "\\" in decrypted_path:
-        # Replace \ with /
-        p = pathlib.PureWindowsPath(r'%s'%decrypted_path)
-        path = device_root_directory_on_server + str(p.as_posix())
-
-    elif "\\" not in decrypted_path:
-        path = device_root_directory_on_server + decrypted_path
-
-    path = path.replace("//","/")
-    return path, device_root_directory_on_server
-
-def write_file_to_disk(path,content):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "wb") as outfile:
-        outfile.write(content)
-
-def print_request_no_file(request):
-    print("== RECEIVED NEW REQUEST ==")
-    print("Request type: %s" % request['request_type'])
-    print("Agent ID: %s"     % request['agent_id'])
-    print("API key: %s\n"    % request['api_key'])
-
-def initialize_logging():
-    logging.basicConfig(
-            filename='/var/log/stormcloud.log',
-            filemode='a',
-            format='%(asctime)s %(levelname)-8s %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S',
-            level=logging.DEBUG
-    )
-
-def log_file_info(decrypted_path,device_id,path_on_server):
-    logging.log(logging.INFO,"== STORING FILE : %s ==" % decrypted_path)
-    logging.log(logging.INFO,"Device ID:\t%d" % device_id)
-    logging.log(logging.INFO,"writing content to %s" % path_on_server)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

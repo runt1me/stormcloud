@@ -1,4 +1,34 @@
 import json
+import socket, ssl
+
+CERTFILE="/root/certs/cert.pem"
+KEYFILE="/root/certs/cert.pem"
+
+# TODO: use actual signed cert for SSL
+# and use TLS 1.3
+
+def initialize_socket(listen_port):
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS)
+    context.load_cert_chain(certfile=CERTFILE)
+
+    s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    s.bind(('0.0.0.0',listen_port))
+    s.listen(5)
+
+    print('Listening for connections')
+    return s
+
+def accept_and_wrap_socket(s):
+    connection, _ = s.accept()
+    wrappedSocket = ssl.wrap_socket(
+        connection,
+        server_side=True,
+        certfile=CERTFILE,
+        keyfile=KEYFILE,
+        ssl_version=ssl.PROTOCOL_TLS
+    )
+
+    return wrappedSocket
 
 def recv_json_until_eol(socket):
     # Borrowed from https://github.com/mdebbar/jsonsocket
@@ -26,3 +56,5 @@ def recv_json_until_eol(socket):
       raise Exception('Data received was not in JSON format')
 
     return deserialized
+
+
