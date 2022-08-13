@@ -38,7 +38,6 @@ def action_loop_and_sleep(settings, api_key, agent_id, dbconn):
     prev_keepalive_freq = -1
     active_thread = None
 
-    #daemon loop
     while True:
         cur_run_time = datetime.now()
         cur_keepalive_freq = int(settings['KEEPALIVE_FREQ'])
@@ -111,7 +110,6 @@ def start_keepalive_thread(freq,api_key,agent_id):
     return t
 
 def get_or_create_hash_db(hash_db_file_path):
-    print("Get or create hash db")
     if not hash_db_exists(hash_db_file_path):
         return create_hash_db(hash_db_file_path)
 
@@ -136,8 +134,6 @@ def create_hash_db(path_to_file):
     return conn
 
 def get_hash_db(path_to_file):
-    logging.log(logging.INFO,"getting hash database")
-
     return sqlite3.connect(path_to_file)
 
 def read_api_key_file(keyfile_path):

@@ -12,10 +12,7 @@ import crypto_utils
 import network_utils
 
 def send_logs_to_server(api_key,agent_id):
-    #random note
-    #make sure that there isnt an issue with initializing logging
-    #creating new files and then immediately sending them up as blank files
-    #and deleting them immediately
+    #TODO: fix issue with logs not getting written if a logfile already exists at program startup
     logfiles_list = get_logfiles(uuid=agent_id)
     for logfile in logfiles_list:
         filepath = pathlib.Path(logfile)    

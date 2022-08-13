@@ -13,7 +13,6 @@ import logging
 import crypto_utils
 import network_utils
 
-#return codes for checking hash db
 BACKUP_STATUS_NO_CHANGE = 0
 BACKUP_STATUS_CHANGE    = 1
 
@@ -66,12 +65,8 @@ def process_file(file_path_obj,api_key,agent_id,dbconn):
             return
         else:
             logging.log(logging.INFO,"proceeding to backup file %s" %file_path_obj.name)
-
-            file_path = file_path_obj.resolve()
-            file_content = file_path_obj.read_bytes()
-            file_size = file_path_obj.stat().st_size
-        
-            network_utils.ship_file_to_server(api_key,agent_id,file_path)
+            
+            network_utils.ship_file_to_server(api_key,agent_id,file_path_obj.resolve())
 
 def dump_file_info(path,size,encrypted_size):
     logging.log(logging.INFO,"==== SENDING FILE : INFO ====")
@@ -91,32 +86,22 @@ def check_hash_db(file_path_obj,conn):
     if not results:
         logging.log(logging.INFO,"Could not find file in hash database, creating.")
 
-        cursor.execute('''
-            INSERT INTO files (file_name, md5) VALUES (?,?)
-        ''',(file_path,get_md5_hash(file_path)))
-
+        cursor.execute('''INSERT INTO files (file_name, md5) VALUES (?,?)''',(file_path,get_md5_hash(file_path))) 
         conn.commit()
 
     else:
-        md5_from_db = results[0][1]
+        file_name, md5_from_db = results[0]
+        logging.log(logging.INFO,"== %s == " % file_name)
         logging.log(logging.INFO,"Got md5 from database: %s" % md5_from_db)
 
         current_md5 = get_md5_hash(file_path)
         logging.log(logging.INFO,"Got md5 hash from file: %s" % current_md5)
 
         if md5_from_db == current_md5:
-            logging.log(logging.INFO,"File hashes match.")
             return 0
         else:
-            logging.log(logging.INFO,"File hashes did not match.")
-
-            # Update DB with new hash value
-            cursor.execute('''
-                UPDATE files
-                SET md5 = ?
-                WHERE file_name = ?
-            ''',(current_md5,file_path))
-
+            logging.log(logging.INFO,"Updating md5 in database.")
+            cursor.execute('''UPDATE files SET md5 = ? WHERE file_name = ?''',(current_md5,file_path))
             conn.commit()
 
     return 1
