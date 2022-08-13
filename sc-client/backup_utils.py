@@ -1,7 +1,11 @@
+# Requires Python 3.8!
+
 from datetime import datetime, timedelta
 from os import walk
 from time import sleep
+
 import pathlib
+import hashlib
 
 import socket
 import logging
@@ -32,7 +36,7 @@ def check_for_backup(backup_time,current_run_time,previous_run_time):
     else:
         return False
 
-def perform_backup(paths,api_key,agent_id):
+def perform_backup(paths,api_key,agent_id,dbconn):
     logging.log(logging.INFO,"Beginning backup!")
     for path in paths:
         logging.log(logging.INFO,"==   %s   ==" % path)
@@ -47,10 +51,10 @@ def perform_backup(paths,api_key,agent_id):
             logging.log(logging.INFO,"%s is a dir" % path)
             #[d for d in path_obj.iterdir() if d.is_dir()] ??? <- handle dirs so it keeps going into subdirs
             for file_obj in [p for p in path_obj.iterdir() if p.is_file()]:
-                process_file(file_obj,api_key,agent_id)
+                process_file(file_obj,api_key,agent_id,dbconn)
 
-def process_file(file_path_obj,api_key,agent_id):
-    status = check_hash_db(file_path_obj)
+def process_file(file_path_obj,api_key,agent_id,dbconn):
+    status = check_hash_db(file_path_obj,dbconn)
 
     if status == BACKUP_STATUS_NO_CHANGE:
         logging.log(logging.INFO,"no change to file, continuing")
@@ -75,9 +79,56 @@ def dump_file_info(path,size,encrypted_size):
     logging.log(logging.INFO,"\tSIZE: %d" %size)
     logging.log(logging.INFO,"\tENCRYPTED SIZE: %d" %encrypted_size)
 
-def check_hash_db(file_path_obj):
-    #TODO: this function
+def check_hash_db(file_path_obj,conn):
+    # Returns 1 --> file is either new or changed, update the database and send to server
+    # Returns 0 --> file has not changed from previous, no need to send to the server
+    cursor = conn.cursor()
+    file_path = str(file_path_obj)
+
+    cursor.execute('''SELECT file_name,md5 FROM files WHERE file_name = ?;''', (file_path,))
+
+    results = cursor.fetchall()
+    if not results:
+        logging.log(logging.INFO,"Could not find file in hash database, creating.")
+
+        cursor.execute('''
+            INSERT INTO files (file_name, md5) VALUES (?,?)
+        ''',(file_path,get_md5_hash(file_path)))
+
+        conn.commit()
+
+    else:
+        md5_from_db = results[0][1]
+        logging.log(logging.INFO,"Got md5 from database: %s" % md5_from_db)
+
+        current_md5 = get_md5_hash(file_path)
+        logging.log(logging.INFO,"Got md5 hash from file: %s" % current_md5)
+
+        if md5_from_db == current_md5:
+            logging.log(logging.INFO,"File hashes match.")
+            return 0
+        else:
+            logging.log(logging.INFO,"File hashes did not match.")
+
+            # Update DB with new hash value
+            cursor.execute('''
+                UPDATE files
+                SET md5 = ?
+                WHERE file_name = ?
+            ''',(current_md5,file_path))
+
+            conn.commit()
+
     return 1
+
+def get_md5_hash(path_to_file):
+    # Reads in chunks to limit memory footprint
+    with open(path_to_file, "rb") as f:
+        file_hash = hashlib.md5()
+        while chunk := f.read(8192):
+            file_hash.update(chunk)
+
+    return file_hash.hexdigest()
 
 def verify_file_integrity(file_path_obj):
     #TODO: make sure there is no ransomware in the file, anything wrong etc.

@@ -2,6 +2,9 @@ from time import sleep
 from datetime import datetime, timedelta
 import argparse
 import platform
+import os
+
+import sqlite3
 
 import threading
 import logging
@@ -16,7 +19,7 @@ ACTION_TIMER = 90
 #updates based on number of threads created
 THREAD_NUM = 0
 
-def main(settings_file_path,api_key_file_path,agent_id_file_path):
+def main(settings_file_path,api_key_file_path,agent_id_file_path,hash_db_file_path):
     settings                = read_settings_file(settings_file_path)
     api_key                 = read_api_key_file(api_key_file_path)
     agent_id                = read_agent_id_file(agent_id_file_path)
@@ -26,11 +29,10 @@ def main(settings_file_path,api_key_file_path,agent_id_file_path):
     
     logging_utils.initialize_logging(uuid=agent_id)
 
-    #TODO: check for updates???
-    hash_db = get_or_create_hash_db()
-    action_loop_and_sleep(settings=settings,api_key=api_key,agent_id=agent_id)
+    hash_db_conn = get_or_create_hash_db(hash_db_file_path)
+    action_loop_and_sleep(settings=settings,api_key=api_key,agent_id=agent_id,dbconn=hash_db_conn)
 
-def action_loop_and_sleep(settings, api_key, agent_id):
+def action_loop_and_sleep(settings, api_key, agent_id, dbconn):
     # For the first run, just check if the backup should have been run in the previous 10 minutes
     prev_run_time = datetime.now() - timedelta(minutes=10)
     prev_keepalive_freq = -1
@@ -46,7 +48,7 @@ def action_loop_and_sleep(settings, api_key, agent_id):
         logging.log(logging.INFO,"Stormcloud is running with settings: %s" % (settings))
 
         #if backup_utils.check_for_backup(backup_time,cur_run_time,prev_run_time):
-        #backup_utils.perform_backup(backup_paths,api_key,agent_id)
+        backup_utils.perform_backup(backup_paths,api_key,agent_id,dbconn)
 
         if active_thread is None:
             active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id)
@@ -108,24 +110,35 @@ def start_keepalive_thread(freq,api_key,agent_id):
     logging.log(logging.INFO,"returning from start thread")
     return t
 
-def get_or_create_hash_db():
-    if not hash_db_exists():
-        return create_hash_db()
+def get_or_create_hash_db(hash_db_file_path):
+    print("Get or create hash db")
+    if not hash_db_exists(hash_db_file_path):
+        return create_hash_db(hash_db_file_path)
 
     else:
-        return get_hash_db()
+        return get_hash_db(hash_db_file_path)
 
-def hash_db_exists():
-    #TODO: this function
-    logging.log(logging.INFO,"checking if hash db exists on machine")
+def hash_db_exists(path_to_file):
+    return os.path.exists(path_to_file)
 
-def create_hash_db():
-    #TODO: this function
+def create_hash_db(path_to_file):
     logging.log(logging.INFO,"creating new hash db")
 
-def get_hash_db():
-    #TODO: this function
+    conn = sqlite3.connect(path_to_file) 
+    c = conn.cursor()
+
+    c.execute('''
+          CREATE TABLE IF NOT EXISTS files
+          ([file_id] INTEGER PRIMARY KEY, [file_name] TEXT, [md5] TEXT)
+          ''')
+
+    conn.commit()
+    return conn
+
+def get_hash_db(path_to_file):
     logging.log(logging.INFO,"getting hash database")
+
+    return sqlite3.connect(path_to_file)
 
 def read_api_key_file(keyfile_path):
     with open(keyfile_path,'rb') as keyfile:
@@ -144,7 +157,8 @@ if __name__ == "__main__":
     parser.add_argument("-s", "--settings-file",type=str,default="settings.cfg",help="Path to settings file (default=./settings.cfg)")
     parser.add_argument("-a", "--api-key", type=str, default="api.key", help="Path to API key file (default=./api.key)")
     parser.add_argument("-g", "--agent-id", type=str, default="agent_id", help="Path to the Agent ID file (default=./agent_id")
+    parser.add_argument("-d", "--hash-db", type=str, default="schash.db", help="Path to hash db file (default=./schash.db")
 
     args = parser.parse_args()
 
-    main(args.settings_file,args.api_key,args.agent_id)
+    main(args.settings_file,args.api_key,args.agent_id,args.hash_db)
