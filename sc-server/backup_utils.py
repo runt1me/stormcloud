@@ -44,6 +44,11 @@ def get_server_path(customer_id,device_id,decrypted_path):
     return path, device_root_directory_on_server
 
 def write_file_to_disk(path,content):
+    # TODO: Check if file exists
+
+    # If it does exist, mv original file to rev2 -> move rev2 -> rev3, etc.
+    # Find max number of revs and roll off last one
+    # make a hidden directory .SCREV/ORIGINAL_NAME.ext.SCREV2
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as outfile:
         outfile.write(content)
