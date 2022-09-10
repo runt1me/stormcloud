@@ -14,7 +14,7 @@ SERVER_PORT = 7443
 
 def execute_ping_loop(interval,api_key,agent_id,name):
     while True:
-        logging.log(logging.INFO,"Sending to %s:%s" % (SERVER_NAME,SERVER_PORT))
+        logging.log(logging.INFO,"Sending keepalive to %s:%s" % (SERVER_NAME,SERVER_PORT))
         keepalive_request_data = json.dumps({
             'request_type': 'keepalive',
             'api_key': api_key,
