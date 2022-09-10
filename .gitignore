@@ -9,3 +9,4 @@ keepalives.csv
 *.vscode*
 *agent_id*
 *.DS_Store*
+*.cfg
