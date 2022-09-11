@@ -45,9 +45,8 @@ def get_server_path(customer_id,device_id,decrypted_path):
     return path, device_root_directory_on_server
 
 def write_file_to_disk(path,content,max_versions):
+    original_file_name  = get_file_name(path)
     if os.path.exists(path):
-        # Find highest version of file
-        print("Looking for highest version of file")
         print("Maximum number of versions stored: %d" % max_versions)
 
         sc_version_directory = os.path.dirname(path) + "/.SCVERS/"
@@ -60,18 +59,11 @@ def write_file_to_disk(path,content,max_versions):
         print("Checking in %s for matches *%s*" % (sc_version_directory,file_name))
         match = glob.glob(sc_version_directory+"*%s*" % file_name)
 
-        print(match)
-        print(type(match))
-
-        if not match:
-            print("no matches found, creating ver2")
-            # No previous versions exist, copy original path to VER2
-            old_version_full_path = sc_version_directory + file_name + ".SCVER2"
-            os.rename(path,old_version_full_path)
-
-        else:
+        if match:
             print("Found matches:" %match)
-            match.sort().reverse()
+            match.sort()
+            match.reverse()
+            print("match list (reverse sorted) %s" %match)
             # sort list to descending order (5,4,3,2)
             # move 5 -> 6
             # move 4 -> 5
@@ -89,12 +81,16 @@ def write_file_to_disk(path,content,max_versions):
                 string_to_replace   = ".SCVER%d"%version
                 replacement_string  = ".SCVER%d"%next_version
 
-                print("Found version: %d" % version)
                 print("== Renaming ==")
-                print(match)
-                print(match.replace(string_to_replace,replacement_string))
+                print(m)
+                print(m.replace(string_to_replace,replacement_string))
 
-                os.rename(match,match.replace(string_to_replace,replacement_string))
+                os.rename(m,m.replace(string_to_replace,replacement_string))
+
+        print("Creating ver2")
+        # copy original path to VER2
+        old_version_full_path = sc_version_directory + original_file_name + ".SCVER2"
+        os.rename(path,old_version_full_path)
 
     # Finally, write the original content at the originally specified file path
     os.makedirs(os.path.dirname(path), exist_ok=True)
