@@ -45,57 +45,58 @@ def get_server_path(customer_id,device_id,decrypted_path):
     return path, device_root_directory_on_server
 
 def write_file_to_disk(path,content,max_versions):
-    original_file_name  = get_file_name(path)
     if os.path.exists(path):
-        print("Maximum number of versions stored: %d" % max_versions)
+        handle_versions(path,max_versions)
 
-        sc_version_directory = os.path.dirname(path) + "/.SCVERS/"
-
-        print("Looking for versions at path: %s" % sc_version_directory)
-        os.makedirs(os.path.dirname(sc_version_directory), exist_ok=True)
-
-        # List all files in path that match *filename* = all versions of the file
-        file_name = get_file_name(path)
-        print("Checking in %s for matches *%s*" % (sc_version_directory,file_name))
-        match = glob.glob(sc_version_directory+"*%s*" % file_name)
-
-        if match:
-            print("Found matches:" %match)
-            match.sort()
-            match.reverse()
-            print("match list (reverse sorted) %s" %match)
-            # sort list to descending order (5,4,3,2)
-            # move 5 -> 6
-            # move 4 -> 5
-            # move 3 -> 4
-            # move 2 -> 3
-            # move current -> 2
-            for m in match:
-                file_name = get_file_name(m)
-                print("Looking at filename: %s" %file_name)
-
-                # get the thing from after the last occurrence of .SCVER
-                version = int(file_name.split(".SCVER")[-1])
-                next_version = version + 1
-
-                string_to_replace   = ".SCVER%d"%version
-                replacement_string  = ".SCVER%d"%next_version
-
-                print("== Renaming ==")
-                print(m)
-                print(m.replace(string_to_replace,replacement_string))
-
-                os.rename(m,m.replace(string_to_replace,replacement_string))
-
-        print("Creating ver2")
-        # copy original path to VER2
-        old_version_full_path = sc_version_directory + original_file_name + ".SCVER2"
-        os.rename(path,old_version_full_path)
-
-    # Finally, write the original content at the originally specified file path
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as outfile:
         outfile.write(content)
+
+def handle_versions(path,max_versions):
+    # TODO: eventually need to address bugs that come up if "SCVER" or "SCVER2" is in the underlying file name.
+    # For now this is not worth my time
+    original_file_name = get_file_name(path)
+    sc_version_directory = os.path.dirname(path) + "/.SCVERS/"
+
+    print("Maximum number of versions stored: %d" % max_versions)
+
+    os.makedirs(os.path.dirname(sc_version_directory), exist_ok=True)
+
+    # List all files in path that match *filename* = all versions of the file
+    print("Checking in %s for matches *%s*" % (sc_version_directory,original_file_name))
+    match = glob.glob(sc_version_directory+"*%s*" % original_file_name)
+    print("Got match: %s" % match)
+
+    if match:
+        match.sort(reverse=True)
+
+        for m in match:
+            fn = get_file_name(m)
+
+            # get the thing from after the last occurrence of .SCVER
+            version = int(fn.split(".SCVER")[-1])
+            next_version = version + 1
+
+            if next_version > max_versions:
+                print("Device has reached the max # of versions for file.")
+                print("Not processing version: %d" %next_version)
+                continue
+
+            string_to_replace   = ".SCVER%d"%version
+            replacement_string  = ".SCVER%d"%next_version
+
+            print_rename(m,m.replace(string_to_replace,replacement_string))
+            os.rename(m,m.replace(string_to_replace,replacement_string))
+
+    old_version_full_path = sc_version_directory + original_file_name + ".SCVER2"
+
+    print_rename(path,old_version_full_path)
+    os.rename(path,old_version_full_path)
+
+def print_rename(old,new):
+    print("== RENAMING ==")
+    print(old)
+    print(new)
 
 def print_request_no_file(request):
     print("== RECEIVED NEW REQUEST ==")
