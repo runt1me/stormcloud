@@ -1,15 +1,16 @@
 import pathlib
 import logging
 import os
+import glob
 
 import crypto_utils
 
-def store_file(customer_id,device_id,path_to_device_secret_key,file_path,file_raw_content):
+def store_file(customer_id,device_id,path_to_device_secret_key,file_path,file_raw_content,max_versions):
     decrypted_raw_content, _ = crypto_utils.decrypt_msg(path_to_device_secret_key,file_raw_content,decode=False)
     decrypted_path, _        = crypto_utils.decrypt_msg(path_to_device_secret_key,file_path,decode=True)
 
     path_on_server, device_root_directory_on_server = get_server_path(customer_id,device_id,decrypted_path)
-    write_file_to_disk(path_on_server,decrypted_raw_content)
+    write_file_to_disk(path_on_server,decrypted_raw_content,max_versions)
 
     log_file_info(decrypted_path,device_id,path_on_server)
 
@@ -43,10 +44,59 @@ def get_server_path(customer_id,device_id,decrypted_path):
     path = path.replace("//","/")
     return path, device_root_directory_on_server
 
-def write_file_to_disk(path,content):
+def write_file_to_disk(path,content,max_versions):
+    if os.path.exists(path):
+        handle_versions(path,max_versions)
+
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as outfile:
         outfile.write(content)
+
+def handle_versions(path,max_versions):
+    # TODO: eventually need to address bugs that come up if "SCVER" or "SCVER2" is in the underlying file name.
+    # For now this is not worth my time
+    original_file_name = get_file_name(path)
+    sc_version_directory = os.path.dirname(path) + "/.SCVERS/"
+
+    print("Maximum number of versions stored: %d" % max_versions)
+
+    os.makedirs(os.path.dirname(sc_version_directory), exist_ok=True)
+
+    # List all files in path that match *filename* = all versions of the file
+    print("Checking in %s for matches *%s*" % (sc_version_directory,original_file_name))
+    match = glob.glob(sc_version_directory+"*%s*" % original_file_name)
+    print("Got match: %s" % match)
+
+    if match:
+        match.sort(reverse=True)
+
+        for m in match:
+            fn = get_file_name(m)
+
+            # get the thing from after the last occurrence of .SCVER
+            version = int(fn.split(".SCVER")[-1])
+            next_version = version + 1
+
+            if next_version > max_versions:
+                print("Device has reached the max # of versions for file.")
+                print("Not processing version: %d" %next_version)
+                continue
+
+            string_to_replace   = ".SCVER%d"%version
+            replacement_string  = ".SCVER%d"%next_version
+
+            print_rename(m,m.replace(string_to_replace,replacement_string))
+            os.rename(m,m.replace(string_to_replace,replacement_string))
+
+    old_version_full_path = sc_version_directory + original_file_name + ".SCVER2"
+
+    print_rename(path,old_version_full_path)
+    os.rename(path,old_version_full_path)
+
+def print_rename(old,new):
+    print("== RENAMING ==")
+    print(old)
+    print(new)
 
 def print_request_no_file(request):
     print("== RECEIVED NEW REQUEST ==")

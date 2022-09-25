@@ -53,12 +53,16 @@ def handle_backup_file_request(request):
 
     device_id,_,_,_,_,_,_,_,path_to_device_secret_key,_ = results
 
+    # TODO: probably configure this per customer in database
+    max_versions = 3
+
     path_on_server, device_root_directory_on_server, path_on_device, file_size = backup_utils.store_file(
         customer_id,
         device_id,
         path_to_device_secret_key,
         request['file_path'].encode("utf-8"),
-        request['file_content'].encode("utf-8")
+        request['file_content'].encode("utf-8"),
+        max_versions
     )
 
     file_name = backup_utils.get_file_name(path_on_server)

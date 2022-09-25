@@ -62,6 +62,7 @@ def conduct_connectivity_test(api_key,server_name,server_port):
 def conduct_device_initial_survey(api_key,dtype):
     try:
         operating_system = platform.platform()
+
         if 'macOS' in operating_system:
             device_name, ip_address = get_name_and_address_info_mac()
         elif 'Windows' in operating_system:
@@ -109,7 +110,18 @@ def get_name_and_address_info_mac():
     return device_name, ip_address
  
 def get_name_and_address_info_windows():
-    return socket.gethostname(), socket.gethostbyname(device_name)
+    # Runs route print -4 and gets the address associated with the default route
+    # TODO: handle if route print -4 doesnt work?
+    device_name = socket.gethostname()
+
+    process = Popen(['route', 'print', '-4'], stdout=PIPE, stderr=PIPE)
+    stdout, stderr = process.communicate()
+
+    lines = [l for l in stdout.decode("utf-8").split("\r\n") if l]
+    default_route_line = [l for l in lines if l.split()[0] == '0.0.0.0'][0]
+    default_route_address = default_route_line.split()[3]
+
+    return device_name, default_route_address
 
 def save_secret_key(key):
     key = key.encode("utf-8")
