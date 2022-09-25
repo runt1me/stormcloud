@@ -12,7 +12,7 @@ SERVER_NAME="www2.darkage.io"
 SERVER_PORT=8443
 STORMCLOUD_VERSION="1.0.0"
 
-def main(device_type, send_logs, backup_time, keepalive_freq, backup_paths, api_key_file_path):
+def main(device_type, send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive, api_key_file_path):
     initialize_logging()
     logging.log(logging.INFO, "Beginning install of Stormcloud v%s" % STORMCLOUD_VERSION)
 
@@ -47,7 +47,7 @@ def main(device_type, send_logs, backup_time, keepalive_freq, backup_paths, api_
     logging.log(logging.INFO, "Received agent ID and wrote to ./agent_id")
 
     logging.log(logging.INFO, "Configuring backup process and writing settings file.")
-    ret = configure_settings(send_logs, backup_time, keepalive_freq, backup_paths)
+    ret = configure_settings(send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive)
 
     logging.log(logging.INFO, "Ready to launch stormcloud!")
 
@@ -145,7 +145,7 @@ def read_api_key_file(keyfile_path):
 
     return api_key.decode("utf-8")
 
-def configure_settings(send_logs, backup_time, keepalive_freq, backup_paths):
+def configure_settings(send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive):
     backup_time    = int(backup_time)
     keepalive_freq = int(keepalive_freq)
 
@@ -177,6 +177,13 @@ def configure_settings(send_logs, backup_time, keepalive_freq, backup_paths):
         lines_to_write.append("BACKUP_PATHS")
         for bp in backup_paths:
             lines_to_write.append("%s" % bp)
+
+        # Recursive backup paths
+        lines_to_write.append("# paths to recursively backup")
+        lines_to_write.append("RECURSIVE_BACKUP_PATHS")
+        if backup_paths_recursive:
+            for rbp in backup_paths_recursive:
+                lines_to_write.append("%s" % rbp)
 
         output_string = "\n".join(lines_to_write)
         settings_file.write(output_string)
@@ -231,6 +238,7 @@ if __name__ == '__main__':
     parser.add_argument("-t", "--backup-time", type=int, default=20, help="time of day (24hr) to perform the daily Stormcloud backup process")
     parser.add_argument("-k", "--keepalive-freq", type=int, default=100, help="frequency (in seconds) to send keepalives for this device to the Stormcloud servers")
     parser.add_argument("-p", "--backup-paths", type=str, required=True, help="Filesystem paths to backup, comma-separated")
+    parser.add_argument("-r", "--backup-paths-recursive", type=str, required=False, help="Filesystem paths to recursively backup, comma-separated")
     parser.add_argument("-a", "--api-key", type=str, default="api.key", help="Path to API key file (default=./api.key)")
 
     args = parser.parse_args()
@@ -239,4 +247,9 @@ if __name__ == '__main__':
     for path in args.backup_paths.split(","):
         backup_paths_parsed.append(path)
 
-    main(args.device_type, args.send_logs, args.backup_time, args.keepalive_freq, backup_paths_parsed, args.api_key)
+    if args.backup_paths_recursive:
+        backup_paths_recursive_parsed = []
+        for path in args.backup_paths_recursive.split(","):
+            backup_paths_recursive_parsed.append(path)
+
+    main(args.device_type, args.send_logs, args.backup_time, args.keepalive_freq, backup_paths_parsed, backup_paths_recursive_parsed, args.api_key)
