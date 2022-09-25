@@ -35,22 +35,37 @@ def check_for_backup(backup_time,current_run_time,previous_run_time):
     else:
         return False
 
-def perform_backup(paths,api_key,agent_id,dbconn):
+def perform_backup(paths,paths_recursive,api_key,agent_id,dbconn):
     logging.log(logging.INFO,"Beginning backup!")
+
+    process_paths_nonrecursive(paths,api_key,agent_id,dbconn)
+    process_paths_recursive(paths_recursive,api_key,agent_id,dbconn)
+
+def process_paths_nonrecursive(paths,api_key,agent_id,dbconn):
     for path in paths:
         logging.log(logging.INFO,"==   %s   ==" % path)
         path_obj = pathlib.Path(path)
 
-        #TODO: find a way to do this recursively
         if path_obj.is_file():
-            logging.log(logging.INFO,"%s is a file" % path)
             process_file(path_obj,api_key,agent_id)
 
         elif path_obj.is_dir():
-            logging.log(logging.INFO,"%s is a dir" % path)
-            #[d for d in path_obj.iterdir() if d.is_dir()] ??? <- handle dirs so it keeps going into subdirs
             for file_obj in [p for p in path_obj.iterdir() if p.is_file()]:
                 process_file(file_obj,api_key,agent_id,dbconn)
+
+def process_paths_recursive(paths,api_key,agent_id,dbconn):
+    for path in paths:
+        logging.log(logging.INFO, "==   %s (-R)  ==" % path)
+        path_obj = pathlib.Path(path)
+
+        process_one_path_recursive(path_obj,api_key,agent_id,dbconn)
+
+def process_one_path_recursive(target_path,api_key,agent_id,dbconn):
+    for file in target_path.iterdir():
+        if file.is_dir():
+            process_one_path_recursive(file,api_key,agent_id,dbconn)
+        else:
+            process_file(file,api_key,agent_id,dbconn)
 
 def process_file(file_path_obj,api_key,agent_id,dbconn):
     status = check_hash_db(file_path_obj,dbconn)
@@ -65,7 +80,7 @@ def process_file(file_path_obj,api_key,agent_id,dbconn):
             return
         else:
             logging.log(logging.INFO,"proceeding to backup file %s" %file_path_obj.name)
-            
+
             network_utils.ship_file_to_server(api_key,agent_id,file_path_obj.resolve())
 
 def dump_file_info(path,size,encrypted_size):

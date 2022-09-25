@@ -42,12 +42,13 @@ def action_loop_and_sleep(settings, api_key, agent_id, dbconn):
         cur_run_time = datetime.now()
         cur_keepalive_freq = int(settings['KEEPALIVE_FREQ'])
         backup_time        = int(settings['BACKUP_TIME'])
-        backup_paths       =     settings['BACKUP_PATHS']
+        backup_paths           = settings['BACKUP_PATHS']
+        recursive_backup_paths = settings['RECURSIVE_BACKUP_PATHS']
 
         logging.log(logging.INFO,"Stormcloud is running with settings: %s" % (settings))
 
         #if backup_utils.check_for_backup(backup_time,cur_run_time,prev_run_time):
-        backup_utils.perform_backup(backup_paths,api_key,agent_id,dbconn)
+        backup_utils.perform_backup(backup_paths,recursive_backup_paths,api_key,agent_id,dbconn)
 
         if active_thread is None:
             active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id)
@@ -72,19 +73,23 @@ def read_settings_file(fn):
         settings_lines = [l for l in settings_lines if l[0] != "#"]
 
         settings = {}
-        backup_paths_line = -1
-        for idx,s in enumerate(settings_lines):
-            if s == "BACKUP_PATHS":
-                backup_paths_line = idx
-                break
+        backup_paths_line           = settings_lines.index("BACKUP_PATHS")
+        recursive_backup_paths_line = settings_lines.index("RECURSIVE_BACKUP_PATHS")
 
+        for s in settings_lines[0:backup_paths_line]:
             settings[s.split()[0]] = s.split()[1]
 
         backup_paths = []
-        for s in settings_lines[backup_paths_line+1:]:
+        recursive_backup_paths = []
+
+        for s in settings_lines[backup_paths_line+1:recursive_backup_paths_line]:
             backup_paths.append(s)
 
-        settings["BACKUP_PATHS"] = backup_paths
+        for s in settings_lines[recursive_backup_paths_line+1:]:
+            recursive_backup_paths.append(s)
+
+        settings["BACKUP_PATHS"]           = backup_paths
+        settings["RECURSIVE_BACKUP_PATHS"] = recursive_backup_paths
 
     return settings
 
