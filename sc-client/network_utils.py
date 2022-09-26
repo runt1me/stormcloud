@@ -33,7 +33,10 @@ def ship_file_to_server(api_key,agent_id,path):
 
 def tls_send_json_data(json_data, expected_response_data, server_name, server_port, show_json=False):
     s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-    s.settimeout(10)
+
+    # TODO: address issues with timeouts.
+    # maybe change timeout based on how much data is being sent?
+    s.settimeout(180)
 
     wrappedSocket = ssl.wrap_socket(s, ssl_version=ssl.PROTOCOL_TLS)
     receive_data = None
