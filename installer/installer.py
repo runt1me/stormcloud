@@ -237,18 +237,23 @@ if __name__ == '__main__':
     parser.add_argument("-l", "--send-logs", type=int, default=1, help="send logs to assist with debugging/development of Stormcloud (1 or 0)")
     parser.add_argument("-t", "--backup-time", type=int, default=20, help="time of day (24hr) to perform the daily Stormcloud backup process")
     parser.add_argument("-k", "--keepalive-freq", type=int, default=100, help="frequency (in seconds) to send keepalives for this device to the Stormcloud servers")
-    parser.add_argument("-p", "--backup-paths", type=str, required=True, help="Filesystem paths to backup, comma-separated")
+    parser.add_argument("-p", "--backup-paths", type=str, required=False, help="Filesystem paths to backup, comma-separated")
     parser.add_argument("-r", "--backup-paths-recursive", type=str, required=False, help="Filesystem paths to recursively backup, comma-separated")
     parser.add_argument("-a", "--api-key", type=str, default="api.key", help="Path to API key file (default=./api.key)")
 
     args = parser.parse_args()
 
+    if not args.backup_paths_recursive and not args.backup_paths:
+        raise Exception("Must provide either -p or -r.")
+
     backup_paths_parsed = []
-    for path in args.backup_paths.split(","):
-        backup_paths_parsed.append(path)
+    backup_paths_recursive_parsed = []
+
+    if args.backup_paths:    
+        for path in args.backup_paths.split(","):
+            backup_paths_parsed.append(path)
 
     if args.backup_paths_recursive:
-        backup_paths_recursive_parsed = []
         for path in args.backup_paths_recursive.split(","):
             backup_paths_recursive_parsed.append(path)
 
