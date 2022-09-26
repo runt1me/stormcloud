@@ -29,14 +29,13 @@ def ship_file_to_server(api_key,agent_id,path):
     logging.log(logging.INFO,dump_file_info(path,encrypted_size))
     ret, response_data = tls_send_json_data(file_backup_request_data, "backup_file-response", SERVER_NAME, SERVER_PORT)
 
-    sleep(1)
+    sleep(0.1)
 
 def tls_send_json_data(json_data, expected_response_data, server_name, server_port, show_json=False):
     s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
 
-    # TODO: address issues with timeouts.
-    # maybe change timeout based on how much data is being sent?
-    s.settimeout(180)
+    timeout = calculate_timeout(len(json_data))
+    s.settimeout(timeout)
 
     wrappedSocket = ssl.wrap_socket(s, ssl_version=ssl.PROTOCOL_TLS)
     receive_data = None
@@ -74,3 +73,9 @@ def dump_file_info(path,encrypted_size):
     logging.log(logging.INFO,"\tPATH: %s" %path)
     logging.log(logging.INFO,"\tSIZE WHEN ENCRYPTED: %d" %encrypted_size)
 
+def calculate_timeout(data_length):
+    # TODO: address issues with timeouts.
+    # maybe change timeout based on how much data is being sent?
+    # import speedtest; s = speedtest.Speedtest(); s.get_servers(); s.get_best_server(); s.download(); s.upload();
+    # res = s.results.dict(); return res['download'], res['upload'], res['ping']
+    return 300
