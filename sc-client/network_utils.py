@@ -29,7 +29,7 @@ def ship_file_to_server(api_key,agent_id,path):
     logging.log(logging.INFO,dump_file_info(path,encrypted_size))
     ret, response_data = tls_send_json_data(file_backup_request_data, "backup_file-response", SERVER_NAME, SERVER_PORT)
 
-    sleep(0.1)
+    return ret
 
 def tls_send_json_data(json_data, expected_response_data, server_name, server_port, show_json=False):
     s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
@@ -65,8 +65,10 @@ def tls_send_json_data(json_data, expected_response_data, server_name, server_po
             print(data_json)
             if expected_response_data in data_json:
                 return (0, data_json)
+            else:
+                return (1, receive_data)
         else:
-            return (1, receive_data)
+            return (1, None)
 
 def dump_file_info(path,encrypted_size):
     logging.log(logging.INFO,"==== SENDING FILE : INFO ====")

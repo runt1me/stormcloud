@@ -15,9 +15,12 @@ def send_logs_to_server(api_key,agent_id):
     logfiles_list = get_logfiles(uuid=agent_id)
     for logfile in logfiles_list:
         filepath = pathlib.Path(logfile)    
-        network_utils.ship_file_to_server(api_key,agent_id,filepath)
+        ret = network_utils.ship_file_to_server(api_key,agent_id,filepath)
 
-        os.remove(logfile)
+        if ret == 0:
+            os.remove(logfile)
+        else:
+            print("Failed to send logfile.")
 
 def get_logfiles(uuid):
     return glob.glob("%s*.log" % uuid)

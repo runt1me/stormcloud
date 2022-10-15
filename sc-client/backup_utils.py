@@ -72,16 +72,18 @@ def process_file(file_path_obj,api_key,agent_id,dbconn):
 
     if status == BACKUP_STATUS_NO_CHANGE:
         logging.log(logging.INFO,"no change to file, continuing")
-        return
 
     elif status == BACKUP_STATUS_CHANGE:
         if not verify_file_integrity(file_path_obj):
             logging.log(logging.WARNING,"File integrity check failed for file %s." %file_path_obj)
-            return
         else:
-            logging.log(logging.INFO,"proceeding to backup file %s" %file_path_obj.name)
+            logging.log(logging.INFO,"Backing up file: %s" %file_path_obj.name)
 
-            network_utils.ship_file_to_server(api_key,agent_id,file_path_obj.resolve())
+            ret = network_utils.ship_file_to_server(api_key,agent_id,file_path_obj.resolve())
+            if ret == 0:
+                update_hash_db(file_path_obj, dbconn)
+            else:
+                logging.log(logging.INFO, "Did not receive success code from server when trying to backup file, so not updating hash db.")
 
 def dump_file_info(path,size,encrypted_size):
     logging.log(logging.INFO,"==== SENDING FILE : INFO ====")
@@ -90,19 +92,14 @@ def dump_file_info(path,size,encrypted_size):
     logging.log(logging.INFO,"\tENCRYPTED SIZE: %d" %encrypted_size)
 
 def check_hash_db(file_path_obj,conn):
-    # Returns 1 --> file is either new or changed, update the database and send to server
-    # Returns 0 --> file has not changed from previous, no need to send to the server
     cursor = conn.cursor()
     file_path = str(file_path_obj)
 
-    cursor.execute('''SELECT file_name,md5 FROM files WHERE file_name = ?;''', (file_path,))
-
-    results = cursor.fetchall()
+    results = is_file_in_db(file_path, cursor)
+    
     if not results:
-        logging.log(logging.INFO,"Could not find file in hash database, creating.")
-
-        cursor.execute('''INSERT INTO files (file_name, md5) VALUES (?,?)''',(file_path,get_md5_hash(file_path))) 
-        conn.commit()
+        logging.log(logging.INFO,"Could not find file in hash database.")
+        return BACKUP_STATUS_CHANGE
 
     else:
         file_name, md5_from_db = results[0]
@@ -113,13 +110,34 @@ def check_hash_db(file_path_obj,conn):
         logging.log(logging.INFO,"Got md5 hash from file: %s" % current_md5)
 
         if md5_from_db == current_md5:
-            return 0
+            return BACKUP_STATUS_NO_CHANGE
         else:
-            logging.log(logging.INFO,"Updating md5 in database.")
-            cursor.execute('''UPDATE files SET md5 = ? WHERE file_name = ?''',(current_md5,file_path))
-            conn.commit()
+            return BACKUP_STATUS_CHANGE
 
-    return 1
+def update_hash_db(file_path_obj,conn):
+    cursor      = conn.cursor()
+    file_path   = str(file_path_obj)
+    results     = is_file_in_db(file_path, cursor)
+    md5         = get_md5_hash(file_path)
+
+    if not results:
+        insert_into_hash_db(md5, file_path, conn, cursor)
+    else:
+        update_hash_in_db(md5, file_path, conn, cursor)
+
+    logging.log(logging.INFO, "Updated file hash in database.")
+
+def insert_into_hash_db(md5, file_path, conn, cursor):
+    cursor.execute('''INSERT INTO files (file_name, md5) VALUES (?,?)''',(file_path,md5)) 
+    conn.commit()
+
+def update_hash_in_db(md5, file_path, conn, cursor):
+    cursor.execute('''UPDATE files SET md5 = ? WHERE file_name = ?''',(md5,file_path))
+    conn.commit()
+
+def is_file_in_db(file_path, cursor):
+    cursor.execute('''SELECT file_name,md5 FROM files WHERE file_name = ?;''', (file_path,))
+    return cursor.fetchall()
 
 def get_md5_hash(path_to_file):
     # Reads in chunks to limit memory footprint
