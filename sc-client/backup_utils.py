@@ -35,40 +35,44 @@ def check_for_backup(backup_time,current_run_time,previous_run_time):
     else:
         return False
 
-def perform_backup(paths,paths_recursive,api_key,agent_id,dbconn):
+def perform_backup(paths,paths_recursive,api_key,agent_id,dbconn,ignore_hash):
     logging.log(logging.INFO,"Beginning backup!")
+    logging.log(logging.INFO,"Ignoring the hash database and attempting to force backup of files.")
 
-    process_paths_nonrecursive(paths,api_key,agent_id,dbconn)
-    process_paths_recursive(paths_recursive,api_key,agent_id,dbconn)
+    process_paths_nonrecursive(paths,api_key,agent_id,dbconn,ignore_hash)
+    process_paths_recursive(paths_recursive,api_key,agent_id,dbconn,ignore_hash)
 
-def process_paths_nonrecursive(paths,api_key,agent_id,dbconn):
+def process_paths_nonrecursive(paths,api_key,agent_id,dbconn,ignore_hash):
     for path in paths:
         logging.log(logging.INFO,"==   %s   ==" % path)
         path_obj = pathlib.Path(path)
 
         if path_obj.is_file():
-            process_file(path_obj,api_key,agent_id)
+            process_file(path_obj,api_key,agent_id,dbconn,ignore_hash)
 
         elif path_obj.is_dir():
             for file_obj in [p for p in path_obj.iterdir() if p.is_file()]:
-                process_file(file_obj,api_key,agent_id,dbconn)
+                process_file(file_obj,api_key,agent_id,dbconn,ignore_hash)
 
-def process_paths_recursive(paths,api_key,agent_id,dbconn):
+def process_paths_recursive(paths,api_key,agent_id,dbconn,ignore_hash):
     for path in paths:
         logging.log(logging.INFO, "==   %s (-R)  ==" % path)
         path_obj = pathlib.Path(path)
 
-        process_one_path_recursive(path_obj,api_key,agent_id,dbconn)
+        process_one_path_recursive(path_obj,api_key,agent_id,dbconn,ignore_hash)
 
-def process_one_path_recursive(target_path,api_key,agent_id,dbconn):
+def process_one_path_recursive(target_path,api_key,agent_id,dbconn,ignore_hash):
     for file in target_path.iterdir():
         if file.is_dir():
-            process_one_path_recursive(file,api_key,agent_id,dbconn)
+            process_one_path_recursive(file,api_key,agent_id,dbconn,ignore_hash)
         else:
-            process_file(file,api_key,agent_id,dbconn)
+            process_file(file,api_key,agent_id,dbconn,ignore_hash)
 
-def process_file(file_path_obj,api_key,agent_id,dbconn):
-    status = check_hash_db(file_path_obj,dbconn)
+def process_file(file_path_obj,api_key,agent_id,dbconn,ignore_hash):
+    if not ignore_hash:
+        status = check_hash_db(file_path_obj,dbconn)
+    else:
+        status = BACKUP_STATUS_CHANGE
 
     if status == BACKUP_STATUS_NO_CHANGE:
         logging.log(logging.INFO,"no change to file, continuing")
@@ -83,7 +87,7 @@ def process_file(file_path_obj,api_key,agent_id,dbconn):
             if ret == 0:
                 update_hash_db(file_path_obj, dbconn)
             else:
-                logging.log(logging.INFO, "Did not receive success code from server when trying to backup file, so not updating hash db.")
+                logging.log(logging.WARNING, "Did not receive success code from server when trying to backup file, so not updating hash db.")
 
 def dump_file_info(path,size,encrypted_size):
     logging.log(logging.INFO,"==== SENDING FILE : INFO ====")

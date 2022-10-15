@@ -19,7 +19,7 @@ ACTION_TIMER = 90
 #updates based on number of threads created
 THREAD_NUM = 0
 
-def main(settings_file_path,api_key_file_path,agent_id_file_path,hash_db_file_path):
+def main(settings_file_path,api_key_file_path,agent_id_file_path,hash_db_file_path,ignore_hash_db):
     settings                = read_settings_file(settings_file_path)
     api_key                 = read_api_key_file(api_key_file_path)
     agent_id                = read_agent_id_file(agent_id_file_path)
@@ -30,9 +30,9 @@ def main(settings_file_path,api_key_file_path,agent_id_file_path,hash_db_file_pa
     logging_utils.initialize_logging(uuid=agent_id)
 
     hash_db_conn = get_or_create_hash_db(hash_db_file_path)
-    action_loop_and_sleep(settings=settings,api_key=api_key,agent_id=agent_id,dbconn=hash_db_conn)
+    action_loop_and_sleep(settings=settings,api_key=api_key,agent_id=agent_id,dbconn=hash_db_conn,ignore_hash=ignore_hash_db)
 
-def action_loop_and_sleep(settings, api_key, agent_id, dbconn):
+def action_loop_and_sleep(settings, api_key, agent_id, dbconn, ignore_hash):
     # For the first run, just check if the backup should have been run in the previous 10 minutes
     prev_run_time = datetime.now() - timedelta(minutes=10)
     prev_keepalive_freq = -1
@@ -48,7 +48,7 @@ def action_loop_and_sleep(settings, api_key, agent_id, dbconn):
         logging.log(logging.INFO,"Stormcloud is running with settings: %s" % (settings))
 
         #if backup_utils.check_for_backup(backup_time,cur_run_time,prev_run_time):
-        backup_utils.perform_backup(backup_paths,recursive_backup_paths,api_key,agent_id,dbconn)
+        backup_utils.perform_backup(backup_paths,recursive_backup_paths,api_key,agent_id,dbconn,ignore_hash)
 
         if active_thread is None:
             active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id)
@@ -159,7 +159,7 @@ if __name__ == "__main__":
     parser.add_argument("-a", "--api-key", type=str, default="api.key", help="Path to API key file (default=./api.key)")
     parser.add_argument("-g", "--agent-id", type=str, default="agent_id", help="Path to the Agent ID file (default=./agent_id")
     parser.add_argument("-d", "--hash-db", type=str, default="schash.db", help="Path to hash db file (default=./schash.db")
+    parser.add_argument("-o", "--ignore-hash-db", action="store_true", help="override the hash db, to backup files even if they haven't changed")
 
     args = parser.parse_args()
-
-    main(args.settings_file,args.api_key,args.agent_id,args.hash_db)
+    main(args.settings_file,args.api_key,args.agent_id,args.hash_db,args.ignore_hash_db)
