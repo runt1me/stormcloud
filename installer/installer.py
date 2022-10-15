@@ -72,7 +72,6 @@ def conduct_device_initial_survey(api_key,dtype):
         device_status = 1
 
     except Exception as e:
-        print("Exception")
         logging.log(
             logging.ERROR, "Initial survey failed: %s" % e
         )
@@ -93,19 +92,34 @@ def get_name_and_address_info_mac():
     # This way runs netstat -rn -f inet and gets the interface associated with the default route
     # Then runs ifconfig <interface> and gets the inet address on that interface
     # TODO: handle if netstat doesn't work to get the routing table (maybe net-tools is not installed?)
-    device_name = socket.gethostname()
 
-    process = Popen(['netstat', '-rn', '-f', 'inet'], stdout=PIPE, stderr=PIPE)
-    stdout, stderr = process.communicate()
+    try:
+        device_name = socket.gethostname()
 
-    default_route_line = [l for l in str(stdout).split("\\n") if 'default' in l][0]
-    default_route_interface = default_route_line.split()[3]
+    except Exception as e:
+        logging.log(
+            logging.ERROR, "Unable to get device name: %s" % e
+        )
+        device_name = "UNKNOWN_HOSTNAME"
 
-    process = Popen(['ifconfig', default_route_interface], stdout=PIPE, stderr=PIPE)
-    stdout, stderr = process.communicate()
+    try: 
+        process = Popen(['netstat', '-rn', '-f', 'inet'], stdout=PIPE, stderr=PIPE)
+        stdout, stderr = process.communicate()
 
-    ifconfig_inet_line = [l for l in str(stdout).split('\\n\\t') if l.split()[0] == "inet"][0]
-    ip_address = ifconfig_inet_line.split()[1]
+        default_route_line = [l for l in str(stdout).split("\\n") if 'default' in l][0]
+        default_route_interface = default_route_line.split()[3]
+
+        process = Popen(['ifconfig', default_route_interface], stdout=PIPE, stderr=PIPE)
+        stdout, stderr = process.communicate()
+
+        ifconfig_inet_line = [l for l in str(stdout).split('\\n\\t') if l.split()[0] == "inet"][0]
+        ip_address = ifconfig_inet_line.split()[1]
+
+    except Exception as e:
+        logging.log(
+            logging.ERROR, "Unable to get IP address: %s" %e
+        )
+        ip_address = "UNKNOWN_IP_ADDRESS"
 
     return device_name, ip_address
  
@@ -199,6 +213,9 @@ def tls_send_json_data(json_data, expected_response_data, server_name, server_po
         wrappedSocket.connect((server_name,server_port))
 
         print("Sending %s" % json_data)
+        logging.log(
+            logging.INFO, "Sending %s" %json_data
+        )
 
         # Send the length of the serialized data first, then send the data
         wrappedSocket.send(bytes('%d\n',encoding="utf-8") % len(json_data))
@@ -217,6 +234,11 @@ def tls_send_json_data(json_data, expected_response_data, server_name, server_po
         if receive_data:
             data_json = json.loads(receive_data)
             print(data_json)
+
+            logging.log(
+                logging.INFO, "Received data: %s" %data_json
+            )
+
             if expected_response_data in data_json:
                 return (0, data_json)
         else:
