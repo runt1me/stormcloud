@@ -154,7 +154,8 @@ def read_agent_id_file(agent_id_file_path):
     return agent_id.decode("utf-8")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    description = 'Welcome to Stormcloud, the best backup system!'
+    parser = argparse.ArgumentParser(description=description)
     parser.add_argument("-s", "--settings-file",type=str,default="settings.cfg",help="Path to settings file (default=./settings.cfg)")
     parser.add_argument("-a", "--api-key", type=str, default="api.key", help="Path to API key file (default=./api.key)")
     parser.add_argument("-g", "--agent-id", type=str, default="agent_id", help="Path to the Agent ID file (default=./agent_id")
