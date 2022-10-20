@@ -1,11 +1,10 @@
 import json
 import socket, ssl
 
-CERTFILE="/root/certs/cert.pem"
-KEYFILE="/root/certs/cert.pem"
+CERTFILE="/root/certs/r3_pub_priv.pem"
+KEYFILE="/root/certs/r3_pub_priv.pem"
 
-# TODO: use actual signed cert for SSL
-# and use TLS 1.3
+# TODO: figure out automated cert renewal
 
 def initialize_socket(listen_port):
     context = ssl.SSLContext(ssl.PROTOCOL_TLS)
