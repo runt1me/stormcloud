@@ -8,6 +8,9 @@ import logging
 
 import argparse
 
+# saving this as a test case for later when i make unit tests
+#ret, _ = tls_send_json_data("not valid json data", "response", SERVER_NAME, SERVER_PORT)
+
 SERVER_NAME="www2.darkage.io"
 SERVER_PORT=8443
 STORMCLOUD_VERSION="1.0.0"
@@ -203,6 +206,10 @@ def configure_settings(send_logs, backup_time, keepalive_freq, backup_paths, bac
         settings_file.write(output_string)
 
 def tls_send_json_data(json_data, expected_response_data, server_name, server_port):
+    if not validate_json(json_data):
+        logging.log("Invalid JSON data received in tls_send_json_data(); not sending to server.")
+        return
+
     s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
     s.settimeout(10)
 
@@ -243,6 +250,14 @@ def tls_send_json_data(json_data, expected_response_data, server_name, server_po
                 return (0, data_json)
         else:
             return (1, receive_data)
+
+def validate_json(data):
+    try:
+        json.loads(data)
+    except json.decoder.JSONDecodeError:
+        return False
+    else:
+        return True
 
 def initialize_logging():
     logging.basicConfig(
