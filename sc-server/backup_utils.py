@@ -53,8 +53,6 @@ def write_file_to_disk(path,content,max_versions):
         outfile.write(content)
 
 def handle_versions(path,max_versions):
-    # TODO: eventually need to address bugs that come up if "SCVER" or "SCVER2" is in the underlying file name.
-    # For now this is not worth my time
     original_file_name = get_file_name(path)
     sc_version_directory = os.path.dirname(path) + "/.SCVERS/"
 
@@ -62,9 +60,8 @@ def handle_versions(path,max_versions):
 
     os.makedirs(os.path.dirname(sc_version_directory), exist_ok=True)
 
-    # List all files in path that match *filename* = all versions of the file
-    print("Checking in %s for matches *%s*" % (sc_version_directory,original_file_name))
-    match = glob.glob(sc_version_directory+"*%s*" % original_file_name)
+    print("Checking in %s for matches %s.SCVER[0-9]*" % (sc_version_directory,original_file_name))
+    match = glob.glob(sc_version_directory+"%s.SCVER[0-9]*" % original_file_name)
     print("Got match: %s" % match)
 
     if match:
