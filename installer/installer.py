@@ -72,7 +72,6 @@ def conduct_device_initial_survey(api_key,dtype):
         device_status = 1
 
     except Exception as e:
-        print("Exception")
         logging.log(
             logging.ERROR, "Initial survey failed: %s" % e
         )
@@ -93,19 +92,34 @@ def get_name_and_address_info_mac():
     # This way runs netstat -rn -f inet and gets the interface associated with the default route
     # Then runs ifconfig <interface> and gets the inet address on that interface
     # TODO: handle if netstat doesn't work to get the routing table (maybe net-tools is not installed?)
-    device_name = socket.gethostname()
 
-    process = Popen(['netstat', '-rn', '-f', 'inet'], stdout=PIPE, stderr=PIPE)
-    stdout, stderr = process.communicate()
+    try:
+        device_name = socket.gethostname()
 
-    default_route_line = [l for l in str(stdout).split("\\n") if 'default' in l][0]
-    default_route_interface = default_route_line.split()[3]
+    except Exception as e:
+        logging.log(
+            logging.ERROR, "Unable to get device name: %s" % e
+        )
+        device_name = "UNKNOWN_HOSTNAME"
 
-    process = Popen(['ifconfig', default_route_interface], stdout=PIPE, stderr=PIPE)
-    stdout, stderr = process.communicate()
+    try: 
+        process = Popen(['netstat', '-rn', '-f', 'inet'], stdout=PIPE, stderr=PIPE)
+        stdout, stderr = process.communicate()
 
-    ifconfig_inet_line = [l for l in str(stdout).split('\\n\\t') if l.split()[0] == "inet"][0]
-    ip_address = ifconfig_inet_line.split()[1]
+        default_route_line = [l for l in str(stdout).split("\\n") if 'default' in l][0]
+        default_route_interface = default_route_line.split()[3]
+
+        process = Popen(['ifconfig', default_route_interface], stdout=PIPE, stderr=PIPE)
+        stdout, stderr = process.communicate()
+
+        ifconfig_inet_line = [l for l in str(stdout).split('\\n\\t') if l.split()[0] == "inet"][0]
+        ip_address = ifconfig_inet_line.split()[1]
+
+    except Exception as e:
+        logging.log(
+            logging.ERROR, "Unable to get IP address: %s" %e
+        )
+        ip_address = "UNKNOWN_IP_ADDRESS"
 
     return device_name, ip_address
  
@@ -199,6 +213,9 @@ def tls_send_json_data(json_data, expected_response_data, server_name, server_po
         wrappedSocket.connect((server_name,server_port))
 
         print("Sending %s" % json_data)
+        logging.log(
+            logging.INFO, "Sending %s" %json_data
+        )
 
         # Send the length of the serialized data first, then send the data
         wrappedSocket.send(bytes('%d\n',encoding="utf-8") % len(json_data))
@@ -217,6 +234,11 @@ def tls_send_json_data(json_data, expected_response_data, server_name, server_po
         if receive_data:
             data_json = json.loads(receive_data)
             print(data_json)
+
+            logging.log(
+                logging.INFO, "Received data: %s" %data_json
+            )
+
             if expected_response_data in data_json:
                 return (0, data_json)
         else:
@@ -237,18 +259,23 @@ if __name__ == '__main__':
     parser.add_argument("-l", "--send-logs", type=int, default=1, help="send logs to assist with debugging/development of Stormcloud (1 or 0)")
     parser.add_argument("-t", "--backup-time", type=int, default=20, help="time of day (24hr) to perform the daily Stormcloud backup process")
     parser.add_argument("-k", "--keepalive-freq", type=int, default=100, help="frequency (in seconds) to send keepalives for this device to the Stormcloud servers")
-    parser.add_argument("-p", "--backup-paths", type=str, required=True, help="Filesystem paths to backup, comma-separated")
+    parser.add_argument("-p", "--backup-paths", type=str, required=False, help="Filesystem paths to backup, comma-separated")
     parser.add_argument("-r", "--backup-paths-recursive", type=str, required=False, help="Filesystem paths to recursively backup, comma-separated")
     parser.add_argument("-a", "--api-key", type=str, default="api.key", help="Path to API key file (default=./api.key)")
 
     args = parser.parse_args()
 
+    if not args.backup_paths_recursive and not args.backup_paths:
+        raise Exception("Must provide either -p or -r.")
+
     backup_paths_parsed = []
-    for path in args.backup_paths.split(","):
-        backup_paths_parsed.append(path)
+    backup_paths_recursive_parsed = []
+
+    if args.backup_paths:    
+        for path in args.backup_paths.split(","):
+            backup_paths_parsed.append(path)
 
     if args.backup_paths_recursive:
-        backup_paths_recursive_parsed = []
         for path in args.backup_paths_recursive.split(","):
             backup_paths_recursive_parsed.append(path)
 
