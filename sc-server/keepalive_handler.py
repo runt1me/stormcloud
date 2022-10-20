@@ -21,7 +21,9 @@ def main(listen_port):
               wrappedSocket.sendall(bytes(response_data,encoding="utf-8"))
 
             else:
-                break
+              ret_code, response_data = -1, json.dumps({'response': 'Bad request (data not in JSON format).'})
+              wrappedSocket.sendall(bytes(response_data,encoding="utf-8"))
+
     finally:
         wrappedSocket.close()
 

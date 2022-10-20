@@ -1,5 +1,6 @@
 import json
 import socket, ssl
+import logging
 
 CERTFILE="/root/certs/r3_pub_priv.pem"
 KEYFILE="/root/certs/r3_pub_priv.pem"
@@ -18,14 +19,21 @@ def initialize_socket(listen_port):
     return s
 
 def accept_and_wrap_socket(s):
-    connection, _ = s.accept()
-    wrappedSocket = ssl.wrap_socket(
-        connection,
-        server_side=True,
-        certfile=CERTFILE,
-        keyfile=KEYFILE,
-        ssl_version=ssl.PROTOCOL_TLS
-    )
+    wrappedSocket = None
+
+    while not wrappedSocket:
+        connection, _ = s.accept()
+        try:
+            wrappedSocket = ssl.wrap_socket(
+                connection,
+                server_side=True,
+                certfile=CERTFILE,
+                keyfile=KEYFILE,
+                ssl_version=ssl.PROTOCOL_TLS
+            )
+        except:
+            logging.log(logging.INFO, "Caught exception when trying to wrap SSL socket.")
+            wrappedSocket = None
 
     return wrappedSocket
 
@@ -52,8 +60,8 @@ def recv_json_until_eol(socket):
       deserialized = json.loads(view.tobytes())
     except (TypeError, ValueError) as e:
       # TODO: Send error code back to client
-      raise Exception('Data received was not in JSON format')
+      logging.log(logging.INFO, "Received data inside TLS socket which was not valid JSON.")
+      deserialized = None
 
     return deserialized
-
 
