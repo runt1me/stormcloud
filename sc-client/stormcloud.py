@@ -154,8 +154,31 @@ def read_agent_id_file(agent_id_file_path):
     return agent_id.decode("utf-8")
 
 if __name__ == "__main__":
-    description = 'Welcome to Stormcloud, the best backup system!'
-    parser = argparse.ArgumentParser(description=description)
+    description = r"""
+
+ ______     ______   ______     ______     __    __                    
+/\  ___\   /\__  _\ /\  __ \   /\  == \   /\ "-./  \                   
+\ \___  \  \/_/\ \/ \ \ \/\ \  \ \  __<   \ \ \-./\ \                  
+ \/\_____\    \ \_\  \ \_____\  \ \_\ \_\  \ \_\ \ \_\                 
+  \/_____/     \/_/   \/_____/   \/_/ /_/   \/_/  \/_/                 
+                                                                       
+             ______     __         ______     __  __     _____         
+            /\  ___\   /\ \       /\  __ \   /\ \/\ \   /\  __-.       
+            \ \ \____  \ \ \____  \ \ \/\ \  \ \ \_\ \  \ \ \/\ \      
+             \ \_____\  \ \_____\  \ \_____\  \ \_____\  \ \____-      
+              \/_____/   \/_____/   \/_____/   \/_____/   \/____/      
+                                                                       
+                            ______     ______     ______     ______    
+                           /\  ___\   /\  __ \   /\  == \   /\  ___\   
+                           \ \ \____  \ \ \/\ \  \ \  __<   \ \  __\   
+                            \ \_____\  \ \_____\  \ \_\ \_\  \ \_____\ 
+                             \/_____/   \/_____/   \/_/ /_/   \/_____/ 
+                                                                                                                                                                                                                                                                    
+
+    """
+
+    description += 'Welcome to Stormcloud, the best backup system!'
+    parser = argparse.ArgumentParser(description=description, formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("-s", "--settings-file",type=str,default="settings.cfg",help="Path to settings file (default=./settings.cfg)")
     parser.add_argument("-a", "--api-key", type=str, default="api.key", help="Path to API key file (default=./api.key)")
     parser.add_argument("-g", "--agent-id", type=str, default="agent_id", help="Path to the Agent ID file (default=./agent_id")
