@@ -17,6 +17,7 @@ def encrypt_file(file_path):
 
     f = Fernet(key)
 
+    # TODO: handle permission denied errors
     file_content = file_path.read_bytes()
     encrypted = f.encrypt(file_content)
 
