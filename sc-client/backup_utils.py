@@ -37,7 +37,9 @@ def check_for_backup(backup_time,current_run_time,previous_run_time):
 
 def perform_backup(paths,paths_recursive,api_key,agent_id,dbconn,ignore_hash):
     logging.log(logging.INFO,"Beginning backup!")
-    logging.log(logging.INFO,"Ignoring the hash database and attempting to force backup of files.")
+    
+    if ignore_hash:
+        logging.log(logging.INFO,"Ignoring the hash database and attempting to force backup of files.")
 
     process_paths_nonrecursive(paths,api_key,agent_id,dbconn,ignore_hash)
     process_paths_recursive(paths_recursive,api_key,agent_id,dbconn,ignore_hash)
