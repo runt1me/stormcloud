@@ -46,22 +46,29 @@ def perform_backup(paths,paths_recursive,api_key,agent_id,dbconn,ignore_hash):
 
 def process_paths_nonrecursive(paths,api_key,agent_id,dbconn,ignore_hash):
     for path in paths:
-        logging.log(logging.INFO,"==   %s   ==" % path)
-        path_obj = pathlib.Path(path)
+        try:
+            logging.log(logging.INFO,"==   %s   ==" % path)
+            path_obj = pathlib.Path(path)
 
-        if path_obj.is_file():
-            process_file(path_obj,api_key,agent_id,dbconn,ignore_hash)
+            if path_obj.is_file():
+                process_file(path_obj,api_key,agent_id,dbconn,ignore_hash)
 
-        elif path_obj.is_dir():
-            for file_obj in [p for p in path_obj.iterdir() if p.is_file()]:
-                process_file(file_obj,api_key,agent_id,dbconn,ignore_hash)
+            elif path_obj.is_dir():
+                for file_obj in [p for p in path_obj.iterdir() if p.is_file()]:
+                    process_file(file_obj,api_key,agent_id,dbconn,ignore_hash)
+
+        except Exception as e:
+            logging.log(logging.WARN, "Caught exception when trying to process path %s: %s" % (path,e))
 
 def process_paths_recursive(paths,api_key,agent_id,dbconn,ignore_hash):
     for path in paths:
-        logging.log(logging.INFO, "==   %s (-R)  ==" % path)
-        path_obj = pathlib.Path(path)
+        try:
+            logging.log(logging.INFO, "==   %s (-R)  ==" % path)
+            path_obj = pathlib.Path(path)
 
-        process_one_path_recursive(path_obj,api_key,agent_id,dbconn,ignore_hash)
+            process_one_path_recursive(path_obj,api_key,agent_id,dbconn,ignore_hash)
+        except Exception as e:
+            logging.log(logging.WARN, "Caught exception when trying to process recursive path %s: %s" % (path,e))
 
 def process_one_path_recursive(target_path,api_key,agent_id,dbconn,ignore_hash):
     for file in target_path.iterdir():
