@@ -279,48 +279,55 @@ class MainApplication(tk.Frame):
         self.configure_gui()
 
     def __str__(self):
-        return "Tkinter GUI app: %s" % self.backup_paths_actual_label
+        return "Tkinter GUI app: %s" % vars(self)
 
     def configure_gui(self):
-        self.device_name_label                   = tk.Label(window,text="Device Nickname",bg="white").place(x = 30, y = 100)
-        self.device_name_entry                   = tk.Entry(window, width=50).place(x = 200, y = 100)
-        self.backup_paths_label                  = tk.Label(window,text="Paths to backup",bg="white").place(x = 30, y = 150)
-        self.backup_paths_actual_label           = tk.Label(window).place(x = 200, y = 150)
-        self.recursive_backup_paths_label        = tk.Label(window,text="Recursive paths to backup",bg="white").place(x = 30, y = 200)
-        self.recursive_backup_paths_actual_label = tk.Label(window).place(x = 200, y = 200)
-        self.submit_button                       = tk.Button(window,text="Submit",width=30).place(x = 120, y = 250)    
+        self.device_name_label                   = tk.Label(window,text="Device Nickname",bg="white")
+        self.device_name_label.place(x = 30, y = 100)
+
+        self.device_name_entry                   = tk.Entry(window, width=50)
+        self.device_name_entry.place(x = 200, y = 100)
+
+        self.backup_paths_label                  = tk.Label(window,text="Paths to backup",bg="white")
+        self.backup_paths_label.place(x = 30, y = 150)
+
+        self.backup_paths_actual_label           = tk.Label(window,bg="white")
+        self.backup_paths_actual_label.place(x = 200, y = 150)
+
+        self.recursive_backup_paths_label        = tk.Label(window,text="Recursive paths to backup",bg="white")
+        self.recursive_backup_paths_label.place(x = 30, y = 200)
+
+        self.recursive_backup_paths_actual_label = tk.Label(window,bg="white")
+        self.recursive_backup_paths_actual_label.place(x = 200, y = 200)
+
+        self.submit_button                       = tk.Button(window,text="Submit",width=30)
+        self.submit_button.place(x = 120, y = 250)    
         
-        self.paths_browse_button = tk.Button(window,text="Browse Files",command=self.browse_files).place(x = 400, y = 150)
-        self.recursive_paths_browse_button = tk.Button(window,text="Browse Files",command=self.browse_files_recursive).place(x = 400, y = 200)
+        self.paths_browse_button = tk.Button(window,text="Add a Folder",command=self.browse_files)
+        self.paths_browse_button.place(x = 400, y = 150)
+        
+        self.recursive_paths_browse_button = tk.Button(window,text="Add a Folder",command=self.browse_files_recursive)
+        self.recursive_paths_browse_button.place(x = 400, y = 200)
 
     def browse_files(self):
-        filename = tk.filedialog.askopenfilename(
+        filename = tk.filedialog.askdirectory(
             initialdir = "/",
-            title = "Select a File",
-            filetypes = (
-                ("All files","*.*"),
-            )
+            title = "Select a Folder",
         )
 
         if filename:
-            print(self)
             self.backup_paths.append(filename)
-            self.backup_paths_actual_label.configure(text=", ".join(self.backup_paths))
-
-            print(self.backup_paths_actual_label.cget("text"))
+            self.backup_paths_actual_label.configure(text=",".join(self.backup_paths))
 
     def browse_files_recursive(self):
-        filename = filedialog.askopenfilename(
+        filename = filedialog.askdirectory(
             initialdir = "/",
-            title = "Select a File",
-            filetypes = (
-                ("All files","*.*"),
-            )
+            title = "Select a Folder",
         )
 
         if filename:
-            # Change label contents
-            recursive_backup_paths_actual_label.configure(text="File Opened: "+filename)
+            self.recursive_backup_paths.append(filename)
+            self.recursive_backup_paths_actual_label.configure(text=",".join(self.backup_paths))
 
 if __name__ == '__main__':
     window = tk.Tk()
