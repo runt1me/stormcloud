@@ -5,12 +5,9 @@ import platform
 from subprocess import Popen, PIPE
 
 import logging
-
 import argparse
 
-from tkinter import *
-
-# import filedialog module
+import tkinter as tk
 from tkinter import filedialog
 
 # saving this as a test case for later when i make unit tests
@@ -273,8 +270,46 @@ def initialize_logging():
         level=logging.DEBUG
     )
 
-if __name__ == '__main__':
-    def browseFiles():
+class MainApplication(tk.Frame):
+    def __init__(self,parent,*args,**kwargs):
+        tk.Frame.__init__(self,parent,*args,**kwargs)
+        self.parent = parent
+        self.backup_paths = []
+        self.recursive_backup_paths = []
+        self.configure_gui()
+
+    def __str__(self):
+        return "Tkinter GUI app: %s" % self.backup_paths_actual_label
+
+    def configure_gui(self):
+        self.device_name_label                   = tk.Label(window,text="Device Nickname",bg="white").place(x = 30, y = 100)
+        self.device_name_entry                   = tk.Entry(window, width=50).place(x = 200, y = 100)
+        self.backup_paths_label                  = tk.Label(window,text="Paths to backup",bg="white").place(x = 30, y = 150)
+        self.backup_paths_actual_label           = tk.Label(window).place(x = 200, y = 150)
+        self.recursive_backup_paths_label        = tk.Label(window,text="Recursive paths to backup",bg="white").place(x = 30, y = 200)
+        self.recursive_backup_paths_actual_label = tk.Label(window).place(x = 200, y = 200)
+        self.submit_button                       = tk.Button(window,text="Submit",width=30).place(x = 120, y = 250)    
+        
+        self.paths_browse_button = tk.Button(window,text="Browse Files",command=self.browse_files).place(x = 400, y = 150)
+        self.recursive_paths_browse_button = tk.Button(window,text="Browse Files",command=self.browse_files_recursive).place(x = 400, y = 200)
+
+    def browse_files(self):
+        filename = tk.filedialog.askopenfilename(
+            initialdir = "/",
+            title = "Select a File",
+            filetypes = (
+                ("All files","*.*"),
+            )
+        )
+
+        if filename:
+            print(self)
+            self.backup_paths.append(filename)
+            self.backup_paths_actual_label.configure(text=", ".join(self.backup_paths))
+
+            print(self.backup_paths_actual_label.cget("text"))
+
+    def browse_files_recursive(self):
         filename = filedialog.askopenfilename(
             initialdir = "/",
             title = "Select a File",
@@ -285,39 +320,18 @@ if __name__ == '__main__':
 
         if filename:
             # Change label contents
-            label_file_explorer.configure(text="File Opened: "+filename)
+            recursive_backup_paths_actual_label.configure(text="File Opened: "+filename)
 
-    # Create the root window
-    window = Tk()
-    window.title('File Explorer')
-    window.geometry("1000x500")
-    window.config(background = "gray")
+if __name__ == '__main__':
+    window = tk.Tk()
+    app = MainApplication(window)
+    window.title("Stormcloud Installer")
+    window.geometry("700x500")
+    window.config(background="white")
 
-    name = tk.Label(window,text = "Device Nickname").place(x = 30, y = 50)
-    email = tk.Label(window,text = "Paths to backup").place(x = 30, y = 90)
-    password =  tk.Label(window,text = "Recursive paths to backup").place(x = 30, y = 130)
-    sbmitbtn = tk.Button(window,text = "Submit", activebackground = "green", activeforeground = "blue").place(x = 120, y = 170)
-    entry1 = tk.Entry(window).place(x = 85, y = 50)
-    entry2 = tk.Entry(window).place(x = 85, y = 90)
-    entry3 = tk.Entry(window).place(x = 90, y = 130)
-
-    # Create a File Explorer label
-    label_file_explorer = Label(
-        window,
-        text = "Stormcloud Installer",
-        width = 100,
-        height = 5,
-        fg = "blue"
-    )
-
-    button_explore = Button(window, text="Browse Files", command=browseFiles)
-
-    label_file_explorer.grid(column=1,row=1)
-    button_explore.grid(column=1,row=2)
-    
     window.mainloop()
-
-    print(filename)
+    
+    print(app.backup_paths)
 
     if not args.backup_paths_recursive and not args.backup_paths:
         raise Exception("Must provide either -p or -r.")
