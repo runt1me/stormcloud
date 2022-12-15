@@ -339,27 +339,17 @@ if __name__ == '__main__':
     window.mainloop()
     
     print(app.backup_paths)
+    print(app.recursive_backup_paths)
 
-    if not args.backup_paths_recursive and not args.backup_paths:
-        raise Exception("Must provide either -p or -r.")
-
-    backup_paths_parsed = []
-    backup_paths_recursive_parsed = []
-
-    if args.backup_paths:    
-        for path in args.backup_paths.split(","):
-            backup_paths_parsed.append(path)
-
-    if args.backup_paths_recursive:
-        for path in args.backup_paths_recursive.split(","):
-            backup_paths_recursive_parsed.append(path)
+    if not app.recursive_backup_paths and not app.backup_paths:
+        raise Exception("Must have at least one path to backup.")
 
     main(
         args.device_type,
         args.send_logs,
         args.backup_time,
         args.keepalive_freq,
-        backup_paths_parsed,
-        backup_paths_recursive_parsed,
+        app.backup_paths,
+        app.recursive_backup_paths,
         args.api_key
     )
