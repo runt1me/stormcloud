@@ -282,6 +282,7 @@ class MainApplication(tk.Frame):
         self.backup_paths = []
         self.recursive_backup_paths = []
         self.api_key_file_path = ""
+        self.device_name = ""
         self.configure_gui()
 
     def __str__(self):
@@ -292,8 +293,13 @@ class MainApplication(tk.Frame):
         self.add_backup_paths_labels_and_browse_button()
         self.add_recursive_backup_paths_labels_and_browse_button()
         self.add_api_key_labels_and_browse_button()
+        self.add_diagnostic_checkbox_and_label()
         self.add_submit_button()
         self.add_error_label()
+
+        # TODO: add
+        # advanced settings (make a openable tab somehow):
+        # keepalive frequency - default to 300 seconds
 
     def add_device_name_label_and_entry(self):
         self.device_name_label                   = tk.Label(window,text="Device Nickname",bg="white")
@@ -304,33 +310,41 @@ class MainApplication(tk.Frame):
 
     def add_backup_paths_labels_and_browse_button(self):
         self.backup_paths_label                  = tk.Label(window,text="Paths to backup",bg="white")
-        self.backup_paths_label.place(x = 30, y = 150)
+        self.backup_paths_label.place(x = 30, y = 140)
 
         self.backup_paths_actual_label           = tk.Label(window,bg="white")
-        self.backup_paths_actual_label.place(x = 200, y = 150)
+        self.backup_paths_actual_label.place(x = 200, y = 140)
 
         self.paths_browse_button                 = tk.Button(window,text="Add a Folder",command=self.browse_files)
-        self.paths_browse_button.place(x = 600, y = 150)
+        self.paths_browse_button.place(x = 600, y = 140)
 
     def add_recursive_backup_paths_labels_and_browse_button(self):
         self.recursive_backup_paths_label        = tk.Label(window,text="Recursive paths to backup",bg="white")
-        self.recursive_backup_paths_label.place(x = 30, y = 200)
+        self.recursive_backup_paths_label.place(x = 30, y = 180)
 
         self.recursive_backup_paths_actual_label = tk.Label(window,bg="white")
-        self.recursive_backup_paths_actual_label.place(x = 200, y = 200)
+        self.recursive_backup_paths_actual_label.place(x = 200, y = 180)
 
         self.recursive_paths_browse_button       = tk.Button(window,text="Add a Folder",command=self.browse_files_recursive)
-        self.recursive_paths_browse_button.place(x = 600, y = 200)
+        self.recursive_paths_browse_button.place(x = 600, y = 180)
 
     def add_api_key_labels_and_browse_button(self):
         self.api_key_label                       = tk.Label(window,text="Path to API key file",bg="white")
-        self.api_key_label.place(x = 30, y = 250)
+        self.api_key_label.place(x = 30, y = 220)
 
         self.api_key_actual_label                = tk.Label(window,bg="white")
-        self.api_key_actual_label.place(x = 200, y = 250)
+        self.api_key_actual_label.place(x = 200, y = 220)
 
         self.api_key_browse_button               = tk.Button(window,text="Select a File",command=self.browse_api_key)
-        self.api_key_browse_button.place(x = 600, y = 250)
+        self.api_key_browse_button.place(x = 600, y = 220)
+
+    def add_diagnostic_checkbox_and_label(self):
+        self.send_logs_checkbox                  = tk.Checkbutton(window)
+        self.send_logs_checkbox.toggle()
+        self.send_logs_checkbox.place(x = 30, y = 260)
+
+        self.send_logs_label                     = tk.Label(window, text="Send Diagnostic Information to Stormcloud to assist developers")
+        self.send_logs_label.place(x = 50, y = 260)
 
     def add_submit_button(self):
         self.submit_button                       = tk.Button(window,text="Install",width=20,command=self.verify_settings_and_close_gui)
@@ -338,12 +352,7 @@ class MainApplication(tk.Frame):
 
     def add_error_label(self):
         self.error_label                         = tk.Label(window,text="",bg="white",fg="red")
-        self.error_label.place(x = 50, y = 350)
-
-        # TODO: add
-        # checkbox for "send diagnostic logs to help developers troubleshoot issues with my devices." default to yes
-        # advanced settings (make a openable tab somehow):
-        # keepalive frequency - default to 300 seconds
+        self.error_label.place(x = 50, y = 340)
 
     def browse_files(self):
         filename = tk.filedialog.askdirectory(
@@ -380,6 +389,13 @@ class MainApplication(tk.Frame):
             window.quit()
 
     def verify_settings(self):
+        self.device_name = self.device_name_entry.get()
+        if not self.device_name:
+            error_text = "You must supply a device name."
+            self.error_label.configure(text="Error: %s" %error_text)
+
+            return False
+
         if not self.recursive_backup_paths and not self.backup_paths:
             error_text = "You must have at least one path to backup."
             self.error_label.configure(text="Error: %s" %error_text)
