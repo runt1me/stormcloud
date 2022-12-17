@@ -59,7 +59,8 @@ def main(device_type, send_logs, backup_time, keepalive_freq, backup_paths, back
         backup_paths,
         backup_paths_recursive,
         secret_key,
-        agent_id
+        agent_id,
+        api_key
     )
 
     logging.log(logging.INFO, "Ready to launch stormcloud!")
@@ -156,7 +157,7 @@ def read_api_key_file(keyfile_path):
 
     return api_key.decode("utf-8")
 
-def configure_settings(send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive, secret_key, agent_id):
+def configure_settings(send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive, secret_key, agent_id, api_key):
     backup_time    = int(backup_time)
     keepalive_freq = int(keepalive_freq)
 
@@ -190,6 +191,10 @@ def configure_settings(send_logs, backup_time, keepalive_freq, backup_paths, bac
         # Agent ID
         lines_to_write.append("# Agent ID, for identifying this device to the stormcloud servers")
         lines_to_write.append("AGENT_ID %s" % agent_id)
+
+        # API key my husband is so smart
+        lines_to_write.append("# API key")
+        lines_to_write.append("API_KEY %s" % api_key)
 
         # Backup paths
         lines_to_write.append("# paths to backup")
@@ -287,6 +292,7 @@ class MainApplication(tk.Frame):
         self.add_recursive_backup_paths_labels_and_browse_button()
         self.add_api_key_labels_and_browse_button()
         self.add_submit_button()
+        self.add_error_label()
 
     def add_device_name_label_and_entry(self):
         self.device_name_label                   = tk.Label(window,text="Device Nickname",bg="white")
@@ -326,12 +332,15 @@ class MainApplication(tk.Frame):
         self.api_key_browse_button.place(x = 600, y = 250)
 
     def add_submit_button(self):
-        self.submit_button                       = tk.Button(window,text="Submit",width=30)
+        self.submit_button                       = tk.Button(window,text="Install",width=20,command=self.verify_settings_and_close_gui)
         self.submit_button.place(x = 120, y = 300)
+
+    def add_error_label(self):
+        self.error_label                         = tk.Label(window,text="",bg="white",fg="red")
+        self.error_label.place(x = 50, y = 350)
 
         # TODO: add
         # checkbox for "send diagnostic logs to help developers troubleshoot issues with my devices." default to yes
-        # path to api key file (filedialog) - write this to the settings file
         # advanced settings (make a openable tab somehow):
         # keepalive frequency - default to 300 seconds
 
@@ -364,6 +373,19 @@ class MainApplication(tk.Frame):
         if filename:
             self.api_key_file_path = filename
             self.api_key_actual_label.configure(text="%s" % filename)
+
+    def verify_settings_and_close_gui(self):
+        if self.verify_settings():
+            window.quit()
+
+    def verify_settings(self):
+        if not self.recursive_backup_paths and not self.backup_paths:
+            error_text = "Error: You must have at least one path to backup."
+            self.error_label.configure(text="%s" %error_text)
+
+            return False
+
+        return True
 
 if __name__ == '__main__':
     window = tk.Tk()
