@@ -282,32 +282,52 @@ class MainApplication(tk.Frame):
         return "%s" % vars(self)
 
     def configure_gui(self):
+        self.add_device_name_label_and_entry()
+        self.add_backup_paths_labels_and_browse_button()
+        self.add_recursive_backup_paths_labels_and_browse_button()
+        self.add_api_key_labels_and_browse_button()
+        self.add_submit_button()
+
+    def add_device_name_label_and_entry(self):
         self.device_name_label                   = tk.Label(window,text="Device Nickname",bg="white")
         self.device_name_label.place(x = 30, y = 100)
 
         self.device_name_entry                   = tk.Entry(window, width=50)
         self.device_name_entry.place(x = 200, y = 100)
 
+    def add_backup_paths_labels_and_browse_button(self):
         self.backup_paths_label                  = tk.Label(window,text="Paths to backup",bg="white")
         self.backup_paths_label.place(x = 30, y = 150)
 
         self.backup_paths_actual_label           = tk.Label(window,bg="white")
         self.backup_paths_actual_label.place(x = 200, y = 150)
 
+        self.paths_browse_button                 = tk.Button(window,text="Add a Folder",command=self.browse_files)
+        self.paths_browse_button.place(x = 600, y = 150)
+
+    def add_recursive_backup_paths_labels_and_browse_button(self):
         self.recursive_backup_paths_label        = tk.Label(window,text="Recursive paths to backup",bg="white")
         self.recursive_backup_paths_label.place(x = 30, y = 200)
 
         self.recursive_backup_paths_actual_label = tk.Label(window,bg="white")
         self.recursive_backup_paths_actual_label.place(x = 200, y = 200)
 
+        self.recursive_paths_browse_button       = tk.Button(window,text="Add a Folder",command=self.browse_files_recursive)
+        self.recursive_paths_browse_button.place(x = 600, y = 200)
+
+    def add_api_key_labels_and_browse_button(self):
+        self.api_key_label                       = tk.Label(window,text="Path to API key file",bg="white")
+        self.api_key_label.place(x = 30, y = 250)
+
+        self.api_key_actual_label                = tk.Label(window,bg="white")
+        self.api_key_actual_label.place(x = 200, y = 250)
+
+        self.api_key_browse_button               = tk.Button(window,text="Select a File",command=self.browse_api_key)
+        self.api_key_browse_button.place(x = 600, y = 250)
+
+    def add_submit_button(self):
         self.submit_button                       = tk.Button(window,text="Submit",width=30)
-        self.submit_button.place(x = 120, y = 250)
-        
-        self.paths_browse_button = tk.Button(window,text="Add a Folder",command=self.browse_files)
-        self.paths_browse_button.place(x = 400, y = 150)
-        
-        self.recursive_paths_browse_button = tk.Button(window,text="Add a Folder",command=self.browse_files_recursive)
-        self.recursive_paths_browse_button.place(x = 400, y = 200)
+        self.submit_button.place(x = 120, y = 300)
 
         # TODO: add
         # checkbox for "send diagnostic logs to help developers troubleshoot issues with my devices." default to yes
@@ -333,7 +353,17 @@ class MainApplication(tk.Frame):
 
         if filename:
             self.recursive_backup_paths.append(filename)
-            self.recursive_backup_paths_actual_label.configure(text=",".join(self.backup_paths))
+            self.recursive_backup_paths_actual_label.configure(text=",".join(self.recursive_backup_paths))
+
+    def browse_api_key(self):
+        filename = filedialog.askopenfilename(
+            initialdir = ".",
+            title = "Select your API key file",
+        )
+
+        if filename:
+            self.api_key_file_path = filename
+            self.api_key_actual_label.configure(text="%s" % filename)
 
 if __name__ == '__main__':
     window = tk.Tk()
@@ -346,6 +376,7 @@ if __name__ == '__main__':
     
     print(app.backup_paths)
     print(app.recursive_backup_paths)
+    print(app.api_key_file_path)
 
     send_logs = True
 
@@ -353,7 +384,6 @@ if __name__ == '__main__':
     device_type = "Just a computer"
     backup_time = 23
     keepalive_freq = 300
-    api_key = "api.key"
 
     if not app.recursive_backup_paths and not app.backup_paths:
         raise Exception("Must have at least one path to backup.")
@@ -365,5 +395,5 @@ if __name__ == '__main__':
         keepalive_freq,
         app.backup_paths,
         app.recursive_backup_paths,
-        api_key
+        app.api_key_file_path
     )
