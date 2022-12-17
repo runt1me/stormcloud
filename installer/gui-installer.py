@@ -26,7 +26,7 @@ def main(device_type, send_logs, backup_time, keepalive_freq, backup_paths, back
     ret, _ = conduct_connectivity_test(api_key, SERVER_NAME, SERVER_PORT)
     if ret != 0:
         logging.log(
-            logging.ERROR, "Install failed (Unable to conduct connectivity test with server). Return code: %d" % ret
+            logging.ERROR, "Install failed (Unable to conduct connectivity test with server). Return code: %d. Please verify that you are connected to the internet." % ret
         )
         exit()
     
@@ -45,14 +45,22 @@ def main(device_type, send_logs, backup_time, keepalive_freq, backup_paths, back
     
     logging.log(logging.INFO, "Device successfully registered.")
 
-    _ = save_secret_key(response_data['secret_key'])
-    logging.log(logging.INFO, "Received device encryption key and wrote to ./secret.key")
+    secret_key = response_data['secret_key']
+    logging.log(logging.INFO, "Received device encryption key.")
 
-    _ = save_agent_id(response_data['agent_id'])
-    logging.log(logging.INFO, "Received agent ID and wrote to ./agent_id")
+    agent_id = response_data['agent_id']
+    logging.log(logging.INFO, "Received agent ID.")
 
     logging.log(logging.INFO, "Configuring backup process and writing settings file.")
-    ret = configure_settings(send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive)
+    ret = configure_settings(
+        send_logs,
+        backup_time,
+        keepalive_freq,
+        backup_paths,
+        backup_paths_recursive,
+        secret_key,
+        agent_id
+    )
 
     logging.log(logging.INFO, "Ready to launch stormcloud!")
 
@@ -142,29 +150,13 @@ def get_name_and_address_info_windows():
 
     return device_name, default_route_address
 
-def save_secret_key(key):
-    key = key.encode("utf-8")
-
-    with open('secret.key', 'wb') as keyfile:
-        keyfile.write(key)
-
-    return 0
-
-def save_agent_id(agent_id):
-    agent_id = agent_id.encode("utf-8")
-
-    with open('agent_id','wb') as idfile:
-        idfile.write(agent_id)
-
-    return 0
-
 def read_api_key_file(keyfile_path):
     with open(keyfile_path,'rb') as keyfile:
         api_key = keyfile.read()
 
     return api_key.decode("utf-8")
 
-def configure_settings(send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive):
+def configure_settings(send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive, secret_key, agent_id):
     backup_time    = int(backup_time)
     keepalive_freq = int(keepalive_freq)
 
@@ -190,6 +182,14 @@ def configure_settings(send_logs, backup_time, keepalive_freq, backup_paths, bac
         lines_to_write.append("# controls how frequently this device will send keepalive message to the stormcloud servers.")
         lines_to_write.append("# Interval in seconds (90=send keepalive every 90 seconds)")
         lines_to_write.append("KEEPALIVE_FREQ %d" % keepalive_freq)
+
+        # Secret Key
+        lines_to_write.append("# symmetric key for device encryption")
+        lines_to_write.append("SECRET_KEY %s" % secret_key)
+        
+        # Agent ID
+        lines_to_write.append("# Agent ID, for identifying this device to the stormcloud servers")
+        lines_to_write.append("AGENT_ID %s" % agent_id)
 
         # Backup paths
         lines_to_write.append("# paths to backup")
@@ -279,7 +279,7 @@ class MainApplication(tk.Frame):
         self.configure_gui()
 
     def __str__(self):
-        return "Tkinter GUI app: %s" % vars(self)
+        return "%s" % vars(self)
 
     def configure_gui(self):
         self.device_name_label                   = tk.Label(window,text="Device Nickname",bg="white")
@@ -301,13 +301,19 @@ class MainApplication(tk.Frame):
         self.recursive_backup_paths_actual_label.place(x = 200, y = 200)
 
         self.submit_button                       = tk.Button(window,text="Submit",width=30)
-        self.submit_button.place(x = 120, y = 250)    
+        self.submit_button.place(x = 120, y = 250)
         
         self.paths_browse_button = tk.Button(window,text="Add a Folder",command=self.browse_files)
         self.paths_browse_button.place(x = 400, y = 150)
         
         self.recursive_paths_browse_button = tk.Button(window,text="Add a Folder",command=self.browse_files_recursive)
         self.recursive_paths_browse_button.place(x = 400, y = 200)
+
+        # TODO: add
+        # checkbox for "send diagnostic logs to help developers troubleshoot issues with my devices." default to yes
+        # path to api key file (filedialog) - write this to the settings file
+        # advanced settings (make a openable tab somehow):
+        # keepalive frequency - default to 300 seconds
 
     def browse_files(self):
         filename = tk.filedialog.askdirectory(
@@ -341,15 +347,23 @@ if __name__ == '__main__':
     print(app.backup_paths)
     print(app.recursive_backup_paths)
 
+    send_logs = True
+
+    # TODO: figure out how to get device type out of GUI
+    device_type = "Just a computer"
+    backup_time = 23
+    keepalive_freq = 300
+    api_key = "api.key"
+
     if not app.recursive_backup_paths and not app.backup_paths:
         raise Exception("Must have at least one path to backup.")
 
     main(
-        args.device_type,
-        args.send_logs,
-        args.backup_time,
-        args.keepalive_freq,
+        device_type,
+        send_logs,
+        backup_time,
+        keepalive_freq,
         app.backup_paths,
         app.recursive_backup_paths,
-        args.api_key
+        api_key
     )
