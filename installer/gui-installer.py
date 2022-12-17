@@ -281,6 +281,7 @@ class MainApplication(tk.Frame):
         self.parent = parent
         self.backup_paths = []
         self.recursive_backup_paths = []
+        self.api_key_file_path = ""
         self.configure_gui()
 
     def __str__(self):
@@ -380,8 +381,14 @@ class MainApplication(tk.Frame):
 
     def verify_settings(self):
         if not self.recursive_backup_paths and not self.backup_paths:
-            error_text = "Error: You must have at least one path to backup."
-            self.error_label.configure(text="%s" %error_text)
+            error_text = "You must have at least one path to backup."
+            self.error_label.configure(text="Error: %s" %error_text)
+
+            return False
+
+        if not self.api_key_file_path:
+            error_text = "You must provide the path to your API key."
+            self.error_label.configure(text="Error: %s" %error_text)
 
             return False
 
@@ -409,6 +416,9 @@ if __name__ == '__main__':
 
     if not app.recursive_backup_paths and not app.backup_paths:
         raise Exception("Must have at least one path to backup.")
+
+    if not app.api_key_file_path:
+        raise Exception("You must provide the path to your API key.")
 
     main(
         device_type,
