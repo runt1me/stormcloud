@@ -8,6 +8,8 @@ import logging
 import argparse
 
 import tkinter as tk
+from tkinter import ttk
+
 from tkinter import filedialog
 
 # saving this as a test case for later when i make unit tests
@@ -339,8 +341,12 @@ class MainApplication(tk.Frame):
         self.api_key_browse_button.place(x = 600, y = 220)
 
     def add_diagnostic_checkbox_and_label(self):
-        self.send_logs_checkbox                  = tk.Checkbutton(window)
-        self.send_logs_checkbox.toggle()
+        self.send_logs_checkbox                  = ttk.Checkbutton(window)
+
+        # clear checkbox "half-checked" state and set new state
+        self.send_logs_checkbox.state(['!alternate'])
+        self.send_logs_checkbox.state(['!disabled','selected'])
+
         self.send_logs_checkbox.place(x = 30, y = 260)
 
         self.send_logs_label                     = tk.Label(window, text="Send Diagnostic Information to Stormcloud to assist developers")
@@ -422,8 +428,9 @@ if __name__ == '__main__':
     print(app.backup_paths)
     print(app.recursive_backup_paths)
     print(app.api_key_file_path)
+    print("send logs: %s" % app.send_logs_checkbox.instate(['selected']))
 
-    send_logs = True
+    send_logs = app.send_logs_checkbox.instate(['selected'])
 
     # TODO: figure out how to get device type out of GUI
     device_type = "Just a computer"
