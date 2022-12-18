@@ -9,7 +9,7 @@ import argparse
 
 import tkinter as tk
 from tkinter import ttk
-
+from tkinter import messagebox
 from tkinter import filedialog
 
 # saving this as a test case for later when i make unit tests
@@ -18,54 +18,6 @@ from tkinter import filedialog
 SERVER_NAME="www2.darkage.io"
 SERVER_PORT=8443
 STORMCLOUD_VERSION="1.0.0"
-
-def main(device_type, send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive, api_key_file_path):
-    initialize_logging()
-    logging.log(logging.INFO, "Beginning install of Stormcloud v%s" % STORMCLOUD_VERSION)
-
-    api_key = read_api_key_file(api_key_file_path)
-
-    ret, _ = conduct_connectivity_test(api_key, SERVER_NAME, SERVER_PORT)
-    if ret != 0:
-        logging.log(
-            logging.ERROR, "Install failed (Unable to conduct connectivity test with server). Return code: %d. Please verify that you are connected to the internet." % ret
-        )
-        exit()
-    
-    logging.log(logging.INFO, "Successfully conducted connectivity test with server.")
-    logging.log(logging.INFO, "Conducting initial device survey...")
-    
-    survey_data = conduct_device_initial_survey(api_key,device_type)
-
-    logging.log(logging.INFO, "Device survey complete.")
-
-    logging.log(logging.INFO, "Sending device registration request to server...")
-    ret, response_data = tls_send_json_data(survey_data, "register_new_device-response", SERVER_NAME, SERVER_PORT)
-    if ret != 0:
-        logging.log(logging.ERROR, "Install failed (Unable to send survey data to server). Return code: %d" % ret)
-        exit()
-    
-    logging.log(logging.INFO, "Device successfully registered.")
-
-    secret_key = response_data['secret_key']
-    logging.log(logging.INFO, "Received device encryption key.")
-
-    agent_id = response_data['agent_id']
-    logging.log(logging.INFO, "Received agent ID.")
-
-    logging.log(logging.INFO, "Configuring backup process and writing settings file.")
-    ret = configure_settings(
-        send_logs,
-        backup_time,
-        keepalive_freq,
-        backup_paths,
-        backup_paths_recursive,
-        secret_key,
-        agent_id,
-        api_key
-    )
-
-    logging.log(logging.INFO, "Ready to launch stormcloud!")
 
 def conduct_connectivity_test(api_key,server_name,server_port):
     logging.log(
@@ -285,6 +237,7 @@ class MainApplication(tk.Frame):
         self.recursive_backup_paths = []
         self.api_key_file_path = ""
         self.device_name = ""
+        self.stdout_msgs = []
         self.configure_gui()
 
     def __str__(self):
@@ -298,10 +251,7 @@ class MainApplication(tk.Frame):
         self.add_diagnostic_checkbox_and_label()
         self.add_submit_button()
         self.add_error_label()
-
-        # TODO: add
-        # advanced settings (make a openable tab somehow):
-        # keepalive frequency - default to 300 seconds
+        self.add_stdout_label()
 
     def add_device_name_label_and_entry(self):
         self.device_name_label                   = tk.Label(window,text="Device Nickname",bg="white")
@@ -353,12 +303,16 @@ class MainApplication(tk.Frame):
         self.send_logs_label.place(x = 50, y = 260)
 
     def add_submit_button(self):
-        self.submit_button                       = tk.Button(window,text="Install",width=20,command=self.verify_settings_and_close_gui)
+        self.submit_button                       = tk.Button(window,text="Install",width=20,command=self.verify_settings_and_begin_install)
         self.submit_button.place(x = 120, y = 300)
 
     def add_error_label(self):
         self.error_label                         = tk.Label(window,text="",bg="white",fg="red")
         self.error_label.place(x = 50, y = 340)
+
+    def add_stdout_label(self):
+        self.stdout_label                        = tk.Label(window,text="",bg="white",fg="green",anchor="w",justify=tk.LEFT)
+        self.stdout_label.place(x = 50, y = 360)
 
     def browse_files(self):
         filename = tk.filedialog.askdirectory(
@@ -390,12 +344,13 @@ class MainApplication(tk.Frame):
             self.api_key_file_path = filename
             self.api_key_actual_label.configure(text="%s" % filename)
 
-    def verify_settings_and_close_gui(self):
+    def verify_settings_and_begin_install(self):
+        self.device_name = self.device_name_entry.get()
+
         if self.verify_settings():
-            window.quit()
+            self.begin_install()
 
     def verify_settings(self):
-        self.device_name = self.device_name_entry.get()
         if not self.device_name:
             error_text = "You must supply a device name."
             self.error_label.configure(text="Error: %s" %error_text)
@@ -414,41 +369,103 @@ class MainApplication(tk.Frame):
 
             return False
 
+        self.error_label.configure(text="Settings are valid, continuing...",fg="black")
+        self.error_label.update()
         return True
+
+    def begin_install(self):
+        # Set default values here, might make these alterable through "advanced settings" later
+        backup_time = 23
+        keepalive_freq = 300
+
+        self.main(
+            self.device_name,
+            self.send_logs_checkbox.instate(['selected']),
+            backup_time,
+            keepalive_freq,
+            self.backup_paths,
+            self.recursive_backup_paths,
+            self.api_key_file_path
+        )
+
+    def update_stdout(self, msg):
+        self.stdout_msgs.append(msg)
+        self.stdout_label.configure(text="\n".join(self.stdout_msgs))
+
+    def clear_stdout_and_display_error(self, msg):
+        self.stdout_msgs.clear()
+        self.stdout_label.configure(text="")
+
+        self.error_label.configure(text=msg, fg="red")
+
+    def main(self, device_type, send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive, api_key_file_path):
+        initialize_logging()
+        logging.log(logging.INFO, "Beginning install of Stormcloud v%s" % STORMCLOUD_VERSION)
+        self.update_stdout("Beginning install of Stormcloud version: %s" % STORMCLOUD_VERSION)
+
+        api_key = read_api_key_file(api_key_file_path)
+
+        ret, _ = conduct_connectivity_test(api_key, SERVER_NAME, SERVER_PORT)
+        if ret != 0:
+            logging.log(logging.ERROR, "Install failed (Unable to conduct connectivity test with server). Return code: %d. Please verify that you are connected to the internet." % ret)
+            self.clear_stdout_and_display_error("Install failed (Unable to conduct connectivity test with server). Return code: %d.\nPlease verify that you are connected to the internet." % ret)
+
+            return
+        
+        logging.log(logging.INFO, "Successfully conducted connectivity test with server.")
+        logging.log(logging.INFO, "Conducting initial device survey...")
+        self.update_stdout("Successfully conducted connectivity test with server.")
+        sleep(1)
+        
+        survey_data = conduct_device_initial_survey(api_key,device_type)
+
+        logging.log(logging.INFO, "Device survey complete.")
+        logging.log(logging.INFO, "Sending device registration request to server...")
+        self.update_stdout("Sending device registration request to server...")
+
+        ret, response_data = tls_send_json_data(survey_data, "register_new_device-response", SERVER_NAME, SERVER_PORT)
+        if ret != 0:
+            logging.log(logging.ERROR, "Install failed (Unable to send survey data to server). Return code: %d" % ret)
+            self.clear_stdout_and_display_error("Install failed (Unable to send survey data to server). Return code: %d" % ret)
+
+            return
+        
+        logging.log(logging.INFO, "Device successfully registered.")
+        self.update_stdout("Device successfully registered!")
+
+        secret_key = response_data['secret_key']
+        # secret_key = "weWawO9wBUgcGCMsztUQFfV_JpIy8hPnbS_-62D42Sk="
+        logging.log(logging.INFO, "Received device encryption key.")
+
+        agent_id = response_data['agent_id']
+        # agent_id = "CDLZ4gVo8bI-Q51tW5cX-H4"
+        logging.log(logging.INFO, "Received agent ID.")
+
+        logging.log(logging.INFO, "Configuring backup process and writing settings file.")
+        ret = configure_settings(
+            send_logs,
+            backup_time,
+            keepalive_freq,
+            backup_paths,
+            backup_paths_recursive,
+            secret_key,
+            agent_id,
+            api_key
+        )
+
+        self.update_stdout("Ready to launch stormcloud!")
+        logging.log(logging.INFO, "Ready to launch stormcloud!")
 
 if __name__ == '__main__':
     window = tk.Tk()
     app = MainApplication(window)
     window.title("Stormcloud Installer")
-    window.geometry("700x500")
+    window.geometry("800x600")
     window.config(background="white")
 
+    def on_closing():
+        if messagebox.askokcancel("Quit", "Are you sure you want to exit?"):
+            window.destroy()
+
+    window.protocol("WM_DELETE_WINDOW", on_closing)
     window.mainloop()
-    
-    print(app.backup_paths)
-    print(app.recursive_backup_paths)
-    print(app.api_key_file_path)
-    print("send logs: %s" % app.send_logs_checkbox.instate(['selected']))
-
-    send_logs = app.send_logs_checkbox.instate(['selected'])
-
-    # TODO: figure out how to get device type out of GUI
-    device_type = "Just a computer"
-    backup_time = 23
-    keepalive_freq = 300
-
-    if not app.recursive_backup_paths and not app.backup_paths:
-        raise Exception("Must have at least one path to backup.")
-
-    if not app.api_key_file_path:
-        raise Exception("You must provide the path to your API key.")
-
-    main(
-        device_type,
-        send_logs,
-        backup_time,
-        keepalive_freq,
-        app.backup_paths,
-        app.recursive_backup_paths,
-        app.api_key_file_path
-    )
