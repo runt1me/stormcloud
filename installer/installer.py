@@ -464,6 +464,8 @@ if __name__ == '__main__':
     window.geometry("800x600")
     window.config(background="white")
 
+    # TODO: try to figure out how to center window on screen
+    
     def on_closing():
         if messagebox.askokcancel("Quit", "Are you sure you want to exit?"):
             window.destroy()
