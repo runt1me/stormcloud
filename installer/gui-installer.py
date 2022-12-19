@@ -393,70 +393,69 @@ class MainApplication(tk.Frame):
     def update_stdout(self, msg):
         self.stdout_msgs.append(msg)
         self.stdout_label.configure(text="\n".join(self.stdout_msgs))
+        self.stdout_label.update()
 
     def clear_stdout_and_display_error(self, msg):
         self.stdout_msgs.clear()
         self.stdout_label.configure(text="")
 
         self.error_label.configure(text=msg, fg="red")
+        self.error_label.update()
+
+    def log_and_update_stdout(self, msg):
+        logging.log(logging.INFO, msg)
+        self.update_stdout(msg)
+
+        sleep(1)
+
+    def log_and_update_stderr(self, msg):
+        logging.log(logging.ERROR, msg)
+        self.clear_stdout_and_display_error(msg)
+
+        sleep(1)
 
     def main(self, device_type, send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive, api_key_file_path):
         initialize_logging()
-        logging.log(logging.INFO, "Beginning install of Stormcloud v%s" % STORMCLOUD_VERSION)
-        self.update_stdout("Beginning install of Stormcloud version: %s" % STORMCLOUD_VERSION)
+        self.log_and_update_stdout("Beginning install of Stormcloud v%s" % STORMCLOUD_VERSION)
 
         api_key = read_api_key_file(api_key_file_path)
 
         ret, _ = conduct_connectivity_test(api_key, SERVER_NAME, SERVER_PORT)
         if ret != 0:
-            logging.log(logging.ERROR, "Install failed (unable to conduct connectivity test with server). Return code: %d. Please verify that you are connected to the internet." % ret)
-            self.clear_stdout_and_display_error("Install failed (unable to conduct connectivity test with server). Return code: %d.\nPlease verify that you are connected to the internet." % ret)
-
+            self.log_and_update_stderr("Install failed (unable to conduct connectivity test with server). Return code: %d.\nPlease verify that you are connected to the internet.\nIf problems continue, please contact our customer support team." % ret)
             return
         
-        logging.log(logging.INFO, "Successfully conducted connectivity test with server.")
+        self.log_and_update_stdout("Successfully conducted connectivity test with server.")
         logging.log(logging.INFO, "Conducting initial device survey...")
-        self.update_stdout("Successfully conducted connectivity test with server.")
-        sleep(1)
-        
+
         survey_data = conduct_device_initial_survey(api_key,device_type)
 
         logging.log(logging.INFO, "Device survey complete.")
-        logging.log(logging.INFO, "Sending device registration request to server...")
-        self.update_stdout("Sending device registration request to server...")
+        self.log_and_update_stdout("Sending device registration request to server...")
 
         ret, response_data = tls_send_json_data(survey_data, "register_new_device-response", SERVER_NAME, SERVER_PORT)
         if ret != 0:
-            logging.log(logging.ERROR, "Install failed (Unable to send survey data to server). Return code: %d" % ret)
-            self.clear_stdout_and_display_error("Install failed (Unable to send survey data to server). Return code: %d" % ret)
-
+            self.log_and_update_stderr("Install failed (unable to register device with server). Return code: %d" % ret)
             return
-        
-        logging.log(logging.INFO, "Device successfully registered.")
-        self.update_stdout("Device successfully registered!")
+
+        self.log_and_update_stdout("Device successfully registered.")
 
         secret_key = response_data['secret_key']
-        # secret_key = "weWawO9wBUgcGCMsztUQFfV_JpIy8hPnbS_-62D42Sk="
         logging.log(logging.INFO, "Received device encryption key.")
 
         agent_id = response_data['agent_id']
-        # agent_id = "CDLZ4gVo8bI-Q51tW5cX-H4"
         logging.log(logging.INFO, "Received agent ID.")
 
         logging.log(logging.INFO, "Configuring backup process and writing settings file.")
         ret = configure_settings(
-            send_logs,
-            backup_time,
-            keepalive_freq,
-            backup_paths,
+            send_logs, backup_time,
+            keepalive_freq, backup_paths,
             backup_paths_recursive,
-            secret_key,
-            agent_id,
+            secret_key, agent_id,
             api_key
         )
 
-        self.update_stdout("Ready to launch stormcloud!")
-        logging.log(logging.INFO, "Ready to launch stormcloud!")
+        self.log_and_update_stdout("Ready to launch stormcloud!")
 
 if __name__ == '__main__':
     window = tk.Tk()
