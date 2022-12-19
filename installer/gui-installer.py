@@ -7,6 +7,8 @@ from subprocess import Popen, PIPE
 import logging
 import argparse
 
+from time import sleep
+
 import tkinter as tk
 from tkinter import ttk
 from tkinter import messagebox
@@ -407,8 +409,8 @@ class MainApplication(tk.Frame):
 
         ret, _ = conduct_connectivity_test(api_key, SERVER_NAME, SERVER_PORT)
         if ret != 0:
-            logging.log(logging.ERROR, "Install failed (Unable to conduct connectivity test with server). Return code: %d. Please verify that you are connected to the internet." % ret)
-            self.clear_stdout_and_display_error("Install failed (Unable to conduct connectivity test with server). Return code: %d.\nPlease verify that you are connected to the internet." % ret)
+            logging.log(logging.ERROR, "Install failed (unable to conduct connectivity test with server). Return code: %d. Please verify that you are connected to the internet." % ret)
+            self.clear_stdout_and_display_error("Install failed (unable to conduct connectivity test with server). Return code: %d.\nPlease verify that you are connected to the internet." % ret)
 
             return
         
