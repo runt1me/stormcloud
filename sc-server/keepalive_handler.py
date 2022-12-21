@@ -24,6 +24,9 @@ def main(listen_port):
               ret_code, response_data = -1, json.dumps({'response': 'Bad request (data not in JSON format).'})
               wrappedSocket.sendall(bytes(response_data,encoding="utf-8"))
 
+    except Exception as e:
+        logging.log(logging.INFO, "Caught exception when trying to send response to client: %s" %e)
+
     finally:
         wrappedSocket.close()
 
@@ -63,4 +66,3 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     main(args.port)
-

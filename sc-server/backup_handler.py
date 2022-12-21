@@ -2,6 +2,8 @@
 import argparse
 import json
 
+import logging
+
 import database_utils as db
 import network_utils  as scnet
 import crypto_utils
@@ -23,6 +25,9 @@ def main(listen_port):
             else:
               ret_code, response_data = -1, json.dumps({'response': 'Bad request (data not in JSON format).'})
               wrappedSocket.sendall(bytes(response_data,encoding="utf-8"))
+
+    except Exception as e:
+        logging.log(logging.INFO, "Caught exception when trying to send response to client: %s" %e)
 
     finally:
         wrappedSocket.close()
