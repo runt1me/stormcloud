@@ -2,40 +2,48 @@ import json
 import socket, ssl
 import logging
 
+import traceback
+
 CERTFILE="/root/certs/r3_pub_priv.pem"
 KEYFILE="/root/certs/r3_pub_priv.pem"
 
 # TODO: figure out automated cert renewal
 
 def initialize_socket(listen_port):
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS)
-    context.load_cert_chain(certfile=CERTFILE)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(CERTFILE,KEYFILE)
 
     s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
     s.bind(('0.0.0.0',listen_port))
     s.listen(5)
 
+    wrappedSocket = wrap(s,context)
+
     print('Listening for connections')
-    return s
+    return wrappedSocket
 
-def accept_and_wrap_socket(s):
-    wrappedSocket = None
+def wrap(s, context):
+    try:
+        wrappedSocket = context.wrap_socket(sock=s,server_side=True)
 
-    while not wrappedSocket:
-        connection, _ = s.accept()
-        try:
-            wrappedSocket = ssl.wrap_socket(
-                connection,
-                server_side=True,
-                certfile=CERTFILE,
-                keyfile=KEYFILE,
-                ssl_version=ssl.PROTOCOL_TLS
-            )
-        except:
-            logging.log(logging.INFO, "Caught exception when trying to wrap SSL socket.")
-            wrappedSocket = None
+    except Exception as e:
+        logging.log(logging.INFO, "Caught exception when trying to wrap SSL socket.")
 
     return wrappedSocket
+
+def accept(wrappedSocket):
+    # TODO: narrowed down phantom server crash issue to probably something in ssl.wrap_socket
+    # turns out its deprecated and should be using ssl context wrap socket instead, https://docs.python.org/3/library/ssl.html
+    connection = None
+    try:
+        logging.log(logging.INFO, "Accepting connections...")
+        connection, addr = wrappedSocket.accept()
+        print("connection: %s" %connection)
+
+    except Exception as e:
+        logging.log(logging.INFO, "Caught exception when trying to accept connection (maybe non-SSL connection?)")
+   
+    return connection
 
 def recv_json_until_eol(socket):
     try:

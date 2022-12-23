@@ -13,8 +13,8 @@ def main(listen_port):
     backup_utils.initialize_logging()
     s = scnet.initialize_socket(listen_port=listen_port)
 
-    try:
-        while True:
+    while True:
+        try:
             wrappedSocket = scnet.accept_and_wrap_socket(s)
             request       = scnet.recv_json_until_eol(wrappedSocket)
     
@@ -26,11 +26,11 @@ def main(listen_port):
               ret_code, response_data = -1, json.dumps({'response': 'Bad request (data not in JSON format).'})
               wrappedSocket.sendall(bytes(response_data,encoding="utf-8"))
 
-    except Exception as e:
-        logging.log(logging.INFO, "Caught exception when trying to send response to client: %s" %e)
+        except Exception as e:
+            logging.log(logging.INFO, "Caught exception when trying to send response to client: %s" %e)
 
-    finally:
-        wrappedSocket.close()
+        finally:
+            wrappedSocket.close()
 
 def handle_request(request):
     if 'request_type' not in request.keys():
