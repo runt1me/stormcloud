@@ -32,15 +32,21 @@ def wrap(s, context):
     return wrappedSocket
 
 def accept(wrappedSocket):
-    # TODO: narrowed down phantom server crash issue to probably something in ssl.wrap_socket
-    # turns out its deprecated and should be using ssl context wrap socket instead, https://docs.python.org/3/library/ssl.html
+    # TODO: phantom server crash issue
+    # I am seeing a connection hung on CLOSE_WAIT in the netstat.
+    # server breaks when chrome browser (maybe others) make a request to the server
+    # The connection will not pass the "accept" call in python but it does show up in the netstat
+    # maybe this could be fixed by forking a new thread for connection handler?
+    # or socket.timeout() on the accept call?
     connection = None
     try:
         logging.log(logging.INFO, "Accepting connections...")
         connection, addr = wrappedSocket.accept()
+        connection.settimeout(5.0)
         print("connection: %s" %connection)
 
     except Exception as e:
+        print(traceback.format_exc())
         logging.log(logging.INFO, "Caught exception when trying to accept connection (maybe non-SSL connection?)")
    
     return connection
