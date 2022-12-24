@@ -27,27 +27,24 @@ def wrap(s, context):
         wrappedSocket = context.wrap_socket(sock=s,server_side=True)
 
     except Exception as e:
-        logging.log(logging.INFO, "Caught exception when trying to wrap SSL socket.")
+        logging.log(logging.ERROR, "Caught exception when trying to wrap SSL socket: %s" %traceback.format_exc())
 
     return wrappedSocket
 
 def accept(wrappedSocket):
-    # TODO: phantom server crash issue
-    # I am seeing a connection hung on CLOSE_WAIT in the netstat.
-    # server breaks when chrome browser (maybe others) make a request to the server
-    # The connection will not pass the "accept" call in python but it does show up in the netstat
-    # maybe this could be fixed by forking a new thread for connection handler?
-    # or socket.timeout() on the accept call?
     connection = None
-    try:
-        logging.log(logging.INFO, "Accepting connections...")
-        connection, addr = wrappedSocket.accept()
-        connection.settimeout(5.0)
-        print("connection: %s" %connection)
+    while not connection:
+        try:
+            logging.log(logging.INFO, "Accepting connections.")
+            connection, addr = wrappedSocket.accept()
 
-    except Exception as e:
-        print(traceback.format_exc())
-        logging.log(logging.INFO, "Caught exception when trying to accept connection (maybe non-SSL connection?)")
+            # Set server-side connection timeout to deal with premature client disconnects.
+            # This addresses a wide range of bad client behavior, in particular, web browser spray.
+            connection.settimeout(3.0)
+            print("connection: %s" %connection)
+
+        except Exception as e:
+            logging.log(logging.INFO, "Caught exception when trying to accept connection: %s" %e)
    
     return connection
 
@@ -69,6 +66,8 @@ def recv_json_until_eol(socket):
           recv_size = socket.recv_into(view[next_offset:], total - next_offset)
           next_offset += recv_size
     except:
+        # In theory at this point the connection has passed the SSL, but is not pure JSON
+        # Most likely event is an HTTPS request given the listening ports 7443,8443,9443
         logging.log(logging.INFO, "Could not read received data (maybe HTTP request?)")
         return None
 

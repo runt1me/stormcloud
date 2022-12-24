@@ -16,18 +16,15 @@ def main(listen_port):
     wrappedSocket = scnet.initialize_socket(listen_port=listen_port)
 
     while True:
-        logging.log(logging.INFO,"Looping again")
         try:
             connection    = scnet.accept(wrappedSocket)
             request       = scnet.recv_json_until_eol(connection)
 
             if request:
-                logging.log(logging.INFO,"Received valid request")
                 ret_code, response_data = handle_request(request)
                 connection.sendall(bytes(response_data,encoding="utf-8"))
 
             else:
-                logging.log(logging.INFO,"Received invalid request")
                 ret_code, response_data = -1, json.dumps({'response': 'Bad request (data not in JSON format).'})
                 connection.sendall(bytes(response_data,encoding="utf-8"))
 
@@ -35,7 +32,6 @@ def main(listen_port):
             logging.log(logging.INFO, "Caught exception when trying to send response to client: %s" %e)
 
         finally:
-            logging.log(logging.INFO,"Closing socket")
             connection.close()
 
 def handle_request(request):
