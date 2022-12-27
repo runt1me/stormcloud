@@ -14,6 +14,8 @@ from tkinter import ttk
 from tkinter import messagebox
 from tkinter import filedialog
 
+import webbrowser
+
 # saving this as a test case for later when i make unit tests
 #ret, _ = tls_send_json_data("not valid json data", "response", SERVER_NAME, SERVER_PORT)
 
@@ -248,7 +250,6 @@ class MainApplication(tk.Frame):
     def configure_gui(self):
         self.add_device_name_label_and_entry()
         self.add_backup_paths_labels_and_browse_button()
-        self.add_recursive_backup_paths_labels_and_browse_button()
         self.add_api_key_labels_and_browse_button()
         self.add_diagnostic_checkbox_and_label()
         self.add_submit_button()
@@ -257,64 +258,59 @@ class MainApplication(tk.Frame):
 
     def add_device_name_label_and_entry(self):
         self.device_name_label                   = tk.Label(window,text="Device Nickname",bg="white")
-        self.device_name_label.place(x = 30, y = 100)
+        self.device_name_label.grid(row=0,column=0,padx=(30,15),pady=(100,20),sticky=tk.W)
 
         self.device_name_entry                   = tk.Entry(window, width=50)
-        self.device_name_entry.place(x = 200, y = 100)
+        self.device_name_entry.grid(row=0,column=1,padx=(15,15),pady=(100,20),columnspan=2,sticky=tk.E)
 
     def add_backup_paths_labels_and_browse_button(self):
         self.backup_paths_label                  = tk.Label(window,text="Paths to backup",bg="white")
-        self.backup_paths_label.place(x = 30, y = 140)
+        self.backup_paths_label.grid(row=1,column=0,padx=(30,15),pady=(0,20),sticky=tk.W)
 
         self.backup_paths_actual_label           = tk.Label(window,bg="white")
-        self.backup_paths_actual_label.place(x = 200, y = 140)
+        self.backup_paths_actual_label.grid(row=1,column=1,padx=(15,15),pady=(0,20),sticky=tk.W)
 
         self.paths_browse_button                 = tk.Button(window,text="Add a Folder",command=self.browse_files)
-        self.paths_browse_button.place(x = 600, y = 140)
-
-    def add_recursive_backup_paths_labels_and_browse_button(self):
-        self.recursive_backup_paths_label        = tk.Label(window,text="Recursive paths to backup",bg="white")
-        self.recursive_backup_paths_label.place(x = 30, y = 180)
-
-        self.recursive_backup_paths_actual_label = tk.Label(window,bg="white")
-        self.recursive_backup_paths_actual_label.place(x = 200, y = 180)
-
-        self.recursive_paths_browse_button       = tk.Button(window,text="Add a Folder",command=self.browse_files_recursive)
-        self.recursive_paths_browse_button.place(x = 600, y = 180)
+        self.paths_browse_button.grid(row=1,column=2,padx=(5,15),pady=(0,20),sticky=tk.E)
 
     def add_api_key_labels_and_browse_button(self):
         self.api_key_label                       = tk.Label(window,text="Path to API key file",bg="white")
-        self.api_key_label.place(x = 30, y = 220)
+        self.api_key_label.grid(row=2,column=0,padx=(30,15),pady=(0,20),sticky=tk.W)
 
         self.api_key_actual_label                = tk.Label(window,bg="white")
-        self.api_key_actual_label.place(x = 200, y = 220)
+        self.api_key_actual_label.grid(row=2,column=1,padx=(15,15),pady=(0,20),sticky=tk.W)
 
         self.api_key_browse_button               = tk.Button(window,text="Select a File",command=self.browse_api_key)
-        self.api_key_browse_button.place(x = 600, y = 220)
+        self.api_key_browse_button.grid(row=2,column=2,padx=(5,15),pady=(0,20),sticky=tk.E)
 
     def add_diagnostic_checkbox_and_label(self):
-        self.send_logs_checkbox                  = ttk.Checkbutton(window)
+        def callback(url):
+            webbrowser.open_new_tab(url)
+
+        self.agree_checkbox                  = ttk.Checkbutton(window)
 
         # clear checkbox "half-checked" state and set new state
-        self.send_logs_checkbox.state(['!alternate'])
-        self.send_logs_checkbox.state(['!disabled','selected'])
+        self.agree_checkbox.state(['!alternate'])
+        self.agree_checkbox.state(['!disabled','selected'])
 
-        self.send_logs_checkbox.place(x = 30, y = 260)
+        self.agree_checkbox.grid(row=3,column=0,padx=(30,5),pady=(0,20),sticky=tk.E)
 
-        self.send_logs_label                     = tk.Label(window, text="Send Diagnostic Information to Stormcloud to assist developers")
-        self.send_logs_label.place(x = 50, y = 260)
+        self.link_label                      = tk.Label(window, text="I agree to the Stormcloud Terms and Conditions.", fg="blue", cursor="hand2")
+        self.link_label.bind("<Button-1>", lambda e: callback("https://www.github.com/runt1me/stormcloud"))
+        self.link_label.grid(row=3,column=1,padx=(0,15),pady=(0,20),columnspan=2,sticky=tk.W)
 
     def add_submit_button(self):
         self.submit_button                       = tk.Button(window,text="Install",width=20,command=self.verify_settings_and_begin_install)
         self.submit_button.place(x = 120, y = 300)
+        self.submit_button.grid(row=4,column=0,padx=(40,0),pady=(0,20),columnspan=2,sticky=tk.NS)
 
     def add_error_label(self):
         self.error_label                         = tk.Label(window,text="",bg="white",fg="red")
-        self.error_label.place(x = 50, y = 340)
+        self.error_label.grid(row=5,column=0,padx=(40,0),pady=(0,5),columnspan=2,sticky=tk.NS)
 
     def add_stdout_label(self):
         self.stdout_label                        = tk.Label(window,text="",bg="white",fg="green",anchor="w",justify=tk.LEFT)
-        self.stdout_label.place(x = 50, y = 360)
+        self.stdout_label.grid(row=6,column=0,padx=(40,0),pady=(0,20),columnspan=2,sticky=tk.NS)
 
     def browse_files(self):
         filename = tk.filedialog.askdirectory(
@@ -382,7 +378,7 @@ class MainApplication(tk.Frame):
 
         self.main(
             self.device_name,
-            self.send_logs_checkbox.instate(['selected']),
+            self.agree_checkbox.instate(['selected']),
             backup_time,
             keepalive_freq,
             self.backup_paths,
