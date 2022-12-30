@@ -242,6 +242,10 @@ class MainApplication(tk.Frame):
         self.api_key_file_path = ""
         self.device_name = ""
         self.stdout_msgs = []
+
+        self.backup_label_current_row = 1
+        self.backup_paths_master_list = []
+
         self.configure_gui()
 
     def __str__(self):
@@ -249,8 +253,10 @@ class MainApplication(tk.Frame):
 
     def configure_gui(self):
         self.add_device_name_label_and_entry()
-        self.add_backup_paths_labels_and_browse_button()
-        self.add_api_key_labels_and_browse_button()
+        self.add_backup_paths_labels()
+        self.add_backup_browse_button()
+        self.add_api_key_labels()
+        self.add_api_key_browse_button()
         self.add_diagnostic_checkbox_and_label()
         self.add_submit_button()
         self.add_error_label()
@@ -261,27 +267,27 @@ class MainApplication(tk.Frame):
         self.device_name_label.grid(row=0,column=0,padx=(30,15),pady=(100,20),sticky=tk.W)
 
         self.device_name_entry                   = tk.Entry(window, width=50)
-        self.device_name_entry.grid(row=0,column=1,padx=(15,15),pady=(100,20),columnspan=2,sticky=tk.E)
+        self.device_name_entry.grid(row=0,column=1,padx=(15,15),pady=(100,20),columnspan=3,sticky=tk.E)
 
-    def add_backup_paths_labels_and_browse_button(self):
+    def add_backup_paths_labels(self):
         self.backup_paths_label                  = tk.Label(window,text="Paths to backup",bg="white")
-        self.backup_paths_label.grid(row=1,column=0,padx=(30,15),pady=(0,20),sticky=tk.W)
+        self.backup_paths_label.grid(row=1,column=0,padx=(30,15),pady=(0,5),sticky=tk.NS)
 
-        self.backup_paths_actual_label           = tk.Label(window,bg="white")
-        self.backup_paths_actual_label.grid(row=1,column=1,padx=(15,15),pady=(0,20),sticky=tk.W)
+    def add_backup_browse_button(self):
+        # Place backup label and checkboxes at self.backup_label_current_row
+        self.paths_browse_button                 = tk.Button(window,text="Add a Folder",bg="blue",command=self.browse_files)
+        self.paths_browse_button.grid(row=2,column=0,padx=(30,15),pady=(0,10),sticky=tk.NS)
 
-        self.paths_browse_button                 = tk.Button(window,text="Add a Folder",command=self.browse_files)
-        self.paths_browse_button.grid(row=1,column=2,padx=(5,15),pady=(0,20),sticky=tk.E)
-
-    def add_api_key_labels_and_browse_button(self):
+    def add_api_key_labels(self):
         self.api_key_label                       = tk.Label(window,text="Path to API key file",bg="white")
-        self.api_key_label.grid(row=2,column=0,padx=(30,15),pady=(0,20),sticky=tk.W)
+        self.api_key_label.grid(row=3,column=0,padx=(30,15),pady=(0,10),sticky=tk.W)
 
         self.api_key_actual_label                = tk.Label(window,bg="white")
-        self.api_key_actual_label.grid(row=2,column=1,padx=(15,15),pady=(0,20),sticky=tk.W)
+        self.api_key_actual_label.grid(row=3,column=1,padx=(15,15),pady=(0,10),sticky=tk.W)
 
+    def add_api_key_browse_button(self):
         self.api_key_browse_button               = tk.Button(window,text="Select a File",command=self.browse_api_key)
-        self.api_key_browse_button.grid(row=2,column=2,padx=(5,15),pady=(0,20),sticky=tk.E)
+        self.api_key_browse_button.grid(row=4,column=0,padx=(30,15),pady=(0,10),sticky=tk.NS)
 
     def add_diagnostic_checkbox_and_label(self):
         def callback(url):
@@ -293,24 +299,24 @@ class MainApplication(tk.Frame):
         self.agree_checkbox.state(['!alternate'])
         self.agree_checkbox.state(['!disabled','selected'])
 
-        self.agree_checkbox.grid(row=3,column=0,padx=(30,5),pady=(0,20),sticky=tk.E)
+        self.agree_checkbox.grid(row=5,column=0,padx=(30,5),pady=(0,20),sticky=tk.E)
 
         self.link_label                      = tk.Label(window, text="I agree to the Stormcloud Terms and Conditions.", fg="blue", cursor="hand2")
         self.link_label.bind("<Button-1>", lambda e: callback("https://www.github.com/runt1me/stormcloud"))
-        self.link_label.grid(row=3,column=1,padx=(0,15),pady=(0,20),columnspan=2,sticky=tk.W)
+        self.link_label.grid(row=5,column=1,padx=(0,15),pady=(0,20),columnspan=3,sticky=tk.W)
 
     def add_submit_button(self):
         self.submit_button                       = tk.Button(window,text="Install",width=20,command=self.verify_settings_and_begin_install)
         self.submit_button.place(x = 120, y = 300)
-        self.submit_button.grid(row=4,column=0,padx=(40,0),pady=(0,20),columnspan=2,sticky=tk.NS)
+        self.submit_button.grid(row=6,column=0,padx=(40,0),pady=(0,20),columnspan=2,sticky=tk.NS)
 
     def add_error_label(self):
         self.error_label                         = tk.Label(window,text="",bg="white",fg="red")
-        self.error_label.grid(row=5,column=0,padx=(40,0),pady=(0,5),columnspan=2,sticky=tk.NS)
+        self.error_label.grid(row=7,column=0,padx=(40,0),pady=(0,5),columnspan=2,sticky=tk.NS)
 
     def add_stdout_label(self):
         self.stdout_label                        = tk.Label(window,text="",bg="white",fg="green",anchor="w",justify=tk.LEFT)
-        self.stdout_label.grid(row=6,column=0,padx=(40,0),pady=(0,20),columnspan=2,sticky=tk.NS)
+        self.stdout_label.grid(row=8,column=0,padx=(40,0),pady=(0,20),columnspan=2,sticky=tk.NS)
 
     def browse_files(self):
         filename = tk.filedialog.askdirectory(
@@ -319,18 +325,55 @@ class MainApplication(tk.Frame):
         )
 
         if filename:
-            self.backup_paths.append(filename)
-            self.backup_paths_actual_label.configure(text=",".join(self.backup_paths))
+            # TODO: clean this hot garbage up later
+            # Add file path label, checkbox and label in the correct row
+            actual_label_this_row = tk.Label(window,bg="white")
+            actual_label_this_row.grid(
+                row=self.backup_label_current_row,
+                column=1,
+                padx=(15,15),pady=(0,5),
+                sticky=tk.W
+            )
 
-    def browse_files_recursive(self):
-        filename = filedialog.askdirectory(
-            initialdir = "/",
-            title = "Select a Folder",
-        )
+            actual_label_this_row.configure(text=filename)
 
-        if filename:
-            self.recursive_backup_paths.append(filename)
-            self.recursive_backup_paths_actual_label.configure(text=",".join(self.recursive_backup_paths))
+            checkbox_this_row = ttk.Checkbutton(window)
+            checkbox_this_row.state(['!alternate'])
+            checkbox_this_row.state(['!disabled','selected'])
+
+            checkbox_this_row.grid(
+                row=self.backup_label_current_row,
+                column=2,
+                padx=(15,0),pady=(0,5),
+                sticky=tk.E
+            )
+
+            include_subfolders_label_this_row = tk.Label(window,bg="white")
+            include_subfolders_label_this_row.grid(
+                row=self.backup_label_current_row,
+                column=3,
+                padx=(0,15),pady=(0,5),
+                sticky=tk.W
+            )
+
+            include_subfolders_label_this_row.configure(text="Include Subfolders")
+
+            # Add to master list of paths and rows
+            self.backup_paths_master_list.append((filename, checkbox_this_row))
+
+            # Increment row
+            self.backup_label_current_row += 1
+
+            if self.backup_label_current_row > 1:
+                # Move everything below this row down
+                self.api_key_label.grid(row=self.api_key_label.grid_info()['row']+1)
+                self.api_key_actual_label.grid(row=self.api_key_actual_label.grid_info()['row']+1)
+                self.api_key_browse_button.grid(row=self.api_key_browse_button.grid_info()['row']+1)
+                self.agree_checkbox.grid(row=self.agree_checkbox.grid_info()['row']+1)
+                self.link_label.grid(row=self.link_label.grid_info()['row']+1)
+                self.submit_button.grid(row=self.submit_button.grid_info()['row']+1)
+                self.error_label.grid(row=self.error_label.grid_info()['row']+1)
+                self.stdout_label.grid(row=self.stdout_label.grid_info()['row']+1)
 
     def browse_api_key(self):
         filename = filedialog.askopenfilename(
@@ -344,6 +387,12 @@ class MainApplication(tk.Frame):
 
     def verify_settings_and_begin_install(self):
         self.device_name = self.device_name_entry.get()
+
+        for path, checkbox in self.backup_paths_master_list:
+            if checkbox.instate(['selected']):
+                self.recursive_backup_paths.append(path)
+            else:
+                self.backup_paths.append(path)
 
         if self.verify_settings():
             self.begin_install()
@@ -367,6 +416,12 @@ class MainApplication(tk.Frame):
 
             return False
 
+        if not self.agree_checkbox.instate(['selected']):
+            error_text = "You must agree to the terms and conditions."
+            self.error_label.configure(text="Error: %s" %error_text)
+
+            return False
+
         self.error_label.configure(text="Settings are valid, continuing...",fg="black")
         self.error_label.update()
         return True
@@ -375,6 +430,9 @@ class MainApplication(tk.Frame):
         # Set default values here, might make these alterable through "advanced settings" later
         backup_time = 23
         keepalive_freq = 300
+
+        print("Nonrecursive %s" %self.backup_paths)
+        print("Recursive %s" %self.recursive_backup_paths)
 
         self.main(
             self.device_name,
