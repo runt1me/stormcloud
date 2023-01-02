@@ -13,9 +13,9 @@ import crypto_utils
 SERVER_NAME = "www2.darkage.io"
 SERVER_PORT = 9443
 
-def ship_file_to_server(api_key,agent_id,path):
-    encrypted_content, encrypted_size   = crypto_utils.encrypt_file(path)
-    encrypted_path, encrypted_path_size = crypto_utils.encrypt_content(path)
+def ship_file_to_server(api_key,agent_id,secret_key,path):
+    encrypted_content, encrypted_size   = crypto_utils.encrypt_file(path,secret_key)
+    encrypted_path, encrypted_path_size = crypto_utils.encrypt_content(path,secret_key)
 
     file_backup_request_data = json.dumps({
         'request_type': "backup_file",

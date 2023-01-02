@@ -471,7 +471,6 @@ class MainApplication(tk.Frame):
             return
         
         self.log_and_update_stdout("Successfully conducted connectivity test with server.")
-        return
         
         logging.log(logging.INFO, "Conducting initial device survey...")
 

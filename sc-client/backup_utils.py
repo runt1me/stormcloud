@@ -35,49 +35,49 @@ def check_for_backup(backup_time,current_run_time,previous_run_time):
     else:
         return False
 
-def perform_backup(paths,paths_recursive,api_key,agent_id,dbconn,ignore_hash):
+def perform_backup(paths,paths_recursive,api_key,agent_id,secret_key,dbconn,ignore_hash):
     logging.log(logging.INFO,"Beginning backup!")
     
     if ignore_hash:
         logging.log(logging.INFO,"Ignoring the hash database and attempting to force backup of files.")
 
-    process_paths_nonrecursive(paths,api_key,agent_id,dbconn,ignore_hash)
-    process_paths_recursive(paths_recursive,api_key,agent_id,dbconn,ignore_hash)
+    process_paths_nonrecursive(paths,api_key,agent_id,secret_key,dbconn,ignore_hash)
+    process_paths_recursive(paths_recursive,api_key,agent_id,secret_key,dbconn,ignore_hash)
 
-def process_paths_nonrecursive(paths,api_key,agent_id,dbconn,ignore_hash):
+def process_paths_nonrecursive(paths,api_key,agent_id,secret_key,dbconn,ignore_hash):
     for path in paths:
         try:
             logging.log(logging.INFO,"==   %s   ==" % path)
             path_obj = pathlib.Path(path)
 
             if path_obj.is_file():
-                process_file(path_obj,api_key,agent_id,dbconn,ignore_hash)
+                process_file(path_obj,api_key,agent_id,secret_key,dbconn,ignore_hash)
 
             elif path_obj.is_dir():
                 for file_obj in [p for p in path_obj.iterdir() if p.is_file()]:
-                    process_file(file_obj,api_key,agent_id,dbconn,ignore_hash)
+                    process_file(file_obj,api_key,agent_id,secret_key,dbconn,ignore_hash)
 
         except Exception as e:
             logging.log(logging.WARN, "Caught exception when trying to process path %s: %s" % (path,e))
 
-def process_paths_recursive(paths,api_key,agent_id,dbconn,ignore_hash):
+def process_paths_recursive(paths,api_key,agent_id,secret_key,dbconn,ignore_hash):
     for path in paths:
         try:
             logging.log(logging.INFO, "==   %s (-R)  ==" % path)
             path_obj = pathlib.Path(path)
 
-            process_one_path_recursive(path_obj,api_key,agent_id,dbconn,ignore_hash)
+            process_one_path_recursive(path_obj,api_key,agent_id,secret_key,dbconn,ignore_hash)
         except Exception as e:
             logging.log(logging.WARN, "Caught exception when trying to process recursive path %s: %s" % (path,e))
 
-def process_one_path_recursive(target_path,api_key,agent_id,dbconn,ignore_hash):
+def process_one_path_recursive(target_path,api_key,agent_id,secret_key,dbconn,ignore_hash):
     for file in target_path.iterdir():
         if file.is_dir():
-            process_one_path_recursive(file,api_key,agent_id,dbconn,ignore_hash)
+            process_one_path_recursive(file,api_key,agent_id,secret_key,dbconn,ignore_hash)
         else:
-            process_file(file,api_key,agent_id,dbconn,ignore_hash)
+            process_file(file,api_key,agent_id,secret_key,dbconn,ignore_hash)
 
-def process_file(file_path_obj,api_key,agent_id,dbconn,ignore_hash):
+def process_file(file_path_obj,api_key,agent_id,secret_key,dbconn,ignore_hash):
     if not ignore_hash:
         status = check_hash_db(file_path_obj,dbconn)
     else:
@@ -92,7 +92,7 @@ def process_file(file_path_obj,api_key,agent_id,dbconn,ignore_hash):
         else:
             logging.log(logging.INFO,"Backing up file: %s" %file_path_obj.name)
 
-            ret = network_utils.ship_file_to_server(api_key,agent_id,file_path_obj.resolve())
+            ret = network_utils.ship_file_to_server(api_key,agent_id,secret_key,file_path_obj.resolve())
             if ret == 0:
                 update_hash_db(file_path_obj, dbconn)
             else:
