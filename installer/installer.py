@@ -234,6 +234,7 @@ def initialize_logging():
     )
 
 class MainApplication(tk.Frame):
+    # TODO: maybe refactor this to use a tk Frame at some point, but too much work for now.
     def __init__(self,parent,*args,**kwargs):
         tk.Frame.__init__(self,parent,*args,**kwargs)
         self.parent = parent
@@ -247,6 +248,20 @@ class MainApplication(tk.Frame):
         self.backup_paths_master_list = []
 
         self.configure_gui()
+
+        # Currently cannot iterate over all widgets without using a tk frame.
+        # If I switch this over to a tk frame I could clean this up by looping over
+        # all widgets and then checking the value of the row
+        self.widgets_below_backup_labels = [
+            self.api_key_label,
+            self.api_key_actual_label,
+            self.api_key_browse_button,
+            self.agree_checkbox,
+            self.link_label,
+            self.submit_button,
+            self.error_label,
+            self.stdout_label
+        ]
 
     def __str__(self):
         return "%s" % vars(self)
@@ -325,55 +340,31 @@ class MainApplication(tk.Frame):
         )
 
         if filename:
-            # TODO: clean this hot garbage up later
-            # Add file path label, checkbox and label in the correct row
-            actual_label_this_row = tk.Label(window,bg="white")
-            actual_label_this_row.grid(
-                row=self.backup_label_current_row,
-                column=1,
-                padx=(15,15),pady=(0,5),
-                sticky=tk.W
-            )
-
-            actual_label_this_row.configure(text=filename)
-
-            checkbox_this_row = ttk.Checkbutton(window)
-            checkbox_this_row.state(['!alternate'])
-            checkbox_this_row.state(['!disabled','selected'])
-
-            checkbox_this_row.grid(
-                row=self.backup_label_current_row,
-                column=2,
-                padx=(15,0),pady=(0,5),
-                sticky=tk.E
-            )
-
-            include_subfolders_label_this_row = tk.Label(window,bg="white")
-            include_subfolders_label_this_row.grid(
-                row=self.backup_label_current_row,
-                column=3,
-                padx=(0,15),pady=(0,5),
-                sticky=tk.W
-            )
-
-            include_subfolders_label_this_row.configure(text="Include Subfolders")
-
-            # Add to master list of paths and rows
-            self.backup_paths_master_list.append((filename, checkbox_this_row))
-
-            # Increment row
-            self.backup_label_current_row += 1
+            self.add_backup_path_one_row(filename)
 
             if self.backup_label_current_row > 1:
-                # Move everything below this row down
-                self.api_key_label.grid(row=self.api_key_label.grid_info()['row']+1)
-                self.api_key_actual_label.grid(row=self.api_key_actual_label.grid_info()['row']+1)
-                self.api_key_browse_button.grid(row=self.api_key_browse_button.grid_info()['row']+1)
-                self.agree_checkbox.grid(row=self.agree_checkbox.grid_info()['row']+1)
-                self.link_label.grid(row=self.link_label.grid_info()['row']+1)
-                self.submit_button.grid(row=self.submit_button.grid_info()['row']+1)
-                self.error_label.grid(row=self.error_label.grid_info()['row']+1)
-                self.stdout_label.grid(row=self.stdout_label.grid_info()['row']+1)
+                for widget in self.widgets_below_backup_labels:
+                    self.move_widget_down_one_row(widget)
+
+    def add_backup_path_one_row(self, filename):
+        actual_label_this_row = tk.Label(window,bg="white")
+        actual_label_this_row.grid(row=self.backup_label_current_row,column=1,padx=(15,15),pady=(0,5),sticky=tk.W)
+        actual_label_this_row.configure(text=filename)
+
+        checkbox_this_row = ttk.Checkbutton(window)
+        checkbox_this_row.state(['!alternate'])
+        checkbox_this_row.state(['!disabled','selected'])
+        checkbox_this_row.grid(row=self.backup_label_current_row,column=2,padx=(15,0),pady=(0,5),sticky=tk.E)
+
+        include_subfolders_label_this_row = tk.Label(window,bg="white")
+        include_subfolders_label_this_row.grid(row=self.backup_label_current_row,column=3,padx=(0,15),pady=(0,5),sticky=tk.W)
+        include_subfolders_label_this_row.configure(text="Include Subfolders")
+
+        self.backup_paths_master_list.append((filename, checkbox_this_row))
+        self.backup_label_current_row += 1
+
+    def move_widget_down_one_row(self, widget):
+        widget.grid(row=widget.grid_info()['row']+1)
 
     def browse_api_key(self):
         filename = filedialog.askopenfilename(
