@@ -153,8 +153,6 @@ def is_file_in_db(file_path, cursor):
     return cursor.fetchall()
 
 def get_md5_hash(path_to_file):
-    # TODO: handle permission denied errors
-    # Reads in chunks to limit memory footprint
     with open(path_to_file, "rb") as f:
         file_hash = hashlib.md5()
         while chunk := f.read(8192):

@@ -501,6 +501,10 @@ class MainApplication(tk.Frame):
             api_key
         )
 
+        # TODO: download platform-specific stormcloud executable and place in current directory
+        # Also do platform-specific persistence. Probably startup folder for windows.
+        # Have a button in the installer to launch stormcloud when done.
+        # This is almost 100% going to pop on every security product as malware so will need to address this.
         self.log_and_update_stdout("Ready to launch stormcloud!")
 
 if __name__ == '__main__':

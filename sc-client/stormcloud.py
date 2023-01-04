@@ -13,10 +13,7 @@ import keepalive_utils
 import backup_utils
 import logging_utils
 
-#number of seconds in between actions
 ACTION_TIMER = 90
-
-#updates based on number of threads created
 THREAD_NUM = 0
 
 def main(settings_file_path,hash_db_file_path,ignore_hash_db):
@@ -37,7 +34,7 @@ def action_loop_and_sleep(settings, dbconn, ignore_hash):
     active_thread = None
 
     while True:
-        cur_run_time = datetime.now()
+        cur_run_time           = datetime.now()
         cur_keepalive_freq = int(settings['KEEPALIVE_FREQ'])
         backup_time        = int(settings['BACKUP_TIME'])
         backup_paths           = settings['BACKUP_PATHS']
@@ -48,9 +45,6 @@ def action_loop_and_sleep(settings, dbconn, ignore_hash):
 
         logging.log(logging.INFO,"Stormcloud is running with settings: %s" % (settings))
 
-        #if backup_utils.check_for_backup(backup_time,cur_run_time,prev_run_time):
-        backup_utils.perform_backup(backup_paths,recursive_backup_paths,api_key,agent_id,secret_key,dbconn,ignore_hash)
-
         if active_thread is None:
             active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id)
         else:
@@ -60,6 +54,8 @@ def action_loop_and_sleep(settings, dbconn, ignore_hash):
                     active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id)
             else:
                 active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id)
+
+        backup_utils.perform_backup(backup_paths,recursive_backup_paths,api_key,agent_id,secret_key,dbconn,ignore_hash)
 
         prev_keepalive_freq = cur_keepalive_freq
         prev_run_time = cur_run_time
@@ -157,24 +153,24 @@ def read_agent_id_file(agent_id_file_path):
 if __name__ == "__main__":
     description = r"""
 
- ______     ______   ______     ______     __    __                    
-/\  ___\   /\__  _\ /\  __ \   /\  == \   /\ "-./  \                   
-\ \___  \  \/_/\ \/ \ \ \/\ \  \ \  __<   \ \ \-./\ \                  
- \/\_____\    \ \_\  \ \_____\  \ \_\ \_\  \ \_\ \ \_\                 
-  \/_____/     \/_/   \/_____/   \/_/ /_/   \/_/  \/_/                 
-                                                                       
-             ______     __         ______     __  __     _____         
-            /\  ___\   /\ \       /\  __ \   /\ \/\ \   /\  __-.       
-            \ \ \____  \ \ \____  \ \ \/\ \  \ \ \_\ \  \ \ \/\ \      
-             \ \_____\  \ \_____\  \ \_____\  \ \_____\  \ \____-      
-              \/_____/   \/_____/   \/_____/   \/_____/   \/____/      
-                                                                       
-                            ______     ______     ______     ______    
-                           /\  ___\   /\  __ \   /\  == \   /\  ___\   
-                           \ \ \____  \ \ \/\ \  \ \  __<   \ \  __\   
-                            \ \_____\  \ \_____\  \ \_\ \_\  \ \_____\ 
-                             \/_____/   \/_____/   \/_/ /_/   \/_____/ 
-                                                                                                                                                                                                                                                                    
+        ______     ______   ______     ______     __    __                    
+       /\  ___\   /\__  _\ /\  __ \   /\  == \   /\ "-./  \                   
+       \ \___  \  \/_/\ \/ \ \ \/\ \  \ \  __<   \ \ \-./\ \                  
+        \/\_____\    \ \_\  \ \_____\  \ \_\ \_\  \ \_\ \ \_\                 
+         \/_____/     \/_/   \/_____/   \/_/ /_/   \/_/  \/_/                 
+                                                                              
+                    ______     __         ______     __  __     _____         
+                   /\  ___\   /\ \       /\  __ \   /\ \/\ \   /\  __-.       
+                   \ \ \____  \ \ \____  \ \ \/\ \  \ \ \_\ \  \ \ \/\ \      
+                    \ \_____\  \ \_____\  \ \_____\  \ \_____\  \ \____-      
+                     \/_____/   \/_____/   \/_____/   \/_____/   \/____/      
+                                                                              
+                                   ______     ______     ______     ______    
+                                  /\  ___\   /\  __ \   /\  == \   /\  ___\   
+                                  \ \ \____  \ \ \/\ \  \ \  __<   \ \  __\   
+                                   \ \_____\  \ \_____\  \ \_\ \_\  \ \_____\ 
+                                    \/_____/   \/_____/   \/_/ /_/   \/_____/ 
+                                                                                                                                                                                                                                                                           
 
     """
 

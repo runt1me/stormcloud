@@ -76,8 +76,5 @@ def dump_file_info(path,encrypted_size):
     logging.log(logging.INFO,"\tSIZE WHEN ENCRYPTED: %d" %encrypted_size)
 
 def calculate_timeout(data_length):
-    # TODO: address issues with timeouts.
-    # maybe change timeout based on how much data is being sent?
-    # import speedtest; s = speedtest.Speedtest(); s.get_servers(); s.get_best_server(); s.download(); s.upload();
-    # res = s.results.dict(); return res['download'], res['upload'], res['ping']
+    # TODO: send data in chunks
     return 300
