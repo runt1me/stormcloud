@@ -23,11 +23,23 @@ SERVER_NAME="www2.darkage.io"
 SERVER_PORT=8443
 STORMCLOUD_VERSION="1.0.0"
 
+WINDOWS_OS_SC_CLIENT_URL = "https://www2.darkage.io/windows-10-stormcloud-client-1.0.0.exe"
+MACOS_SC_CLIENT_URL      = "https://www2.darkage.io/macos-x86_64-i386-64-stormcloud-client-1.0.0"
+
+HASH_TABLE = {
+    WINDOWS_OS_SC_CLIENT_URL: "md5 hash",
+    MACOS_SC_CLIENT_URL: "md5 hash"
+}
+
 def conduct_connectivity_test(api_key,server_name,server_port):
     logging.log(
         logging.INFO, "Attempting connectivity test with server: %s:%d" % (server_name, server_port)
     )
 
+    # TODO: Return codes
+    # 0 -> success
+    # 1 -> invalid api key presented
+    # 2 -> no response from server
     send_hello_data = json.dumps({'request_type':'Hello','api_key':api_key})
     return tls_send_json_data(send_hello_data, 'hello-response', server_name, server_port)
 
@@ -170,7 +182,28 @@ def configure_settings(send_logs, backup_time, keepalive_freq, backup_paths, bac
         output_string = "\n".join(lines_to_write)
         settings_file.write(output_string)
 
+def download_stormcloud_client(os_info, target_folder):
+    # TODO: Probably should have the user specify an install folder and then make a link in the Startup folder.
+    # TODO: maybe also verify hashes match.
+    if 'Windows' in os_info:
+        sc_client_data, sc_client_hash = download_to_folder(WINDOWS_OS_SC_CLIENT_URL, target_folder)
+
+        if HASH_TABLE[WINDOWS_OS_SC_CLIENT_URL] != sc_client_hash:
+            # Bail - maybe allow them to override if they know what they are doing
+            logging.log(logging.ERROR, "Stormcloud client hash did not match the expected hash - bailing.")
+
+        return sc_client_data
+        
+    elif 'macOS' in os_info:
+        download_to_folder(MACOS_SC_CLIENT_URL, target_folder)
+
+def download_to_folder(url, folder):
+    # curl and write to disk in the folder
+    # return 
+    return
+
 def tls_send_json_data(json_data, expected_response_data, server_name, server_port):
+    # TODO: verify server TLS certificate
     if not validate_json(json_data):
         logging.log("Invalid JSON data received in tls_send_json_data(); not sending to server.")
         return
@@ -290,7 +323,7 @@ class MainApplication(tk.Frame):
 
     def add_backup_browse_button(self):
         # Place backup label and checkboxes at self.backup_label_current_row
-        self.paths_browse_button                 = tk.Button(window,text="Add a Folder",bg="blue",command=self.browse_files)
+        self.paths_browse_button                 = tk.Button(window,text="Add a Folder",command=self.browse_files)
         self.paths_browse_button.grid(row=2,column=0,padx=(30,15),pady=(0,10),sticky=tk.NS)
 
     def add_api_key_labels(self):
@@ -422,9 +455,6 @@ class MainApplication(tk.Frame):
         backup_time = 23
         keepalive_freq = 300
 
-        print("Nonrecursive %s" %self.backup_paths)
-        print("Recursive %s" %self.recursive_backup_paths)
-
         self.main(
             self.device_name,
             self.agree_checkbox.instate(['selected']),
@@ -463,8 +493,15 @@ class MainApplication(tk.Frame):
         initialize_logging()
         self.log_and_update_stdout("Beginning install of Stormcloud v%s" % STORMCLOUD_VERSION)
 
+        # TODO: handle the following exceptions
+        # 1. invalid API key format in file
+        # 2. valid API key format but server rejects it as not in the database
         api_key = read_api_key_file(api_key_file_path)
 
+        # TODO: Return codes
+        # 0 -> success
+        # 1 -> invalid api key presented
+        # 2 -> no response from server
         ret, _ = conduct_connectivity_test(api_key, SERVER_NAME, SERVER_PORT)
         if ret != 0:
             self.log_and_update_stderr("Install failed (unable to conduct connectivity test with server). Return code: %d.\nPlease verify that you are connected to the internet.\nIf problems continue, please contact our customer support team." % ret)
@@ -505,6 +542,17 @@ class MainApplication(tk.Frame):
         # Also do platform-specific persistence. Probably startup folder for windows.
         # Have a button in the installer to launch stormcloud when done.
         # This is almost 100% going to pop on every security product as malware so will need to address this.
+
+        # TODO: build this into installer GUI
+        target_folder = "C:\\Notarealpath"
+        sc_exe_platform_specific = download_stormcloud_client(survey_data['operating_system'], target_folder)
+
+        if 'Windows' in survey_data['operating_system']:
+            # TODO: probably make a link to the target path in the startup folder.
+            ret = configure_persistence_windows(sc_exe_platform_specific)
+        elif 'macOS' in survey_data['operating_system']:
+          ret = configure_persistence_macos(sc_exe_platform_specific)
+
         self.log_and_update_stdout("Ready to launch stormcloud!")
 
 if __name__ == '__main__':
