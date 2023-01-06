@@ -3,6 +3,12 @@ import socket, ssl
 import json
 import platform
 from subprocess import Popen, PIPE
+from pathlib import Path
+
+import webbrowser
+import requests
+import os, winshell
+from win32com.client import Dispatch
 
 import logging
 import argparse
@@ -14,8 +20,6 @@ from tkinter import ttk
 from tkinter import messagebox
 from tkinter import filedialog
 
-import webbrowser
-
 # saving this as a test case for later when i make unit tests
 #ret, _ = tls_send_json_data("not valid json data", "response", SERVER_NAME, SERVER_PORT)
 
@@ -23,13 +27,8 @@ SERVER_NAME="www2.darkage.io"
 SERVER_PORT=8443
 STORMCLOUD_VERSION="1.0.0"
 
-WINDOWS_OS_SC_CLIENT_URL = "https://www2.darkage.io/windows-10-stormcloud-client-1.0.0.exe"
-MACOS_SC_CLIENT_URL      = "https://www2.darkage.io/macos-x86_64-i386-64-stormcloud-client-1.0.0"
-
-HASH_TABLE = {
-    WINDOWS_OS_SC_CLIENT_URL: "md5 hash",
-    MACOS_SC_CLIENT_URL: "md5 hash"
-}
+WINDOWS_OS_SC_CLIENT_URL = "https://www2.darkage.io/sc-dist/windows-x86_64-stormcloud-client-1.0.0.exe"
+MACOS_SC_CLIENT_URL      = "https://www2.darkage.io/sc-dist/macos-x86_64-i386-64-stormcloud-client-1.0.0"
 
 def conduct_connectivity_test(api_key,server_name,server_port):
     logging.log(
@@ -183,29 +182,70 @@ def configure_settings(send_logs, backup_time, keepalive_freq, backup_paths, bac
         settings_file.write(output_string)
 
 def download_stormcloud_client(os_info, target_folder):
-    # TODO: Probably should have the user specify an install folder and then make a link in the Startup folder.
-    # TODO: maybe also verify hashes match.
     if 'Windows' in os_info:
-        sc_client_data, sc_client_hash = download_to_folder(WINDOWS_OS_SC_CLIENT_URL, target_folder)
-
-        if HASH_TABLE[WINDOWS_OS_SC_CLIENT_URL] != sc_client_hash:
-            # Bail - maybe allow them to override if they know what they are doing
-            logging.log(logging.ERROR, "Stormcloud client hash did not match the expected hash - bailing.")
-
-        return sc_client_data
+        return download_to_folder(WINDOWS_OS_SC_CLIENT_URL, target_folder, "stormcloud.exe")
         
     elif 'macOS' in os_info:
-        download_to_folder(MACOS_SC_CLIENT_URL, target_folder)
+        return download_to_folder(MACOS_SC_CLIENT_URL, target_folder, "stormcloud")
 
-def download_to_folder(url, folder):
-    # curl and write to disk in the folder
-    # return 
-    return
+    else:
+        logging.log(logging.ERROR, "No supported version of stormcloud was found for the Operating System detected.")
+        logging.log(logging.ERROR, "Please reach out to our customer support team for assistance.")
+        return (1, None)
+
+def download_to_folder(url, folder, file_name):
+    try:
+        response = requests.get(url)
+    except SSLError as e:
+        logging.log(logging.ERROR, "Caught SSL Error when trying to download from %s: %s" % (url,e))
+    except Exception as e:
+        logging.log(logging.ERROR, "Caught exception when trying to download from %s: %s" % (url,e))
+
+    if response:
+        try:
+            full_path = folder + file_name
+            with open(full_path,'wb') as f:
+                for chunk in response.iter_content():
+                    f.write(chunk)
+
+            return (0, full_path)
+        except Exception as e:
+            logging.log(logging.ERROR, "Caught exception when trying to write stormcloud to file: %s. Error: %s" % (full_path,e))
+
+    # Fail case
+    return (1, None)
+
+def configure_persistence(os_info, sc_client_installed_path):
+    sc_client_installed_path_obj = Path(sc_client_installed_path)
+    if 'Windows' in os_info:
+        try:
+            shortcut_path = os.getenv('APPDATA') + "\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\stormcloud.lnk"
+            target_path   = str(sc_client_installed_path_obj)
+            working_dir   = str(sc_client_installed_path_obj.parent)
+
+            shell = Dispatch('Wscript.Shell')
+            shortcut = shell.CreateShortCut(shortcut_path)
+            shortcut.Targetpath = target_path
+            shortcut.WorkingDirectory = working_dir
+            shortcut.save()
+
+            return (0, shortcut_path)
+        except Exception as e:
+            logging.log(logging.ERROR, "Failed to create shortcut: %s" % e)
+            return (1, None)
+
+    elif 'macOS' in os_info:
+        # TODO: ???
+        logging.log(logging.ERROR, "Unsupported operating system encountered when trying to add to startup process.")
+    else:
+        logging.log(logging.ERROR, "Unsupported operating system encountered when trying to add to startup process.")
+
+    return (1, None)
 
 def tls_send_json_data(json_data, expected_response_data, server_name, server_port):
     # TODO: verify server TLS certificate
     if not validate_json(json_data):
-        logging.log("Invalid JSON data received in tls_send_json_data(); not sending to server.")
+        logging.log(logging.INFO, "Invalid JSON data received in tls_send_json_data(); not sending to server.")
         return
 
     s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
@@ -538,20 +578,25 @@ class MainApplication(tk.Frame):
             api_key
         )
 
-        # TODO: download platform-specific stormcloud executable and place in current directory
-        # Also do platform-specific persistence. Probably startup folder for windows.
-        # Have a button in the installer to launch stormcloud when done.
-        # This is almost 100% going to pop on every security product as malware so will need to address this.
+        # TODO: target folder comes from GUI
+        # for windows: default to os.getenv("HOMEDRIVE") + os.getenv("HOMEPATH") + "\\AppData\\Roaming\\stormcloud\\"
+        target_folder = os.getenv("HOMEDRIVE") + os.getenv("HOMEPATH") + "\\AppData\\Roaming\\stormcloud\\"
 
-        # TODO: build this into installer GUI
-        target_folder = "C:\\Notarealpath"
-        sc_exe_platform_specific = download_stormcloud_client(survey_data['operating_system'], target_folder)
+        self.log_and_update_stdout("Downloading stormcloud client...")
+        ret, sc_client_installed_path = download_stormcloud_client(survey_data['operating_system'], target_folder)
+        if ret != 0:
+            self.log_and_update_stderr("Failed to download stormcloud for your platform. Return code: %d.\nPlease contact our customer support team for further assistance." %ret)
+        else:
+            self.log_and_update_stdout("Successfully downloaded stormcloud client and wrote to %s." % sc_client_installed_path)
 
-        if 'Windows' in survey_data['operating_system']:
-            # TODO: probably make a link to the target path in the startup folder.
-            ret = configure_persistence_windows(sc_exe_platform_specific)
-        elif 'macOS' in survey_data['operating_system']:
-          ret = configure_persistence_macos(sc_exe_platform_specific)
+        self.log_and_update_stdout("Adding Stormcloud to startup directory...")
+        ret, persistence_location = configure_persistence(survey_data['operating_system'], sc_client_installed_path)
+        if ret != 0:
+            self.log_and_update_stderr("Failed to add Stormcloud to startup process. Return code: %d.\nPlease contact our customer support team for further assistance." %ret)
+        else:
+            self.log_and_update_stdout("Successfully added Stormcloud to startup process. Location: %s" % persistence_location)
+
+        # TODO: button in the installer to launch stormcloud when done
 
         self.log_and_update_stdout("Ready to launch stormcloud!")
 
