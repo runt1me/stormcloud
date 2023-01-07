@@ -7,6 +7,8 @@ from pathlib import Path
 
 import webbrowser
 import requests
+from requests.exceptions import SSLError
+
 import os, winshell
 from win32com.client import Dispatch
 
@@ -204,6 +206,8 @@ def download_to_folder(url, folder, file_name):
     if response:
         try:
             full_path = folder + file_name
+            os.makedirs(os.path.dirname(full_path), exist_ok=True)
+            
             with open(full_path,'wb') as f:
                 for chunk in response.iter_content():
                     f.write(chunk)
@@ -553,6 +557,12 @@ class MainApplication(tk.Frame):
 
         survey_data = conduct_device_initial_survey(api_key,device_type)
 
+        try:
+            survey_data_json = json.loads(survey_data)
+        except Exception as e:
+            logging.log(logging.ERROR, "Unable to parse JSON from device survey.")
+            survey_data_json = None
+
         logging.log(logging.INFO, "Device survey complete.")
         self.log_and_update_stdout("Sending device registration request to server...")
 
@@ -583,14 +593,14 @@ class MainApplication(tk.Frame):
         target_folder = os.getenv("HOMEDRIVE") + os.getenv("HOMEPATH") + "\\AppData\\Roaming\\stormcloud\\"
 
         self.log_and_update_stdout("Downloading stormcloud client...")
-        ret, sc_client_installed_path = download_stormcloud_client(survey_data['operating_system'], target_folder)
+        ret, sc_client_installed_path = download_stormcloud_client(survey_data_json['operating_system'], target_folder)
         if ret != 0:
             self.log_and_update_stderr("Failed to download stormcloud for your platform. Return code: %d.\nPlease contact our customer support team for further assistance." %ret)
         else:
             self.log_and_update_stdout("Successfully downloaded stormcloud client and wrote to %s." % sc_client_installed_path)
 
         self.log_and_update_stdout("Adding Stormcloud to startup directory...")
-        ret, persistence_location = configure_persistence(survey_data['operating_system'], sc_client_installed_path)
+        ret, persistence_location = configure_persistence(survey_data_json['operating_system'], sc_client_installed_path)
         if ret != 0:
             self.log_and_update_stderr("Failed to add Stormcloud to startup process. Return code: %d.\nPlease contact our customer support team for further assistance." %ret)
         else:
