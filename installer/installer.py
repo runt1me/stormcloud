@@ -185,9 +185,13 @@ def configure_settings(send_logs, backup_time, keepalive_freq, backup_paths, bac
 
 def download_stormcloud_client(os_info, target_folder):
     if 'Windows' in os_info:
+        if not target_folder.endswith('\\'):
+            target_folder += "\\"
         return download_to_folder(WINDOWS_OS_SC_CLIENT_URL, target_folder, "stormcloud.exe")
         
     elif 'macOS' in os_info:
+        if not target_folder.endswith('/'):
+            target_folder += "/"
         return download_to_folder(MACOS_SC_CLIENT_URL, target_folder, "stormcloud")
 
     else:
@@ -319,7 +323,9 @@ class MainApplication(tk.Frame):
         self.recursive_backup_paths = []
         self.api_key_file_path = ""
         self.device_name = ""
+        self.install_directory = ""
         self.stdout_msgs = []
+        self.TERMS_AND_CONDITIONS_URL = "https://www.github.com/runt1me/stormcloud"
 
         self.backup_label_current_row = 1
         self.backup_paths_master_list = []
@@ -333,6 +339,9 @@ class MainApplication(tk.Frame):
             self.api_key_label,
             self.api_key_actual_label,
             self.api_key_browse_button,
+            self.install_directory_label,
+            self.install_directory_actual_label,
+            self.install_directory_browse_button,
             self.agree_checkbox,
             self.link_label,
             self.submit_button,
@@ -349,6 +358,8 @@ class MainApplication(tk.Frame):
         self.add_backup_browse_button()
         self.add_api_key_labels()
         self.add_api_key_browse_button()
+        self.add_install_directory_browse_labels()
+        self.add_install_directory_browse_button()
         self.add_diagnostic_checkbox_and_label()
         self.add_submit_button()
         self.add_error_label()
@@ -372,7 +383,7 @@ class MainApplication(tk.Frame):
 
     def add_api_key_labels(self):
         self.api_key_label                       = tk.Label(window,text="Path to API key file",bg="white")
-        self.api_key_label.grid(row=3,column=0,padx=(30,15),pady=(0,10),sticky=tk.W)
+        self.api_key_label.grid(row=3,column=0,padx=(30,15),pady=(0,10),sticky=tk.NS)
 
         self.api_key_actual_label                = tk.Label(window,bg="white")
         self.api_key_actual_label.grid(row=3,column=1,padx=(15,15),pady=(0,10),sticky=tk.W)
@@ -380,6 +391,27 @@ class MainApplication(tk.Frame):
     def add_api_key_browse_button(self):
         self.api_key_browse_button               = tk.Button(window,text="Select a File",command=self.browse_api_key)
         self.api_key_browse_button.grid(row=4,column=0,padx=(30,15),pady=(0,10),sticky=tk.NS)
+
+    def add_install_directory_browse_labels(self):
+        self.install_directory_label                       = tk.Label(window,text="Install directory",bg="white")
+        self.install_directory_label.grid(row=5,column=0,padx=(30,15),pady=(0,10),sticky=tk.NS)
+
+        self.install_directory_actual_label                = tk.Label(window,bg="white")
+        self.install_directory_actual_label.grid(row=5,column=1,padx=(15,15),pady=(0,10),sticky=tk.W)
+        self.install_directory_actual_label.configure(text=self.get_default_install_path())
+
+    def add_install_directory_browse_button(self):
+        self.install_directory_browse_button      = tk.Button(window,text="Select a Directory",command=self.browse_install_directory)
+        self.install_directory_browse_button.grid(row=6,column=0,padx=(30,15),pady=(0,10),sticky=tk.NS)
+
+    def get_default_install_path(self):
+        os_info = platform.platform()
+
+        if 'Windows' in os_info:
+            return os.getenv("HOMEDRIVE") + os.getenv("HOMEPATH") + "\\AppData\\Roaming\\stormcloud"
+        else:
+            # TODO: come up with default paths for other OSes
+            return ""
 
     def add_diagnostic_checkbox_and_label(self):
         def callback(url):
@@ -391,24 +423,24 @@ class MainApplication(tk.Frame):
         self.agree_checkbox.state(['!alternate'])
         self.agree_checkbox.state(['!disabled','selected'])
 
-        self.agree_checkbox.grid(row=5,column=0,padx=(30,5),pady=(0,20),sticky=tk.E)
+        self.agree_checkbox.grid(row=7,column=0,padx=(30,5),pady=(0,20),sticky=tk.E)
 
-        self.link_label                      = tk.Label(window, text="I agree to the Stormcloud Terms and Conditions.", fg="blue", cursor="hand2")
-        self.link_label.bind("<Button-1>", lambda e: callback("https://www.github.com/runt1me/stormcloud"))
-        self.link_label.grid(row=5,column=1,padx=(0,15),pady=(0,20),columnspan=3,sticky=tk.W)
+        self.link_label                      = tk.Label(window, text="I agree to the Stormcloud Terms and Conditions.", bg="white", fg="blue", cursor="hand2")
+        self.link_label.bind("<Button-1>", lambda e: callback(self.TERMS_AND_CONDITIONS_URL))
+        self.link_label.grid(row=7,column=1,padx=(0,15),pady=(0,20),columnspan=3,sticky=tk.W)
 
     def add_submit_button(self):
         self.submit_button                       = tk.Button(window,text="Install",width=20,command=self.verify_settings_and_begin_install)
         self.submit_button.place(x = 120, y = 300)
-        self.submit_button.grid(row=6,column=0,padx=(40,0),pady=(0,20),columnspan=2,sticky=tk.NS)
+        self.submit_button.grid(row=8,column=0,padx=(40,0),pady=(0,20),columnspan=2,sticky=tk.NS)
 
     def add_error_label(self):
         self.error_label                         = tk.Label(window,text="",bg="white",fg="red")
-        self.error_label.grid(row=7,column=0,padx=(40,0),pady=(0,5),columnspan=2,sticky=tk.NS)
+        self.error_label.grid(row=9,column=0,padx=(40,0),pady=(0,5),columnspan=2,sticky=tk.NS)
 
     def add_stdout_label(self):
         self.stdout_label                        = tk.Label(window,text="",bg="white",fg="green",anchor="w",justify=tk.LEFT)
-        self.stdout_label.grid(row=8,column=0,padx=(40,0),pady=(0,20),columnspan=2,sticky=tk.NS)
+        self.stdout_label.grid(row=10,column=0,padx=(40,0),pady=(0,20),columnspan=2,sticky=tk.NS)
 
     def browse_files(self):
         filename = tk.filedialog.askdirectory(
@@ -419,7 +451,7 @@ class MainApplication(tk.Frame):
         if filename:
             self.add_backup_path_one_row(filename)
 
-            if self.backup_label_current_row > 1:
+            if self.backup_label_current_row > 2:
                 for widget in self.widgets_below_backup_labels:
                     self.move_widget_down_one_row(widget)
 
@@ -453,8 +485,19 @@ class MainApplication(tk.Frame):
             self.api_key_file_path = filename
             self.api_key_actual_label.configure(text="%s" % filename)
 
+    def browse_install_directory(self):
+        filename = filedialog.askdirectory(
+            initialdir = "/",
+            title = "Select directory to install stormcloud files to",
+        )
+
+        if filename:
+            self.install_directory = filename
+            self.install_directory_actual_label.configure(text="%s" % filename)
+
     def verify_settings_and_begin_install(self):
-        self.device_name = self.device_name_entry.get()
+        self.device_name       = self.device_name_entry.get()
+        self.install_directory = self.install_directory_actual_label.cget("text")
 
         for path, checkbox in self.backup_paths_master_list:
             if checkbox.instate(['selected']):
@@ -490,6 +533,12 @@ class MainApplication(tk.Frame):
 
             return False
 
+        if not self.install_directory:
+            error_text = "You must select a valid install directory."
+            self.error_label.configure(text="Error: %s" %error_text)
+
+            return False
+
         self.error_label.configure(text="Settings are valid, continuing...",fg="black")
         self.error_label.update()
         return True
@@ -499,6 +548,8 @@ class MainApplication(tk.Frame):
         backup_time = 23
         keepalive_freq = 300
 
+        print(self.install_directory)
+
         self.main(
             self.device_name,
             self.agree_checkbox.instate(['selected']),
@@ -506,7 +557,8 @@ class MainApplication(tk.Frame):
             keepalive_freq,
             self.backup_paths,
             self.recursive_backup_paths,
-            self.api_key_file_path
+            self.api_key_file_path,
+            self.install_directory
         )
 
     def update_stdout(self, msg):
@@ -533,7 +585,7 @@ class MainApplication(tk.Frame):
 
         sleep(1)
 
-    def main(self, device_type, send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive, api_key_file_path):
+    def main(self, device_type, send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive, api_key_file_path, target_folder):
         initialize_logging()
         self.log_and_update_stdout("Beginning install of Stormcloud v%s" % STORMCLOUD_VERSION)
 
@@ -587,10 +639,6 @@ class MainApplication(tk.Frame):
             secret_key, agent_id,
             api_key
         )
-
-        # TODO: target folder comes from GUI
-        # for windows: default to os.getenv("HOMEDRIVE") + os.getenv("HOMEPATH") + "\\AppData\\Roaming\\stormcloud\\"
-        target_folder = os.getenv("HOMEDRIVE") + os.getenv("HOMEPATH") + "\\AppData\\Roaming\\stormcloud\\"
 
         self.log_and_update_stdout("Downloading stormcloud client...")
         ret, sc_client_installed_path = download_stormcloud_client(survey_data_json['operating_system'], target_folder)
