@@ -597,14 +597,14 @@ class MainApplication(tk.Frame):
         if ret != 0:
             self.log_and_update_stderr("Failed to download stormcloud for your platform. Return code: %d.\nPlease contact our customer support team for further assistance." %ret)
         else:
-            self.log_and_update_stdout("Successfully downloaded stormcloud client and wrote to %s." % sc_client_installed_path)
+            self.log_and_update_stdout("Successfully downloaded stormcloud client to %s." % sc_client_installed_path)
 
-        self.log_and_update_stdout("Adding Stormcloud to startup directory...")
+        self.log_and_update_stdout("Adding stormcloud to startup directory...")
         ret, persistence_location = configure_persistence(survey_data_json['operating_system'], sc_client_installed_path)
         if ret != 0:
-            self.log_and_update_stderr("Failed to add Stormcloud to startup process. Return code: %d.\nPlease contact our customer support team for further assistance." %ret)
+            self.log_and_update_stderr("Failed to add stormcloud to startup process. Return code: %d.\nPlease contact our customer support team for further assistance." %ret)
         else:
-            self.log_and_update_stdout("Successfully added Stormcloud to startup process. Location: %s" % persistence_location)
+            self.log_and_update_stdout("Successfully added stormcloud to startup process. Location: %s" % persistence_location)
 
         # TODO: button in the installer to launch stormcloud when done
 
