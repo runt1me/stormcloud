@@ -328,7 +328,7 @@ def run_stormcloud_client(install_directory, os_info):
         logging.log(logging.INFO, "start %s" %path_to_exec)
         subprocess.Popen('start %s' %path_to_exec, cwd=install_directory, shell=True)
     elif 'macOS' in os_info:
-        # TODO: on OSX figure out how to launch as separate process from installer
+        # TODO: on OSX figure out how to launch as separate process from installer - maybe just &
         path_to_exec = install_directory + "/stormcloud"
         logging.log(logging.INFO, "Starting up: %s" %path_to_exec)
         subprocess.Popen(path_to_exec, cwd=install_directory, shell=True)
@@ -457,11 +457,11 @@ class MainApplication(tk.Frame):
 
     def add_error_label(self):
         self.error_label                         = tk.Label(window,text="",bg="white",fg="red")
-        self.error_label.grid(row=9,column=0,padx=(40,0),pady=(0,5),columnspan=2,sticky=tk.NS)
+        self.error_label.grid(row=9,column=0,padx=(40,0),pady=(0,5),columnspan=5,sticky=tk.NS)
 
     def add_stdout_label(self):
         self.stdout_label                        = tk.Label(window,text="",bg="white",fg="green",anchor="w",justify=tk.LEFT)
-        self.stdout_label.grid(row=10,column=0,padx=(40,0),pady=(0,20),columnspan=2,sticky=tk.NS)
+        self.stdout_label.grid(row=10,column=0,padx=(40,0),pady=(0,20),columnspan=5,sticky=tk.NS)
 
     def browse_files(self):
         filename = tk.filedialog.askdirectory(
@@ -613,6 +613,7 @@ class MainApplication(tk.Frame):
         # TODO: handle the following exceptions
         # 1. invalid API key format in file
         # 2. valid API key format but server rejects it as not in the database
+        # TODO: some kind of "live validation" that API key is legit
         api_key = read_api_key_file(api_key_file_path)
 
         # TODO: Return codes
@@ -663,7 +664,8 @@ class MainApplication(tk.Frame):
         if ret != 0:
             self.log_and_update_stderr("Failed to download stormcloud for your platform. Return code: %d.\nPlease contact our customer support team for further assistance." %ret)
         else:
-            self.log_and_update_stdout("Successfully downloaded stormcloud client to %s." % sc_client_installed_path)
+            self.log_and_update_stdout("Successfully downloaded stormcloud client..")
+            logging.log(logging.INFO, "Downloaded to %s" % sc_client_installed_path)
 
         self.log_and_update_stdout("Adding stormcloud to startup directory...")
         ret, persistence_location = configure_persistence(survey_data_json['operating_system'], sc_client_installed_path)
