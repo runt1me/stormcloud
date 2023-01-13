@@ -11,3 +11,7 @@ keepalives.csv
 *.DS_Store*
 *.cfg
 settings.cfg
+*build*
+*dist*
+*.spec
+test_files/*
