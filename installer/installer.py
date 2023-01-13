@@ -11,6 +11,7 @@ from requests.exceptions import SSLError
 
 import os, winshell
 from win32com.client import Dispatch
+import subprocess
 
 import logging
 import argparse
@@ -128,11 +129,18 @@ def read_api_key_file(keyfile_path):
 
     return api_key.decode("utf-8")
 
-def configure_settings(send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive, secret_key, agent_id, api_key):
-    backup_time    = int(backup_time)
-    keepalive_freq = int(keepalive_freq)
+def configure_settings(send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive, secret_key, agent_id, api_key, target_folder, os_info):
+    backup_time        = int(backup_time)
+    keepalive_freq     = int(keepalive_freq)
 
-    with open("settings.cfg", "w") as settings_file:
+    if 'Windows' in os_info:
+        target_folder += "\\"
+    elif 'macOS' in os_info:
+        target_folder += "/"
+
+    settings_file_path = target_folder + "settings.cfg"
+    os.makedirs(os.path.dirname(settings_file_path), exist_ok=True)
+    with open(settings_file_path, "w") as settings_file:
         lines_to_write = []
 
         # Logging
@@ -313,6 +321,20 @@ def initialize_logging():
         datefmt='%Y-%m-%d %H:%M:%S',
         level=logging.DEBUG
     )
+
+def run_stormcloud_client(install_directory, os_info):
+    # TODO: weirdness with clients cwd being the installer directory when running from installer
+    # client logs and schash.db getting written to current directory instead of install directory
+    if 'Windows' in os_info:
+        path_to_exec = install_directory + "\\stormcloud.exe"
+        logging.log(logging.INFO, "Starting up: %s" %path_to_exec)
+        os.system(path_to_exec)
+    elif 'macOS' in os_info:
+        path_to_exec = install_directory + "/stormcloud"
+        logging.log(logging.INFO, "Starting up: %s" %path_to_exec)
+        os.system(path_to_exec)
+    else:
+        logging.log(logging.WARN, "Did not know how to launch stormcloud for this operating system. (%s)" %os_info)
 
 class MainApplication(tk.Frame):
     # TODO: maybe refactor this to use a tk Frame at some point, but too much work for now.
@@ -548,8 +570,6 @@ class MainApplication(tk.Frame):
         backup_time = 23
         keepalive_freq = 300
 
-        print(self.install_directory)
-
         self.main(
             self.device_name,
             self.agree_checkbox.instate(['selected']),
@@ -625,11 +645,7 @@ class MainApplication(tk.Frame):
 
         self.log_and_update_stdout("Device successfully registered.")
 
-        secret_key = response_data['secret_key']
-        logging.log(logging.INFO, "Received device encryption key.")
-
-        agent_id = response_data['agent_id']
-        logging.log(logging.INFO, "Received agent ID.")
+        secret_key, agent_id = response_data['secret_key'], response_data['agent_id']
 
         logging.log(logging.INFO, "Configuring backup process and writing settings file.")
         ret = configure_settings(
@@ -637,7 +653,8 @@ class MainApplication(tk.Frame):
             keepalive_freq, backup_paths,
             backup_paths_recursive,
             secret_key, agent_id,
-            api_key
+            api_key, target_folder,
+            survey_data_json['operating_system']
         )
 
         self.log_and_update_stdout("Downloading stormcloud client...")
@@ -654,15 +671,16 @@ class MainApplication(tk.Frame):
         else:
             self.log_and_update_stdout("Successfully added stormcloud to startup process. Location: %s" % persistence_location)
 
-        # TODO: button in the installer to launch stormcloud when done
-
         self.log_and_update_stdout("Ready to launch stormcloud!")
+
+        if messagebox.askokcancel("Installation Successful!", "The installation process is finished. Launch Stormcloud?"):
+            run_stormcloud_client(target_folder, survey_data_json['operating_system'])
 
 if __name__ == '__main__':
     window = tk.Tk()
     app = MainApplication(window)
     window.title("Stormcloud Installer")
-    window.geometry("800x600")
+    window.geometry("900x800")
     window.config(background="white")
 
     # TODO: try to figure out how to center window on screen
