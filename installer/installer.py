@@ -323,16 +323,15 @@ def initialize_logging():
     )
 
 def run_stormcloud_client(install_directory, os_info):
-    # TODO: weirdness with clients cwd being the installer directory when running from installer
-    # client logs and schash.db getting written to current directory instead of install directory
     if 'Windows' in os_info:
         path_to_exec = install_directory + "\\stormcloud.exe"
-        logging.log(logging.INFO, "Starting up: %s" %path_to_exec)
-        os.system(path_to_exec)
+        logging.log(logging.INFO, "start %s" %path_to_exec)
+        subprocess.Popen('start %s' %path_to_exec, cwd=install_directory, shell=True)
     elif 'macOS' in os_info:
+        # TODO: on OSX figure out how to launch as separate process from installer
         path_to_exec = install_directory + "/stormcloud"
         logging.log(logging.INFO, "Starting up: %s" %path_to_exec)
-        os.system(path_to_exec)
+        subprocess.Popen(path_to_exec, cwd=install_directory, shell=True)
     else:
         logging.log(logging.WARN, "Did not know how to launch stormcloud for this operating system. (%s)" %os_info)
 
@@ -527,6 +526,8 @@ class MainApplication(tk.Frame):
             else:
                 self.backup_paths.append(path)
 
+        # TODO: make backup paths unique (have some self respect Ryan!)
+
         if self.verify_settings():
             self.begin_install()
 
@@ -669,7 +670,8 @@ class MainApplication(tk.Frame):
         if ret != 0:
             self.log_and_update_stderr("Failed to add stormcloud to startup process. Return code: %d.\nPlease contact our customer support team for further assistance." %ret)
         else:
-            self.log_and_update_stdout("Successfully added stormcloud to startup process. Location: %s" % persistence_location)
+            self.log_and_update_stdout("Successfully added stormcloud to startup process.")
+            logging.log(logging.INFO, "Persistence location: %s" %persistence_location)
 
         self.log_and_update_stdout("Ready to launch stormcloud!")
 
