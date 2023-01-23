@@ -13,42 +13,37 @@ import keepalive_utils
 import backup_utils
 import logging_utils
 
-#number of seconds in between actions
 ACTION_TIMER = 90
-
-#updates based on number of threads created
 THREAD_NUM = 0
 
-def main(settings_file_path,api_key_file_path,agent_id_file_path,hash_db_file_path,ignore_hash_db):
+def main(settings_file_path,hash_db_file_path,ignore_hash_db):
     settings                = read_settings_file(settings_file_path)
-    api_key                 = read_api_key_file(api_key_file_path)
-    agent_id                = read_agent_id_file(agent_id_file_path)
 
     if int(settings['SEND_LOGS']):
-        logging_utils.send_logs_to_server(api_key,agent_id)
+        logging_utils.send_logs_to_server(settings['API_KEY'],settings['AGENT_ID'])
     
-    logging_utils.initialize_logging(uuid=agent_id)
+    logging_utils.initialize_logging(uuid=settings['AGENT_ID'])
 
     hash_db_conn = get_or_create_hash_db(hash_db_file_path)
-    action_loop_and_sleep(settings=settings,api_key=api_key,agent_id=agent_id,dbconn=hash_db_conn,ignore_hash=ignore_hash_db)
+    action_loop_and_sleep(settings=settings,dbconn=hash_db_conn,ignore_hash=ignore_hash_db)
 
-def action_loop_and_sleep(settings, api_key, agent_id, dbconn, ignore_hash):
+def action_loop_and_sleep(settings, dbconn, ignore_hash):
     # For the first run, just check if the backup should have been run in the previous 10 minutes
     prev_run_time = datetime.now() - timedelta(minutes=10)
     prev_keepalive_freq = -1
     active_thread = None
 
     while True:
-        cur_run_time = datetime.now()
+        cur_run_time           = datetime.now()
         cur_keepalive_freq = int(settings['KEEPALIVE_FREQ'])
         backup_time        = int(settings['BACKUP_TIME'])
         backup_paths           = settings['BACKUP_PATHS']
         recursive_backup_paths = settings['RECURSIVE_BACKUP_PATHS']
+        api_key                = settings['API_KEY']
+        agent_id               = settings['AGENT_ID']
+        secret_key             = settings['SECRET_KEY']
 
         logging.log(logging.INFO,"Stormcloud is running with settings: %s" % (settings))
-
-        #if backup_utils.check_for_backup(backup_time,cur_run_time,prev_run_time):
-        backup_utils.perform_backup(backup_paths,recursive_backup_paths,api_key,agent_id,dbconn,ignore_hash)
 
         if active_thread is None:
             active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id)
@@ -59,6 +54,8 @@ def action_loop_and_sleep(settings, api_key, agent_id, dbconn, ignore_hash):
                     active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id)
             else:
                 active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id)
+
+        backup_utils.perform_backup(backup_paths,recursive_backup_paths,api_key,agent_id,secret_key,dbconn,ignore_hash)
 
         prev_keepalive_freq = cur_keepalive_freq
         prev_run_time = cur_run_time
@@ -156,34 +153,32 @@ def read_agent_id_file(agent_id_file_path):
 if __name__ == "__main__":
     description = r"""
 
- ______     ______   ______     ______     __    __                    
-/\  ___\   /\__  _\ /\  __ \   /\  == \   /\ "-./  \                   
-\ \___  \  \/_/\ \/ \ \ \/\ \  \ \  __<   \ \ \-./\ \                  
- \/\_____\    \ \_\  \ \_____\  \ \_\ \_\  \ \_\ \ \_\                 
-  \/_____/     \/_/   \/_____/   \/_/ /_/   \/_/  \/_/                 
-                                                                       
-             ______     __         ______     __  __     _____         
-            /\  ___\   /\ \       /\  __ \   /\ \/\ \   /\  __-.       
-            \ \ \____  \ \ \____  \ \ \/\ \  \ \ \_\ \  \ \ \/\ \      
-             \ \_____\  \ \_____\  \ \_____\  \ \_____\  \ \____-      
-              \/_____/   \/_____/   \/_____/   \/_____/   \/____/      
-                                                                       
-                            ______     ______     ______     ______    
-                           /\  ___\   /\  __ \   /\  == \   /\  ___\   
-                           \ \ \____  \ \ \/\ \  \ \  __<   \ \  __\   
-                            \ \_____\  \ \_____\  \ \_\ \_\  \ \_____\ 
-                             \/_____/   \/_____/   \/_/ /_/   \/_____/ 
-                                                                                                                                                                                                                                                                    
+        ______     ______   ______     ______     __    __                    
+       /\  ___\   /\__  _\ /\  __ \   /\  == \   /\ "-./  \                   
+       \ \___  \  \/_/\ \/ \ \ \/\ \  \ \  __<   \ \ \-./\ \                  
+        \/\_____\    \ \_\  \ \_____\  \ \_\ \_\  \ \_\ \ \_\                 
+         \/_____/     \/_/   \/_____/   \/_/ /_/   \/_/  \/_/                 
+                                                                              
+                    ______     __         ______     __  __     _____         
+                   /\  ___\   /\ \       /\  __ \   /\ \/\ \   /\  __-.       
+                   \ \ \____  \ \ \____  \ \ \/\ \  \ \ \_\ \  \ \ \/\ \      
+                    \ \_____\  \ \_____\  \ \_____\  \ \_____\  \ \____-      
+                     \/_____/   \/_____/   \/_____/   \/_____/   \/____/      
+                                                                              
+                                   ______     ______     ______     ______    
+                                  /\  ___\   /\  __ \   /\  == \   /\  ___\   
+                                  \ \ \____  \ \ \/\ \  \ \  __<   \ \  __\   
+                                   \ \_____\  \ \_____\  \ \_\ \_\  \ \_____\ 
+                                    \/_____/   \/_____/   \/_/ /_/   \/_____/ 
+                                                                                                                                                                                                                                                                           
 
     """
 
     description += 'Welcome to Stormcloud, the best backup system!'
     parser = argparse.ArgumentParser(description=description, formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("-s", "--settings-file",type=str,default="settings.cfg",help="Path to settings file (default=./settings.cfg)")
-    parser.add_argument("-a", "--api-key", type=str, default="api.key", help="Path to API key file (default=./api.key)")
-    parser.add_argument("-g", "--agent-id", type=str, default="agent_id", help="Path to the Agent ID file (default=./agent_id")
     parser.add_argument("-d", "--hash-db", type=str, default="schash.db", help="Path to hash db file (default=./schash.db")
     parser.add_argument("-o", "--ignore-hash-db", action="store_true", help="override the hash db, to backup files even if they haven't changed")
 
     args = parser.parse_args()
-    main(args.settings_file,args.api_key,args.agent_id,args.hash_db,args.ignore_hash_db)
+    main(args.settings_file,args.hash_db,args.ignore_hash_db)

@@ -13,9 +13,9 @@ import crypto_utils
 SERVER_NAME = "www2.darkage.io"
 SERVER_PORT = 9443
 
-def ship_file_to_server(api_key,agent_id,path):
-    encrypted_content, encrypted_size   = crypto_utils.encrypt_file(path)
-    encrypted_path, encrypted_path_size = crypto_utils.encrypt_content(path)
+def ship_file_to_server(api_key,agent_id,secret_key,path):
+    encrypted_content, encrypted_size   = crypto_utils.encrypt_file(path,secret_key)
+    encrypted_path, encrypted_path_size = crypto_utils.encrypt_content(path,secret_key)
 
     file_backup_request_data = json.dumps({
         'request_type': "backup_file",
@@ -76,8 +76,5 @@ def dump_file_info(path,encrypted_size):
     logging.log(logging.INFO,"\tSIZE WHEN ENCRYPTED: %d" %encrypted_size)
 
 def calculate_timeout(data_length):
-    # TODO: address issues with timeouts.
-    # maybe change timeout based on how much data is being sent?
-    # import speedtest; s = speedtest.Speedtest(); s.get_servers(); s.get_best_server(); s.download(); s.upload();
-    # res = s.results.dict(); return res['download'], res['upload'], res['ping']
+    # TODO: send data in chunks
     return 300
