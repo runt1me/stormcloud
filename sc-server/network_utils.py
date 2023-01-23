@@ -4,8 +4,8 @@ import logging
 
 import traceback
 
-CERTFILE="/root/certs/r3_pub_priv.pem"
-KEYFILE="/root/certs/r3_pub_priv.pem"
+CERTFILE="/etc/letsencrypt/live/www2.darkage.io/fullchain.pem"
+KEYFILE="/etc/letsencrypt/live/www2.darkage.io/privkey.pem"
 
 # TODO: figure out automated cert renewal
 
