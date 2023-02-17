@@ -65,11 +65,12 @@ def add_or_update_customer_for_team(customer_name,username,password,team_id,api_
     __teardown__(cursor,cnx)
     return ret
 
-def add_or_update_file_for_device(device_id, file_name, file_path, client_full_name_and_path, file_size, file_type, stormcloud_full_name_and_path):
+def add_or_update_file_for_device(device_id, file_name, file_path, client_full_name_and_path, client_full_name_and_path_as_posix, file_size, file_type, stormcloud_full_name_and_path):
   # IN DID INT,
   # IN file_name varchar(512),
   # IN file_path varchar(1024),
   # IN client_full_name_and_path varchar(1024),
+  # IN path_on_device_posix varchar(1024),
   # IN file_size int,
   # IN file_type varchar(256),
   # IN stormcloud_full_name_and_path varchar(1024)
@@ -79,9 +80,16 @@ def add_or_update_file_for_device(device_id, file_name, file_path, client_full_n
   cursor = cnx.cursor(buffered=True)
 
   try:
-    cursor.callproc('add_or_update_file_for_device',
-      (device_id,file_name,file_path,client_full_name_and_path,file_size,file_type,stormcloud_full_name_and_path)
-    )
+    cursor.callproc('add_or_update_file_for_device',(
+          device_id,
+          file_name,
+          file_path,
+          client_full_name_and_path,
+          client_full_name_and_path_as_posix,
+          file_size,
+          file_type,
+          stormcloud_full_name_and_path
+    ))
 
     for result in cursor.stored_results():
       row = result.fetchall()

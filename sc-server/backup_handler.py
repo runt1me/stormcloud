@@ -72,6 +72,12 @@ def handle_backup_file_request(request):
         max_versions
     )
 
+    if "\\" in path_on_device:
+        p = pathlib.PureWindowsPath(r'%s'%path_on_device)
+        path_on_device_posix = str(p.as_posix())
+    else:
+        path_on_device_posix = path_on_device
+
     file_name = backup_utils.get_file_name(path_on_server)
     file_path = backup_utils.get_file_path_without_name(path_on_server)
     file_type = backup_utils.get_file_type(path_on_server)
@@ -81,6 +87,7 @@ def handle_backup_file_request(request):
         file_name,
         file_path,
         path_on_device,
+        path_on_device_posix,
         file_size,
         file_type,
         path_on_server
