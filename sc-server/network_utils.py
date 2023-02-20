@@ -9,6 +9,11 @@ KEYFILE="/etc/letsencrypt/live/www2.darkage.io/privkey.pem"
 
 # TODO: figure out automated cert renewal
 
+def get_ssl_context():
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(CERTFILE,KEYFILE)
+    return context
+
 def initialize_socket(listen_port):
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(CERTFILE,KEYFILE)
