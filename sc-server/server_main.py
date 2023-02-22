@@ -198,7 +198,7 @@ def backup_file():
 @app.route('/api/keepalive', methods=['POST'])
 def keepalive():
     logging.log(logging.INFO,flask.request)
-    if request.headers['Content-Type'] != 'application/json':
+    if flask.request.headers['Content-Type'] != 'application/json':
         return jsonify({'error': 'Request must be JSON'}), 400
 
     data = flask.request.get_json()
