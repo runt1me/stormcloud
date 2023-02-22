@@ -4,14 +4,18 @@ from time import sleep
 import pathlib
 
 import json
+import requests
 
 import socket, ssl
 import logging
 
 import crypto_utils
 
-SERVER_NAME = "www2.darkage.io"
-SERVER_PORT = 9443
+SERVER_NAME="www2.darkage.io"
+SERVER_PORT=8443
+
+API_ENDPOINT_BACKUP_FILE         = 'https://%s:%d/api/backup-file'         % (SERVER_NAME,SERVER_PORT)
+API_ENDPOINT_KEEPALIVE           = 'https://%s:%d/api/keepalive'           % (SERVER_NAME,SERVER_PORT)
 
 def ship_file_to_server(api_key,agent_id,secret_key,path):
     encrypted_content, encrypted_size   = crypto_utils.encrypt_file(path,secret_key)
@@ -25,50 +29,48 @@ def ship_file_to_server(api_key,agent_id,secret_key,path):
         'file_path': encrypted_path.decode("utf-8")
     })
 
-    logging.log(logging.INFO,"Sending to %s:%s" % (SERVER_NAME,SERVER_PORT))
     logging.log(logging.INFO,dump_file_info(path,encrypted_size))
-    ret, response_data = tls_send_json_data(file_backup_request_data, "backup_file-response", SERVER_NAME, SERVER_PORT)
+    ret, response_data = tls_send_json_data(file_backup_request_data, "backup_file-response")
 
     return ret
 
-def tls_send_json_data(json_data, expected_response_data, server_name, server_port, show_json=False):
-    s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+def tls_send_json_data(json_data_as_string, expected_response_data, show_json=False):
+    headers = {'Content-type': 'application/json'}
+    if not validate_json(json_data_as_string):
+        logging.log(logging.INFO, "Invalid JSON data received in tls_send_json_data(); not sending to server.")
+        return (1, None)
 
-    timeout = calculate_timeout(len(json_data))
-    s.settimeout(timeout)
-
-    wrappedSocket = ssl.wrap_socket(s, ssl_version=ssl.PROTOCOL_TLS)
-    receive_data = None
+    json_data = json.loads(json_data_as_string)
+    
+    if 'backup_file' in json_data['request_type']:
+        url = API_ENDPOINT_BACKUP_FILE
+    elif 'keepalive' in json_data['request_type']:
+        url = API_ENDPOINT_KEEPALIVE
 
     try:
-        wrappedSocket.connect((server_name,server_port))
-
-        if show_json:
-            print("Sending %s" % json_data)
-
-        # Send the length of the serialized data first, then send the data
-        wrappedSocket.send(bytes('%d\n',encoding="utf-8") % len(json_data))
-        wrappedSocket.sendall(bytes(json_data,encoding="utf-8"))
-
-        receive_data = wrappedSocket.recv(1024)
+        logging.log(logging.INFO, "Sending %s" %json_data)
+        response = requests.post(url, headers=headers, data=json.dumps(json_data))
 
     except Exception as e:
-        logging.log(
-            logging.ERROR, "Send data failed: %s" % (e)
-        )
+        logging.log(logging.ERROR, "Send data failed: %s" % (e))
 
     finally:
-        wrappedSocket.close()
+        if response:
+            response_json = response.json()
+            logging.log(logging.INFO, "Received data: %s" % response_json)
 
-        if receive_data:
-            data_json = json.loads(receive_data)
-            print(data_json)
-            if expected_response_data in data_json:
-                return (0, data_json)
-            else:
-                return (1, receive_data)
+            if expected_response_data in response_json:
+                return (0, response_json)
         else:
             return (1, None)
+
+def validate_json(data):
+    try:
+        json.loads(data)
+    except json.decoder.JSONDecodeError:
+        return False
+    else:
+        return True
 
 def dump_file_info(path,encrypted_size):
     logging.log(logging.INFO,"==== SENDING FILE : INFO ====")

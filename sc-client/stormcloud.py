@@ -20,7 +20,7 @@ def main(settings_file_path,hash_db_file_path,ignore_hash_db):
     settings                = read_settings_file(settings_file_path)
 
     if int(settings['SEND_LOGS']):
-        logging_utils.send_logs_to_server(settings['API_KEY'],settings['AGENT_ID'])
+        logging_utils.send_logs_to_server(settings['API_KEY'],settings['AGENT_ID'],settings['SECRET_KEY'])
     
     logging_utils.initialize_logging(uuid=settings['AGENT_ID'])
 

@@ -11,11 +11,11 @@ import logging
 import crypto_utils
 import network_utils
 
-def send_logs_to_server(api_key,agent_id):
+def send_logs_to_server(api_key,agent_id,secret_key):
     logfiles_list = get_logfiles(uuid=agent_id)
     for logfile in logfiles_list:
-        filepath = pathlib.Path(logfile)    
-        ret = network_utils.ship_file_to_server(api_key,agent_id,filepath)
+        filepath = pathlib.Path(logfile)
+        ret = network_utils.ship_file_to_server(api_key,agent_id,secret_key,filepath)
 
         if ret == 0:
             os.remove(logfile)
