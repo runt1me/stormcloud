@@ -97,9 +97,10 @@ def print_rename(old,new):
 
 def print_request_no_file(request):
     print("== RECEIVED NEW REQUEST ==")
-    print("Request type: %s" % request['request_type'])
-    print("Agent ID: %s"     % request['agent_id'])
-    print("API key: %s\n"    % request['api_key'])
+    for k in request.keys():
+        if 'file_content' in k:
+            continue
+        print("%s: %s" % (k,request[k]))
 
 def initialize_logging():
     logging.basicConfig(

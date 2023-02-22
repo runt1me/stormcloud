@@ -39,12 +39,20 @@ def handle_hello_request(request):
 
 def handle_register_new_device_request(request):
     logging.log(logging.INFO,"Server handling new device request.")
-    print(request)
+
+    # TODO: maybe some kind of string validation on the api key, don't query the database unless it matches the correct format
     customer_id      = db.get_customer_id_by_api_key(request['api_key'])
 
     if not customer_id:
-        logging.log(logging.INFO,"Could not find customer ID for the given API key: %s" % request['api_key'])
+        logging.log(logging.WARNING,"Could not find customer ID for the given API key: %s" % request['api_key'])
+        response_code = 401
+        response_data = json.dumps({
+            'response': 'Unable to authorize request',
+        })
 
+        return response_code, response_data
+
+        
     device_name      = request['device_name']
     ip_address       = request['ip_address']
     device_type      = request['device_type']
@@ -52,7 +60,6 @@ def handle_register_new_device_request(request):
     device_status    = request['device_status']
 
     # TODO: sanitize all strings for SQL injection
-
     # TODO: probably separate all of the above code into a "validate_request" or some similar type of function
     last_callback = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     stormcloud_path_to_secret_key = "/keys/%s/device/%s/secret.key" % (customer_id,db.get_next_device_id())
