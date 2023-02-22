@@ -19,7 +19,7 @@ def main(listen_port):
     backup_utils.initialize_logging()
     context = scnet.get_ssl_context()
 
-    app.run(debug=True, host='0.0.0.0', port=listen_port, ssl_context=context)
+    app.run(debug=False, host='0.0.0.0', port=listen_port, ssl_context=context)
 
 def validate_request_generic(request, api_key_required=True):
     if api_key_required:
@@ -29,6 +29,7 @@ def validate_request_generic(request, api_key_required=True):
     return True
 
 def handle_hello_request(request):
+    print("Server received hello request: %s" % request)
     logging.log(logging.INFO,"Server handling hello request.")
     response_data = json.dumps({
         'hello-response': 'Goodbye'
@@ -38,6 +39,7 @@ def handle_hello_request(request):
 
 def handle_register_new_device_request(request):
     logging.log(logging.INFO,"Server handling new device request.")
+    print(request)
     customer_id      = db.get_customer_id_by_api_key(request['api_key'])
 
     if not customer_id:
@@ -160,11 +162,14 @@ def register_new_device():
     data = flask.request.get_json()
     if data:
         if not validate_request_generic(data):
+            logging.log(logging.INFO,"Sending 401 response")
             return jsonify({'response':'Unable to authorize request'}), 401, {'Content-Type': 'application/json'}
 
         ret_code, response_data = handle_register_new_device_request(data)
+        logging.log(logging.INFO,"Sending %d response: %s" %(ret_code,response_data))
         return response_data, ret_code, {'Content-Type': 'application/json'}
     else:
+        logging.log(logging.INFO,"Sending 400 response")
         return jsonify({'error': 'bad request'}), 400, {'Content-Type': 'application/json'}
 
 @app.route('/api/backup-file', methods=['POST'])
