@@ -30,11 +30,11 @@ SERVER_NAME="www2.darkage.io"
 SERVER_PORT=8443
 STORMCLOUD_VERSION="1.0.0"
 
-WINDOWS_OS_SC_CLIENT_URL = "https://www2.darkage.io/sc-dist/windows-x86_64-stormcloud-client-1.0.0.exe"
-MACOS_SC_CLIENT_URL      = "https://www2.darkage.io/sc-dist/macos-x86_64-i386-64-stormcloud-client-1.0.0"
+WINDOWS_OS_SC_CLIENT_URL = "https://%s/sc-dist/windows-x86_64-stormcloud-client-%s.exe"   % (SERVER_NAME, STORMCLOUD_VERSION)
+MACOS_SC_CLIENT_URL      = "https://%s/sc-dist/macos-x86_64-i386-64-stormcloud-client-%s" % (SERVER_NAME, STORMCLOUD_VERSION)
 
-API_ENDPOINT_HELLO               = 'https://www2.darkage.io:8443/api/hello'
-API_ENDPOINT_REGISTER_NEW_DEVICE = 'https://www2.darkage.io:8443/api/register-new-device'
+API_ENDPOINT_HELLO               = 'https://%s:%d/api/hello'               % (SERVER_NAME,SERVER_PORT)
+API_ENDPOINT_REGISTER_NEW_DEVICE = 'https://%s:%d/api/register-new-device' % (SERVER_NAME,SERVER_PORT)
 
 def conduct_connectivity_test(api_key,server_name,server_port):
     logging.log(
@@ -265,7 +265,7 @@ def tls_send_json_data(json_data_as_string, expected_response_data):
     headers = {'Content-type': 'application/json'}
     if not validate_json(json_data_as_string):
         logging.log(logging.INFO, "Invalid JSON data received in tls_send_json_data(); not sending to server.")
-        return
+        return (1, None)
 
     json_data = json.loads(json_data_as_string)
     
@@ -275,28 +275,21 @@ def tls_send_json_data(json_data_as_string, expected_response_data):
         url = API_ENDPOINT_REGISTER_NEW_DEVICE
 
     try:
-        print(json_data)
+        logging.log(logging.INFO, "Sending %s" %json_data)
         response = requests.post(url, headers=headers, data=json.dumps(json_data))
-        print(response.status_code)
 
     except Exception as e:
-        logging.log(
-            logging.ERROR, "Send data failed: %s" % (e)
-        )
+        logging.log(logging.ERROR, "Send data failed: %s" % (e))
 
     finally:
         if response:
-            print(response)
             response_json = response.json()
-
-            logging.log(
-                logging.INFO, "Received data: %s" % response_json
-            )
+            logging.log(logging.INFO, "Received data: %s" % response_json)
 
             if expected_response_data in response_json:
                 return (0, response_json)
         else:
-            return (1, response_json)
+            return (1, None)
 
 def validate_json(data):
     try:
