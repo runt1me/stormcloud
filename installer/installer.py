@@ -33,6 +33,9 @@ STORMCLOUD_VERSION="1.0.0"
 WINDOWS_OS_SC_CLIENT_URL = "https://www2.darkage.io/sc-dist/windows-x86_64-stormcloud-client-1.0.0.exe"
 MACOS_SC_CLIENT_URL      = "https://www2.darkage.io/sc-dist/macos-x86_64-i386-64-stormcloud-client-1.0.0"
 
+API_ENDPOINT_HELLO               = 'https://www2.darkage.io:8443/api/hello'
+API_ENDPOINT_REGISTER_NEW_DEVICE = 'https://www2.darkage.io:8443/api/register-new-device'
+
 def conduct_connectivity_test(api_key,server_name,server_port):
     logging.log(
         logging.INFO, "Attempting connectivity test with server: %s:%d" % (server_name, server_port)
@@ -42,8 +45,8 @@ def conduct_connectivity_test(api_key,server_name,server_port):
     # 0 -> success
     # 1 -> invalid api key presented
     # 2 -> no response from server
-    send_hello_data = json.dumps({'request_type':'Hello','api_key':api_key})
-    return tls_send_json_data(send_hello_data, 'hello-response', server_name, server_port)
+    send_hello_data = json.dumps({'request_type':'hello','api_key':api_key})
+    return tls_send_json_data(send_hello_data, 'hello-response')
 
 def conduct_device_initial_survey(api_key,dtype):
     try:
@@ -258,31 +261,23 @@ def configure_persistence(os_info, sc_client_installed_path):
 
     return (1, None)
 
-def tls_send_json_data(json_data, expected_response_data, server_name, server_port):
-    # TODO: verify server TLS certificate
-    if not validate_json(json_data):
+def tls_send_json_data(json_data_as_string, expected_response_data):
+    headers = {'Content-type': 'application/json'}
+    if not validate_json(json_data_as_string):
         logging.log(logging.INFO, "Invalid JSON data received in tls_send_json_data(); not sending to server.")
         return
 
-    s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-    s.settimeout(10)
-
-    wrappedSocket = ssl.wrap_socket(s, ssl_version=ssl.PROTOCOL_TLS)
-    receive_data = None
+    json_data = json.loads(json_data_as_string)
+    
+    if 'hello' in json_data['request_type']:
+        url = API_ENDPOINT_HELLO
+    elif 'register_new_device' in json_data['request_type']:
+        url = API_ENDPOINT_REGISTER_NEW_DEVICE
 
     try:
-        wrappedSocket.connect((server_name,server_port))
-
-        print("Sending %s" % json_data)
-        logging.log(
-            logging.INFO, "Sending %s" %json_data
-        )
-
-        # Send the length of the serialized data first, then send the data
-        wrappedSocket.send(bytes('%d\n',encoding="utf-8") % len(json_data))
-        wrappedSocket.sendall(bytes(json_data,encoding="utf-8"))
-
-        receive_data = wrappedSocket.recv(1024)
+        print(json_data)
+        response = requests.post(url, headers=headers, data=json.dumps(json_data))
+        print(response.status_code)
 
     except Exception as e:
         logging.log(
@@ -290,20 +285,18 @@ def tls_send_json_data(json_data, expected_response_data, server_name, server_po
         )
 
     finally:
-        wrappedSocket.close()
-
-        if receive_data:
-            data_json = json.loads(receive_data)
-            print(data_json)
+        if response:
+            print(response)
+            response_json = response.json()
 
             logging.log(
-                logging.INFO, "Received data: %s" %data_json
+                logging.INFO, "Received data: %s" % response_json
             )
 
-            if expected_response_data in data_json:
-                return (0, data_json)
+            if expected_response_data in response_json:
+                return (0, response_json)
         else:
-            return (1, receive_data)
+            return (1, response_json)
 
 def validate_json(data):
     try:
@@ -640,7 +633,7 @@ class MainApplication(tk.Frame):
         logging.log(logging.INFO, "Device survey complete.")
         self.log_and_update_stdout("Sending device registration request to server...")
 
-        ret, response_data = tls_send_json_data(survey_data, "register_new_device-response", SERVER_NAME, SERVER_PORT)
+        ret, response_data = tls_send_json_data(survey_data, "register_new_device-response")
         if ret != 0:
             self.log_and_update_stderr("Install failed (unable to register device with server). Return code: %d" % ret)
             return
