@@ -4,6 +4,7 @@ from datetime import datetime
 import argparse
 
 import logging
+import pathlib
 
 import network_utils as scnet
 import database_utils as db
