@@ -5,6 +5,20 @@ import os
 
 # REMEMBER TO cnx.commit()!
 
+def run2():
+  # Trying SQL injections
+  test1 = "'a';select * from Device;--"
+  test2 = "\\select * from Device--"
+  test3 = '"a"\\ select * from Device--'
+  test4 = ";select * from Device--"
+  test5 = "y6hvm4zhv--x3oSz2zlyRQ"
+  test6 = "y6hvm4zhvrUx3oSz2zlyRQ"
+
+  test_list = [test1, test2, test3, test4, test5, test6]
+  for test in test_list:
+    print(passes_sanitize(test))
+    print(get_customer_id_by_api_key(test))
+
 def run():
   # Worked as of 1/3/2022
   print("update_callback_for_device(1,'2022-01-03 10:52:00',0)")
@@ -13,6 +27,14 @@ def run():
   print(add_or_update_file_for_device(1,'foo.txt','C:\\','C:\\foo.txt',11,'txt','/storage/1/foo.txt'))
   print("add_or_update_device_for_customer(1,'important.server.com','important server','123.234.123.234','Windows 10 Pro',0,'2021-01-03 10:55:00')")
   print(add_or_update_device_for_customer(1,'important.server.com','important server','123.234.123.234','Windows 10 Pro',0,'2021-01-03 10:55:00','/keys/105/secret.key'))
+
+def passes_sanitize(input_string):
+  SANITIZE_LIST = ["'", '"', "\\", ";"]
+  for expr in SANITIZE_LIST:
+    if expr in input_string:
+      return False
+
+  return True
 
 def update_callback_for_device(device_id, callback_time, status_code):
   # IN DID INT, IN callback_time varchar(512), IN device_status INT
@@ -65,7 +87,7 @@ def add_or_update_customer_for_team(customer_name,username,password,team_id,api_
     __teardown__(cursor,cnx)
     return ret
 
-def add_or_update_file_for_device(device_id, file_name, file_path, client_full_name_and_path, client_full_name_and_path_as_posix, file_size, file_type, stormcloud_full_name_and_path):
+def add_or_update_file_for_device(device_id, file_name, file_path, client_full_name_and_path, client_full_name_and_path_as_posix, client_directory_as_posix, file_size, file_type, stormcloud_full_name_and_path):
   # IN DID INT,
   # IN file_name varchar(512),
   # IN file_path varchar(1024),
@@ -86,6 +108,7 @@ def add_or_update_file_for_device(device_id, file_name, file_path, client_full_n
           file_path,
           client_full_name_and_path,
           client_full_name_and_path_as_posix,
+          client_directory_as_posix,
           file_size,
           file_type,
           stormcloud_full_name_and_path

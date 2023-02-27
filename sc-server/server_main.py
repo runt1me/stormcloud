@@ -41,8 +41,11 @@ def handle_hello_request(request):
 def handle_register_new_device_request(request):
     logging.log(logging.INFO,"Server handling new device request.")
 
-    # TODO: maybe some kind of string validation on the api key, don't query the database unless it matches the correct format
-    customer_id      = db.get_customer_id_by_api_key(request['api_key'])
+    customer_id = None
+    if db.passes_sanitize(request['api_key']):
+        customer_id      = db.get_customer_id_by_api_key(request['api_key'])
+    else:
+        logging.log(logging.WARNING, "Failed input sanitization for request: %s" % request)
 
     if not customer_id:
         logging.log(logging.WARNING,"Could not find customer ID for the given API key: %s" % request['api_key'])
@@ -109,8 +112,14 @@ def handle_backup_file_request(request):
     if "\\" in path_on_device:
         p = pathlib.PureWindowsPath(r'%s'%path_on_device)
         path_on_device_posix = str(p.as_posix())
+        directory_on_device = p.parents[0]
+        directory_on_device_posix = str(directory_on_device.as_posix())
     else:
+        # TODO: does this work on unix?
+        p = pathlib.Path(path_on_device)
         path_on_device_posix = path_on_device
+        directory_on_device = p.parents[0]
+        directory_on_device_posix = str(directory_on_device)
 
     file_name = backup_utils.get_file_name(path_on_server)
     file_path = backup_utils.get_file_path_without_name(path_on_server)
@@ -122,6 +131,7 @@ def handle_backup_file_request(request):
         file_path,
         path_on_device,
         path_on_device_posix,
+        directory_on_device_posix,
         file_size,
         file_type,
         path_on_server
