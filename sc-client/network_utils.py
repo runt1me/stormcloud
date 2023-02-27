@@ -48,7 +48,9 @@ def tls_send_json_data(json_data_as_string, expected_response_data, show_json=Fa
         url = API_ENDPOINT_KEEPALIVE
 
     try:
-        logging.log(logging.INFO, "Sending %s" %json_data)
+        if show_json:
+            logging.log(logging.INFO, "Sending %s" %json_data)
+        
         response = requests.post(url, headers=headers, data=json.dumps(json_data))
 
     except Exception as e:
