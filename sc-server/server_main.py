@@ -25,6 +25,13 @@ def main(listen_port):
 def validate_request_generic(request, api_key_required=True):
     if api_key_required:
         if 'api_key' not in request.keys():
+            logging.log(logging.INFO,"Did not find api_key field which was required for request.")
+            return False
+
+    for field in request.keys():
+        logging.log(logging.INFO, "Checking for validity of %s" %field)
+        if not db.passes_sanitize(str(request[field])):
+            logging.log(logging.WARNING, "Failed sanitization check: %s" %request[field])
             return False
 
     return True
@@ -41,12 +48,7 @@ def handle_hello_request(request):
 def handle_register_new_device_request(request):
     logging.log(logging.INFO,"Server handling new device request.")
 
-    customer_id = None
-    if db.passes_sanitize(request['api_key']):
-        customer_id      = db.get_customer_id_by_api_key(request['api_key'])
-    else:
-        logging.log(logging.WARNING, "Failed input sanitization for request: %s" % request)
-
+    customer_id      = db.get_customer_id_by_api_key(request['api_key'])
     if not customer_id:
         logging.log(logging.WARNING,"Could not find customer ID for the given API key: %s" % request['api_key'])
         response_code = 401
