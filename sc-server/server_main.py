@@ -29,7 +29,6 @@ def validate_request_generic(request, api_key_required=True):
             return False
 
     for field in request.keys():
-        logging.log(logging.INFO, "Checking for validity of %s" %field)
         if not db.passes_sanitize(str(request[field])):
             logging.log(logging.WARNING, "Failed sanitization check: %s" %request[field])
             return False
