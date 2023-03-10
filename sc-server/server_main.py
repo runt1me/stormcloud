@@ -14,13 +14,13 @@ from flask import Flask, jsonify
 import flask   # used for flask.request to prevent namespace conflicts with other variables named request
 app = Flask(__name__)
 
-def main(listen_port):
+def main():
     # Figure out how to initialize logging for each backup, install, keepalive
     # or maybe just have one file for all? setup logrotate?
     backup_utils.initialize_logging()
-    context = scnet.get_ssl_context()
 
-    app.run(debug=False, host='0.0.0.0', port=listen_port, ssl_context=context)
+    # Uses configuration from WSGI
+    app.run()
 
 def validate_request_generic(request, api_key_required=True):
     if api_key_required:
@@ -224,8 +224,4 @@ def keepalive():
         return jsonify({'error': 'bad request'}), 400, {'Content-Type': 'application/json'}
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-p", "--port", default=8443, type=int, help="server port for listening")
-    args = parser.parse_args()
-
-    main(args.port)
+    main()
