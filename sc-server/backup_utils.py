@@ -104,12 +104,16 @@ def print_request_no_file(request):
         print("%s: %s" % (k,request[k]))
 
 def initialize_logging():
-    logging.basicConfig(
-            stream=sys.stdout,
-            format='%(asctime)s %(levelname)-8s %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S',
-            level=logging.DEBUG
-    )
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.DEBUG)
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('%(levelname)-8s %(message)s')
+    handler.setFormatter(formatter)
+
+    logger.addHandler(handler)
+    return logger
 
 def log_file_info(decrypted_path,device_id,path_on_server):
     logging.log(logging.INFO,"== STORING FILE : %s ==" % decrypted_path)

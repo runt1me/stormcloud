@@ -13,31 +13,27 @@ import crypto_utils, install_utils, backup_utils, keepalive_utils
 from flask import Flask, jsonify
 import flask   # used for flask.request to prevent namespace conflicts with other variables named request
 app = Flask(__name__)
+global_logger = backup_utils.initialize_logging()
 
 def main():
-    # Figure out how to initialize logging for each backup, install, keepalive
-    # or maybe just have one file for all? setup logrotate?
-    backup_utils.initialize_logging()
-
-    # Uses configuration from WSGI
     app.run()
 
 def validate_request_generic(request, api_key_required=True):
     if api_key_required:
         if 'api_key' not in request.keys():
-            logging.log(logging.INFO,"Did not find api_key field which was required for request.")
+            global_logger.info("Did not find api_key field which was required for request.")
             return False
 
     for field in request.keys():
         if not db.passes_sanitize(str(request[field])):
-            logging.log(logging.WARNING, "Failed sanitization check: %s" %request[field])
+            global_logger.warning("Failed sanitization check: %s" %request[field])
             return False
 
     return True
 
 def handle_hello_request(request):
     print("Server received hello request: %s" % request)
-    logging.log(logging.INFO,"Server handling hello request.")
+    global_logger.info("Server handling hello request.")
     response_data = json.dumps({
         'hello-response': 'Goodbye'
     })
@@ -45,11 +41,11 @@ def handle_hello_request(request):
     return 200, response_data
 
 def handle_register_new_device_request(request):
-    logging.log(logging.INFO,"Server handling new device request.")
+    global_logger.info("Server handling new device request.")
 
     customer_id      = db.get_customer_id_by_api_key(request['api_key'])
     if not customer_id:
-        logging.log(logging.WARNING,"Could not find customer ID for the given API key: %s" % request['api_key'])
+        global_logger.warning("Could not find customer ID for the given API key: %s" % request['api_key'])
         response_code = 401
         response_data = json.dumps({
             'response': 'Unable to authorize request',
@@ -64,8 +60,6 @@ def handle_register_new_device_request(request):
     operating_system = request['operating_system']
     device_status    = request['device_status']
 
-    # TODO: sanitize all strings for SQL injection
-    # TODO: probably separate all of the above code into a "validate_request" or some similar type of function
     last_callback = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     stormcloud_path_to_secret_key = "/keys/%s/device/%s/secret.key" % (customer_id,db.get_next_device_id())
 
@@ -84,7 +78,7 @@ def handle_register_new_device_request(request):
     return 200, response_data
 
 def handle_backup_file_request(request):
-    logging.log(logging.INFO,"Server handling backup file request.")
+    global_logger.info("Server handling backup file request.")
     backup_utils.print_request_no_file(request)
 
     customer_id = db.get_customer_id_by_api_key(request['api_key'])
@@ -141,7 +135,7 @@ def handle_backup_file_request(request):
     return 200,json.dumps({'backup_file-response':'hell yeah brother'})
 
 def handle_keepalive_request(request):
-    logging.log(logging.INFO,"Server handling keepalive request.")
+    global_logger.info("Server handling keepalive request.")
     customer_id = db.get_customer_id_by_api_key(request['api_key'])
 
     if not customer_id:
@@ -158,7 +152,7 @@ def handle_keepalive_request(request):
 
 @app.route('/api/hello', methods=['POST'])
 def hello():
-    logging.log(logging.INFO,flask.request)
+    global_logger.info(flask.request)
     if flask.request.headers['Content-Type'] != 'application/json':
         return jsonify({'error': 'Request must be JSON'}), 400
 
@@ -174,26 +168,23 @@ def hello():
 
 @app.route('/api/register-new-device', methods=['POST'])
 def register_new_device():
-    logging.log(logging.INFO,flask.request)
+    global_logger.info(flask.request)
     if flask.request.headers['Content-Type'] != 'application/json':
         return jsonify({'error': 'Request must be JSON'}), 400
 
     data = flask.request.get_json()
     if data:
         if not validate_request_generic(data):
-            logging.log(logging.INFO,"Sending 401 response")
             return jsonify({'response':'Unable to authorize request'}), 401, {'Content-Type': 'application/json'}
 
         ret_code, response_data = handle_register_new_device_request(data)
-        logging.log(logging.INFO,"Sending %d response: %s" %(ret_code,response_data))
         return response_data, ret_code, {'Content-Type': 'application/json'}
     else:
-        logging.log(logging.INFO,"Sending 400 response")
         return jsonify({'error': 'bad request'}), 400, {'Content-Type': 'application/json'}
 
 @app.route('/api/backup-file', methods=['POST'])
 def backup_file():
-    logging.log(logging.INFO,flask.request)
+    global_logger.info(flask.request)
     if flask.request.headers['Content-Type'] != 'application/json':
         return jsonify({'error': 'Request must be JSON'}), 400
 
@@ -209,7 +200,7 @@ def backup_file():
 
 @app.route('/api/keepalive', methods=['POST'])
 def keepalive():
-    logging.log(logging.INFO,flask.request)
+    global_logger.info(flask.request)
     if flask.request.headers['Content-Type'] != 'application/json':
         return jsonify({'error': 'Request must be JSON'}), 400
 
