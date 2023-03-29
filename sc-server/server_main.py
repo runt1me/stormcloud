@@ -84,65 +84,7 @@ def handle_register_new_device_request(request):
 
     return 200, response_data
 
-def handle_backup_file_request(request):
-    global_logger.info("Server handling backup file request.")
-    backup_utils.print_request_no_file(request)
-
-    customer_id = db.get_customer_id_by_api_key(request['api_key'])
-
-    if not customer_id:
-        return 401,json.dumps({'response': 'Bad request.'})
-
-    results = db.get_device_by_agent_id(request['agent_id'])
-    if not results:
-        return 401,json.dumps({'response': 'Bad request.'})
-
-    device_id,_,_,_,_,_,_,_,path_to_device_secret_key,_ = results
-
-    # TODO: probably configure this per customer in database
-    max_versions = 3
-
-    path_on_server, device_root_directory_on_server, path_on_device, file_size = backup_utils.store_file(
-        customer_id,
-        device_id,
-        path_to_device_secret_key,
-        request['file_path'].encode("utf-8"),
-        request['file_content'].encode("utf-8"),
-        max_versions
-    )
-
-    # TODO: clean this up and put as a helper function in backup_utils
-    if "\\" in path_on_device:
-        p = pathlib.PureWindowsPath(r'%s'%path_on_device)
-        path_on_device_posix = str(p.as_posix())
-        directory_on_device = p.parents[0]
-        directory_on_device_posix = str(directory_on_device.as_posix())
-    else:
-        # TODO: test does this work on unix?
-        p = pathlib.Path(path_on_device)
-        path_on_device_posix = path_on_device
-        directory_on_device = p.parents[0]
-        directory_on_device_posix = str(directory_on_device)
-
-    file_name = backup_utils.get_file_name(path_on_server)
-    file_path = backup_utils.get_file_path_without_name(path_on_server)
-    file_type = backup_utils.get_file_type(path_on_server)
-
-    _ = db.add_or_update_file_for_device(
-        device_id,
-        file_name,
-        file_path,
-        path_on_device,
-        path_on_device_posix,
-        directory_on_device_posix,
-        file_size,
-        file_type,
-        path_on_server
-    )
-
-    return 200,json.dumps({'backup_file-response':'hell yeah brother'})
-
-def handle_backup_in_chunks_request(request):
+def handle_backup_file_in_chunks_request(request):
     global_logger.info("Server handling backup file in chunks request.")
     backup_utils.print_request_no_file(request)
 
@@ -277,7 +219,7 @@ def backup_file():
         if not validate_request_generic(data):
             return jsonify({'response':'Unable to authorize request'}), 401, {'Content-Type': 'application/json'}
 
-        ret_code, response_data = handle_backup_file_request(data)
+        ret_code, response_data = handle_backup_file_in_chunks_request(data)
         return response_data, ret_code, {'Content-Type': 'application/json'}
     else:
         return jsonify({'error': 'bad request'}), 400, {'Content-Type': 'application/json'}
