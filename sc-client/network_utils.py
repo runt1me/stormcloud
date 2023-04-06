@@ -11,11 +11,11 @@ import logging
 
 import crypto_utils
 
-SERVER_NAME="127.0.0.1"
-SERVER_PORT=5000
+SERVER_NAME="www2.darkage.io"
+SERVER_PORT=8443
 
 API_ENDPOINT_BACKUP_FILE         = 'https://%s:%d/api/backup-file'           % (SERVER_NAME,SERVER_PORT)
-API_ENDPOINT_BACKUP_FILE_CHUNKED = 'http://%s:%d/api/backup-file-in-chunks' % (SERVER_NAME,SERVER_PORT)
+API_ENDPOINT_BACKUP_FILE_CHUNKED = 'https://%s:%d/api/backup-file-in-chunks' % (SERVER_NAME,SERVER_PORT)
 API_ENDPOINT_KEEPALIVE           = 'https://%s:%d/api/keepalive'             % (SERVER_NAME,SERVER_PORT)
 
 # Making this small for testing
@@ -66,7 +66,7 @@ def upload_file_in_chunks(api_key,agent_id,encrypted_path,encrypted_content,size
     return ret_code
 
 def post_one_chunk(json_data_as_string, expected_response_code, show_json=False):
-    headers = {'Content-type': 'application/json', 'Transfer-Encoding': 'chunked'}
+    headers = {'Content-type': 'application/json'}
     url = API_ENDPOINT_BACKUP_FILE_CHUNKED
 
     try:
@@ -86,7 +86,7 @@ def post_one_chunk(json_data_as_string, expected_response_code, show_json=False)
 
 def tls_send_json_data(json_data_as_string, expected_response_code, show_json=False):
     response = None
-    headers = {'Content-type': 'application/json', 'Transfer-Encoding': 'chunked'}
+    headers = {'Content-type': 'application/json'}
     json_data = json.loads(json_data_as_string)
     
     if 'backup_file' in json_data['request_type']:

@@ -17,7 +17,7 @@ def send_logs_to_server(api_key,agent_id,secret_key):
         filepath = pathlib.Path(logfile)
         ret = network_utils.ship_file_to_server(api_key,agent_id,secret_key,filepath)
 
-        if ret == 0:
+        if ret == 200:
             os.remove(logfile)
         else:
             print("Failed to send logfile.")
