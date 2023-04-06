@@ -236,7 +236,7 @@ def backup_file_in_chunks():
         if not validate_request_generic(data):
             return jsonify({'response':'Unable to authorize request'}), 401, {'Content-Type': 'application/json'}
 
-        ret_code, response_data = handle_backup_in_chunks_request(data)
+        ret_code, response_data = handle_backup_file_in_chunks_request(data)
         return response_data, ret_code, {'Content-Type': 'application/json'}
     else:
         return jsonify({'error': 'bad request'}), 400, {'Content-Type': 'application/json'}
