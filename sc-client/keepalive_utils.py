@@ -19,7 +19,7 @@ def execute_ping_loop(interval,api_key,agent_id,name):
         
         ret, response_data = scnet.tls_send_json_data(
             keepalive_request_data,
-            'keepalive-response',
+            200,
             show_json=True
         )
 
