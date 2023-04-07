@@ -59,6 +59,7 @@ def upload_file_in_chunks(api_key,agent_id,encrypted_path,encrypted_content,size
             logging.log(logging.ERROR, "Got bad return code from backup_file_in_chunks: %d" % ret_code)
             # TODO: figure out some kind of failure behavior here, try again X number of tries, go back to sleep, etc?
             # For now, just bailing if it cant send any one of the chunks
+            ret_code = 400
             break
 
         idx += CHUNK_SIZE
