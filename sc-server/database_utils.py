@@ -59,7 +59,7 @@ def update_callback_for_device(device_id, callback_time, status_code):
     __teardown__(cursor,cnx)
     return ret
 
-def add_or_update_customer_for_team(customer_name,username,password,api_key):
+def add_or_update_customer(customer_name,username,password,api_key):
   # IN customer_name varchar(256),
   # IN username varchar(256),
   # IN password varchar(256),
