@@ -93,7 +93,7 @@ def process_file(file_path_obj,api_key,agent_id,secret_key,dbconn,ignore_hash):
             logging.log(logging.INFO,"Backing up file: %s" %file_path_obj.name)
 
             ret = network_utils.ship_file_to_server(api_key,agent_id,secret_key,file_path_obj.resolve())
-            if ret == 0:
+            if ret == 200:
                 update_hash_db(file_path_obj, dbconn)
             else:
                 logging.log(logging.WARNING, "Did not receive success code from server when trying to backup file, so not updating hash db.")
