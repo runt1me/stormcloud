@@ -7,9 +7,6 @@ def register_new_customer(customer_name,username,password):
    
     api_key = crypto_utils.generate_api_key("/keys/%s/api/api.key" % db.get_next_customer_id())
 
-    # set default team id=1
-    team_id = 1
-
-    ret = db.add_or_update_customer_for_team(customer_name,username,password,team_id,api_key)
+    ret = db.add_or_update_customer(customer_name,username,password,api_key)
 
     return ret
