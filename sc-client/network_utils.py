@@ -18,9 +18,7 @@ API_ENDPOINT_BACKUP_FILE         = 'https://%s:%d/api/backup-file'           % (
 API_ENDPOINT_BACKUP_FILE_CHUNKED = 'https://%s:%d/api/backup-file-in-chunks' % (SERVER_NAME,SERVER_PORT)
 API_ENDPOINT_KEEPALIVE           = 'https://%s:%d/api/keepalive'             % (SERVER_NAME,SERVER_PORT)
 
-# Making this small for testing
-# CHUNK_SIZE = 1024*1024
-CHUNK_SIZE = 1024
+CHUNK_SIZE = 1024*1024
 
 def ship_file_to_server(api_key,agent_id,secret_key,path):
     encrypted_content, size_of_encrypted_content   = crypto_utils.encrypt_file(path,secret_key)
