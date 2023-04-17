@@ -1,39 +1,13 @@
-# Requires Python 3.8!
-
-from datetime import datetime, timedelta
-from os import walk
-from time import sleep
+from datetime import datetime
 
 import pathlib
 import hashlib
 
-import socket
 import logging
-
-import crypto_utils
 import network_utils
 
 BACKUP_STATUS_NO_CHANGE = 0
 BACKUP_STATUS_CHANGE    = 1
-
-def check_for_backup(backup_time,current_run_time,previous_run_time):
-    datetime_of_backup = datetime(
-        year=datetime.now().year,
-        month=datetime.now().month,
-        day=datetime.now().day,
-        hour=backup_time,
-        minute=0,
-        second=0
-    )
-
-    logging.log(logging.INFO,"PREVIOUS RUN: %s" % previous_run_time)
-    logging.log(logging.INFO,"BACKUP TIME: %s" % datetime_of_backup)
-    logging.log(logging.INFO,"CURRENT RUN: %s" % current_run_time)
-
-    if previous_run_time < datetime_of_backup and current_run_time > datetime_of_backup:
-        return True
-    else:
-        return False
 
 def perform_backup(paths,paths_recursive,api_key,agent_id,secret_key,dbconn,ignore_hash):
     logging.log(logging.INFO,"Beginning backup!")

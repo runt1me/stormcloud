@@ -1,7 +1,6 @@
 from time import sleep
-from datetime import datetime, timedelta
+from datetime import datetime
 import argparse
-import platform
 import os
 
 import sqlite3
@@ -13,8 +12,9 @@ import keepalive_utils
 import backup_utils
 import logging_utils
 
+from infi.systray import SysTrayIcon
+
 ACTION_TIMER = 90
-THREAD_NUM = 0
 
 def main(settings_file_path,hash_db_file_path,ignore_hash_db):
     settings                = read_settings_file(settings_file_path)
@@ -25,40 +25,51 @@ def main(settings_file_path,hash_db_file_path,ignore_hash_db):
     logging_utils.initialize_logging(uuid=settings['AGENT_ID'])
 
     hash_db_conn = get_or_create_hash_db(hash_db_file_path)
+
+    systray_menu_options = (
+        (
+            "Backup on-demand",
+            None,
+            lambda x: backup_utils.perform_backup(
+                settings['BACKUP_PATHS'],
+                settings['RECURSIVE_BACKUP_PATHS'],
+                settings['API_KEY'],
+                settings['AGENT_ID'],
+                settings['SECRET_KEY'],
+                hash_db_conn,
+                ignore_hash_db
+            )
+        )
+    ,)
+    systray = SysTrayIcon("stormcloud.ico", "Stormcloud Backup Engine", systray_menu_options)
+    systray.start()
+
     action_loop_and_sleep(settings=settings,dbconn=hash_db_conn,ignore_hash=ignore_hash_db)
 
 def action_loop_and_sleep(settings, dbconn, ignore_hash):
-    # For the first run, just check if the backup should have been run in the previous 10 minutes
-    prev_run_time = datetime.now() - timedelta(minutes=10)
-    prev_keepalive_freq = -1
     active_thread = None
 
     while True:
-        cur_run_time           = datetime.now()
         cur_keepalive_freq = int(settings['KEEPALIVE_FREQ'])
-        backup_time        = int(settings['BACKUP_TIME'])
         backup_paths           = settings['BACKUP_PATHS']
         recursive_backup_paths = settings['RECURSIVE_BACKUP_PATHS']
         api_key                = settings['API_KEY']
         agent_id               = settings['AGENT_ID']
         secret_key             = settings['SECRET_KEY']
 
-        logging.log(logging.INFO,"Stormcloud is running with settings: %s" % (settings))
+        logging.log(logging.INFO,"Stormcloud is running with settings: %s"
+            % ([(s, settings[s]) for s in settings.keys() if s != 'SECRET_KEY'])
+        )
 
         if active_thread is None:
             active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id)
         else:
             if active_thread.is_alive():
-                if settings_have_changed(cur_keepalive_freq,prev_keepalive_freq):
-                    kill_current_keepalive_thread(active_thread)
-                    active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id)
+                pass
             else:
                 active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id)
 
         backup_utils.perform_backup(backup_paths,recursive_backup_paths,api_key,agent_id,secret_key,dbconn,ignore_hash)
-
-        prev_keepalive_freq = cur_keepalive_freq
-        prev_run_time = cur_run_time
 
         sleep(ACTION_TIMER)
 
@@ -90,21 +101,9 @@ def read_settings_file(fn):
 
     return settings
 
-def settings_have_changed(cur_keepalive_freq,prev_keepalive_freq):
-    if cur_keepalive_freq != prev_keepalive_freq:
-        return True
-    else:
-        return False
-
-def kill_current_keepalive_thread(active_thread):
-    #TODO: this function
-    #maybe change to multiprocessing instead of multithreading???
-    logging.log(logging.INFO,"killing %s" % active_thread)
-
 def start_keepalive_thread(freq,api_key,agent_id):
     logging.log(logging.INFO,"starting new keepalive thread with freq %d" % freq)
 
-    #make thread with this function as a target
     t = threading.Thread(target=keepalive_utils.execute_ping_loop,args=(freq,api_key,agent_id,"keepalive_thd"))
     t.start()
 
@@ -137,18 +136,6 @@ def create_hash_db(path_to_file):
 
 def get_hash_db(path_to_file):
     return sqlite3.connect(path_to_file)
-
-def read_api_key_file(keyfile_path):
-    with open(keyfile_path,'rb') as keyfile:
-        api_key = keyfile.read()
-
-    return api_key.decode("utf-8")
-
-def read_agent_id_file(agent_id_file_path):
-    with open(agent_id_file_path, 'rb') as agentfile:
-        agent_id = agentfile.read()
-
-    return agent_id.decode("utf-8")
 
 if __name__ == "__main__":
     description = r"""

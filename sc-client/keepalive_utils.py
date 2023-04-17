@@ -1,11 +1,7 @@
 from time import sleep
-import random
-
-import socket
-import sys
 import json
-
 import logging
+
 import network_utils as scnet
 
 def execute_ping_loop(interval,api_key,agent_id,name):
