@@ -28,7 +28,7 @@ def main(settings_file_path,hash_db_file_path,ignore_hash_db):
 
     systray_menu_options = (
         (
-            "Backup on-demand",
+            "Backup now",
             None,
             lambda x: backup_utils.perform_backup(
                 settings['BACKUP_PATHS'],
