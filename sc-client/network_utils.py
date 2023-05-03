@@ -67,6 +67,7 @@ def upload_file_in_chunks(api_key,agent_id,encrypted_path,encrypted_content,size
 def post_one_chunk(json_data_as_string, expected_response_code, show_json=False):
     headers = {'Content-type': 'application/json'}
     url = API_ENDPOINT_BACKUP_FILE_CHUNKED
+    response = None
 
     try:
         response = requests.post(url, headers=headers, data=json_data_as_string)
