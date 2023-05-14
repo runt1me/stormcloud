@@ -10,7 +10,6 @@ from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QLabel, QPus
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QCheckBox, QFileDialog, QScrollArea, QWidget, QGridLayout
 
-
 def download_to_folder(url, folder, file_name):
     try:
         response = requests.get(url)
