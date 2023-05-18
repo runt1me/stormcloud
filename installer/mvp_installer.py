@@ -24,7 +24,6 @@ class Installer(QWizard):
         self.api_key       = None
         self.target_folder = None
 
-
         self.addPage(WelcomePage())
         self.addPage(APIKeyPage())
         self.addPage(SystemInfoPage())
@@ -43,6 +42,7 @@ class WelcomePage(QWizardPage):
 class APIKeyPage(QWizardPage):
     def __init__(self):
         super().__init__()
+        print("In APIKey page: %s" % self.wizard())
         layout = QVBoxLayout()
         label = QLabel("Enter your API key:")
         self.api_key_edit = QLineEdit()
@@ -79,6 +79,7 @@ class APIKeyPage(QWizardPage):
 class SystemInfoPage(QWizardPage):
     def __init__(self):
         super().__init__()
+        print("In SystemInfo page: %s" % self.wizard())
         self.setTitle("System Information")
         self.wizard().system_info = self.get_system_info()
 
@@ -132,43 +133,106 @@ class SystemInfoPage(QWizardPage):
 class BackupPage(QWizardPage):
     def __init__(self):
         super().__init__()
-        self.setTitle("Backup and Installation Settings")
-        self.backup_folders = []
-        self.install_directory = ''
-
-        layout = QVBoxLayout()
-        self.backup_layout = QVBoxLayout()
-        self.backup_widget = QWidget()
-        self.backup_widget.setLayout(self.backup_layout)
-        self.backup_scroll = QScrollArea()
-        self.backup_scroll.setWidgetResizable(True)
-        self.backup_scroll.setWidget(self.backup_widget)
+        self.folder_layouts = []
         
-        self.backup_button = QPushButton("Add Folder to Backup")
-        self.backup_button.clicked.connect(self.add_backup_folder)
-        self.install_label = QLabel("No installation directory selected")
+        self.setTitle("Backup and Installation Settings")
+        self.install_directory = ''
+        
+        self.scrollArea = QScrollArea()
+        self.scrollArea.setWidgetResizable(True)
+
+        self.scrollContent = QWidget(self.scrollArea)
+        self.scrollLayout = QFormLayout(self.scrollContent)
+        self.scrollArea.setWidget(self.scrollContent)
+
+        self.addButton = QPushButton("Add Folder", self)
+        self.addButton.clicked.connect(self.addFolder)
+        self.addButton.setMaximumWidth(80)
+        
+        self.install_label = QLineEdit()
+        self.install_label.setText(r"C:/Program Files")
+        self.install_label.setReadOnly(True)
+        
+        #self.install_label = QLabel("No installation directory selected")
         self.install_button = QPushButton("Select Installation Directory")
         self.install_button.clicked.connect(self.select_install_directory)
-
-        layout.addWidget(QLabel("Backup folders:"))
-        layout.addWidget(self.backup_scroll)
-        layout.addWidget(self.backup_button)
+        self.install_button.setMaximumWidth(180)
+        
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel("Select the folders you want to backup:"))
+        layout.addWidget(self.scrollArea)
+        layout.addWidget(self.addButton)
         layout.addWidget(self.install_label)
         layout.addWidget(self.install_button)
         self.setLayout(layout)
 
-    def add_backup_folder(self):
+    def addFolder(self):
         folder = str(QFileDialog.getExistingDirectory(self, "Select Directory"))
         if folder:
-            checkbox = QCheckBox(f"{folder} (include subfolders)")
-            self.backup_layout.addWidget(checkbox)
-            self.backup_folders.append(folder)
+            checkbox = QCheckBox("Include subfolders")
+            checkboxLayout = QHBoxLayout()
+            checkboxLayout.addSpacing(20)
+            checkboxLayout.addWidget(checkbox)
 
+            removeButton = QPushButton("Remove Folder")
+            removeButton.setMaximumWidth(120)
+            
+            path_layout = QHBoxLayout()
+            path_layout.addWidget(QLabel(folder))
+            path_layout.addWidget(removeButton, alignment=Qt.AlignRight)
+            
+            path_and_checkbox_layout = QVBoxLayout()
+            path_and_checkbox_layout.addLayout(path_layout)
+            path_and_checkbox_layout.addLayout(checkboxLayout)
+            self.scrollLayout.addWidget(self.createFolderWidget(folder))
+
+            self.folder_layouts.append((path_and_checkbox_layout, removeButton))
+
+            # Update the clicked event connection to include the QVBoxLayout
+            removeButton.clicked.connect(lambda: self.removeFolder(path_and_checkbox_layout, removeButton))
+
+    def removeFolder(self, widget, button):
+        # Disconnect the clicked signal from the remove button
+        button.clicked.disconnect()
+
+        # Directly delete the widget from the layout
+        self.scrollLayout.removeWidget(widget)
+        widget.deleteLater()
+
+        self.folder_layouts.remove((widget, button))
+
+    def createFolderWidget(self, folder):
+        checkbox = QCheckBox("Include subfolders")
+        checkboxLayout = QHBoxLayout()
+        checkboxLayout.addSpacing(20)
+        checkboxLayout.addWidget(checkbox)
+
+        removeButton = QPushButton("Remove Folder")
+        removeButton.setMaximumWidth(120)
+
+        path_layout = QHBoxLayout()
+        path_layout.addWidget(QLabel(folder))
+        path_layout.addWidget(removeButton, alignment=Qt.AlignRight)
+
+        path_and_checkbox_layout = QVBoxLayout()
+        path_and_checkbox_layout.addLayout(path_layout)
+        path_and_checkbox_layout.addLayout(checkboxLayout)
+
+        folderWidget = QWidget()
+        folderWidget.setLayout(path_and_checkbox_layout)
+
+        self.folder_layouts.append((folderWidget, removeButton))
+
+        # Update the clicked event connection to include the QVBoxLayout
+        removeButton.clicked.connect(lambda: self.removeFolder(folderWidget, removeButton))
+
+        return folderWidget
+        
     def select_install_directory(self):
         directory = str(QFileDialog.getExistingDirectory(self, "Select Installation Directory"))
         if directory:
             self.install_directory = directory
-            self.install_label.setText(f"Installation directory: {self.install_directory}")
+            self.install_label.setText(f"{self.install_directory}")
 
     def validatePage(self):
         if not self.install_directory:
@@ -176,8 +240,8 @@ class BackupPage(QWizardPage):
             return False
         return True
 
-    def nextId(self):
-        return self.wizard().pageIds()[self.wizard().currentPageIndex() + 1]
+#     def nextId(self):
+#         return self.wizard().pageIds()[self.wizard().currentPageIndex() + 1]
 
 class InstallPage(QWizardPage):
     def __init__(self):
