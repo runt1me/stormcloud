@@ -1,15 +1,19 @@
 # Register device request
+import json
+import logging
+import netifaces
+import os
+import platform
+import psutil
+import requests
 import socket
 import sys
-import json
-import platform
-import requests
-import psutil
-import netifaces
-from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QLabel, QPushButton, QProgressBar
+
+from PyQt5.QtWidgets import QApplication, QVBoxLayout, QLabel, QPushButton, QProgressBar#, QMainWindow
 from PyQt5.QtWidgets import QWizard, QWizardPage, QLineEdit, QTextEdit, QMessageBox, QFormLayout
-from PyQt5.QtWidgets import QCheckBox, QFileDialog, QScrollArea, QWidget, QGridLayout
+from PyQt5.QtWidgets import QCheckBox, QFileDialog, QScrollArea, QWidget, QHBoxLayout#, QGridLayout
 from PyQt5.QtCore import Qt
+from requests.exceptions import SSLError
 
 class Installer(QWizard):
     def __init__(self):
@@ -39,16 +43,18 @@ class WelcomePage(QWizardPage):
         layout.addWidget(label)
         self.setLayout(layout)
 
-class APIKeyPage(QWizardPage):
+class APIKeyPage(QWizardPage):    
     def __init__(self):
         super().__init__()
-        print("In APIKey page: %s" % self.wizard())
         layout = QVBoxLayout()
         label = QLabel("Enter your API key:")
         self.api_key_edit = QLineEdit()
         layout.addWidget(label)
         layout.addWidget(self.api_key_edit)
         self.setLayout(layout)
+
+    def initializePage(self):
+        print("In APIKey page: %s" % self.wizard())
 
     def validatePage(self):
         api_key = self.api_key_edit.text()
@@ -79,14 +85,19 @@ class APIKeyPage(QWizardPage):
 class SystemInfoPage(QWizardPage):
     def __init__(self):
         super().__init__()
-        print("In SystemInfo page: %s" % self.wizard())
         self.setTitle("System Information")
-        self.wizard().system_info = self.get_system_info()
-
+        
         layout = QFormLayout()
-        for key, value in self.wizard().system_info.items():
-            layout.addRow(QLabel(key), self.createReadOnlyText(str(value)))
         self.setLayout(layout)
+
+    def initializePage(self):
+        print("In SystemInfo page: %s" % self.wizard())
+        self.wizard().system_info = self.get_system_info()
+        
+        # Clear and repopulate the layout every time the page is shown
+        self.layout().removeRow(0)
+        for key, value in self.wizard().system_info.items():
+            self.layout().addRow(QLabel(key), self.createReadOnlyText(str(value)))
 
     def get_system_info(self):
         BYTES_IN_A_GB = 1073741824
@@ -111,10 +122,10 @@ class SystemInfoPage(QWizardPage):
 
     def validatePage(self):
         api_key = self.wizard().api_key
-        self.system_info["api_key"] = api_key
-        self.system_info["request_type"] = "register_new_device"
-        self.system_info["device_status"] = 1
-        self.system_info["device_type"] = "bar"
+        self.wizard().system_info["api_key"] = api_key
+        self.wizard().system_info["request_type"] = "register_new_device"
+        self.wizard().system_info["device_status"] = 1
+        self.wizard().system_info["device_type"] = "bar"
 
     def createReadOnlyText(self, text):
         readOnlyText = QTextEdit()
@@ -275,8 +286,29 @@ class InstallPage(QWizardPage):
         self.install()
 
     def install(self):
+        def get_result(result, result_type):
+            # Input checks
+            valid_result_types = ('register', 'download', 'configure')
+            if result_type not in valid_result_types:
+                QMessageBox.warning(self, "Error", 'Invalid result_type provided. Valid result types include: `{}`'.format("`, `".join(valid_result_types)))
+            
+            if result:
+                return True
+            elif result_type == 'register':
+                return False
+            elif result_type == 'download':
+                return False
+            elif result_type == 'configure':
+                return False
+        
         register_result = self.register_new_device(self.wizard().system_info)
-        download_result = self.download_to_folder(WINDOWS_OS_SC_CLIENT_URL, self.wizard().target_folder, "stormcloud.exe")
+        if not get_result(register_result, result_type='register'):
+            QMessageBox.warning(self, "Error", "Failed to register the new device. Please try again.")
+        
+        download_result = self.download_to_folder(self.stormcloud_client_url, self.wizard().target_folder, "stormcloud.exe")
+        if not get_result(download_result, result_type='download'):
+            QMessageBox.warning(self, "Error", "Failed to download stormcloud. Please try again.")
+        
         configure_result = self.configure_settings(
             send_logs=1, backup_time=22, keepalive_freq=300,
             backup_paths=self.wizard().system_info['backup_paths'],
@@ -286,14 +318,10 @@ class InstallPage(QWizardPage):
             api_key=self.wizard().system_info['api_key'],
             target_folder=self.wizard().target_folder,
         )
+        if not get_result(configure_result, result_type='configure'):
+            QMessageBox.warning(self, "Error", "Failed to configure settings. Please try again.")
 
         # TODO: configure_persistence()
-
-        if result:
-            return True
-        else:
-            QMessageBox.warning(self, "Error", "Failed to register the new device. Please try again.")
-            return False
 
     def register_new_device(self, data):
         headers = {"Content-Type": "application/json"}
@@ -370,10 +398,10 @@ class InstallPage(QWizardPage):
     def download_to_folder(url, folder, file_name):
         if not folder.endswith('\\'):
             folder += "\\"
-
         try:
             response = requests.get(url)
         except SSLError as e:
+            
             logging.log(logging.ERROR, "Caught SSL Error when trying to download from %s: %s" % (url,e))
         except Exception as e:
             logging.log(logging.ERROR, "Caught exception when trying to download from %s: %s" % (url,e))
