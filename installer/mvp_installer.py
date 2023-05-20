@@ -24,10 +24,12 @@ class Installer(QWizard):
         self.setFixedSize(640, 480)
 
         # Scoping these variables to the installer so that I can use them later
-        self.system_info       = None
-        self.api_key           = None
-        self.target_folder     = None
-        self.install_directory = None
+        self.system_info            = None
+        self.api_key                = None
+        self.target_folder          = None
+        self.install_directory      = None
+        self.backup_paths           = None
+        self.backup_paths_recursive = None
 
         self.addPage(WelcomePage())
         self.addPage(APIKeyPage())
@@ -148,7 +150,6 @@ class BackupPage(QWizardPage):
         self.folder_layouts = []
         
         self.setTitle("Backup and Installation Settings")
-        self.install_directory = ''
         
         self.scrollArea = QScrollArea()
         self.scrollArea.setWidgetResizable(True)
@@ -162,10 +163,9 @@ class BackupPage(QWizardPage):
         self.addButton.setMaximumWidth(80)
         
         self.install_label = QLineEdit()
-        self.install_label.setText(r"C:/Program Files")
+        self.install_label.setText("C:\\Program Files\\Stormcloud")
         self.install_label.setReadOnly(True)
         
-        #self.install_label = QLabel("No installation directory selected")
         self.install_button = QPushButton("Select Installation Directory")
         self.install_button.clicked.connect(self.select_install_directory)
         self.install_button.setMaximumWidth(180)
@@ -177,6 +177,9 @@ class BackupPage(QWizardPage):
         layout.addWidget(self.install_label)
         layout.addWidget(self.install_button)
         self.setLayout(layout)
+
+    def initializePage(self):
+        self.wizard().install_directory = "C:\\Program Files\\Stormcloud"
 
     def addFolder(self):
         folder = str(QFileDialog.getExistingDirectory(self, "Select Directory"))
@@ -243,11 +246,12 @@ class BackupPage(QWizardPage):
     def select_install_directory(self):
         directory = str(QFileDialog.getExistingDirectory(self, "Select Installation Directory"))
         if directory:
-            self.install_directory = directory
-            self.install_label.setText(f"{self.install_directory}")
+            self.wizard().install_directory = directory
+            self.install_label.setText(f"{self.wizard().install_directory}")
 
     def validatePage(self):
-        if not self.install_directory:
+        
+        if not self.wizard().install_directory:
             QMessageBox.warning(self, "No Installation Directory", "Please select an installation directory.")
             return False
         return True
@@ -299,11 +303,11 @@ class InstallPage(QWizardPage):
             elif result_type == 'configure':
                 return False
         
-        register_result = self.register_new_device(self.wizard().system_info)
+        register_result = self.register_new_device()
         if not get_result(register_result, result_type='register'):
             QMessageBox.warning(self, "Error", "Failed to register the new device. Please try again.")
         
-        download_result = self.download_to_folder(self.stormcloud_client_url, self.wizard().target_folder, "stormcloud.exe")
+        download_result = self.download_to_folder(self.stormcloud_client_url, self.wizard().install_directory, "stormcloud.exe")
         if not get_result(download_result, result_type='download'):
             QMessageBox.warning(self, "Error", "Failed to download stormcloud. Please try again.")
         
@@ -314,26 +318,31 @@ class InstallPage(QWizardPage):
             secret_key=register_result['secret_key'],
             agent_id=register_result['agent_id'],
             api_key=self.wizard().system_info['api_key'],
-            target_folder=self.wizard().target_folder,
+            target_folder=self.wizard().install_directory,
         )
         if not get_result(configure_result, result_type='configure'):
             QMessageBox.warning(self, "Error", "Failed to configure settings. Please try again.")
 
         # TODO: configure_persistence()
 
-    def register_new_device(self, data):
+    def register_new_device(self):
         headers = {"Content-Type": "application/json"}
 
+        post_data = self.wizard().system_info
+        post_data['api_key'] = self.wizard().api_key
+        print("register_new_device: %s" % post_data)
+
         try:
-            response = requests.post(url=self.register_new_device_url, headers=headers, json=data)
+            response = requests.post(url=self.register_new_device_url, headers=headers, json=post_data)
             if response.status_code == 200:
-                return response.json
+                print("Response: %s" % response.json())
+                return response.json()
             else:
                 return None
         except:
             return None
 
-    def configure_settings(send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive, secret_key, agent_id, api_key, target_folder, os_info):
+    def configure_settings(self, send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive, secret_key, agent_id, api_key, target_folder, os_info):
         backup_time        = int(backup_time)
         keepalive_freq     = int(keepalive_freq)
 
@@ -393,9 +402,13 @@ class InstallPage(QWizardPage):
             output_string = "\n".join(lines_to_write)
             settings_file.write(output_string)
 
-    def download_to_folder(url, folder, file_name):
+    def download_to_folder(self, url, folder, file_name):
+        # Make sure that the folder is in the form of INSTALL_DIRECTORY\\Stormcloud\\
         if not folder.endswith('\\'):
             folder += "\\"
+        if not folder.endswith("Stormcloud"):
+            folder += "Stormcloud\\"
+
         try:
             response = requests.get(url)
         except SSLError as e:
