@@ -264,11 +264,16 @@ class InstallPage(QWizardPage):
         self.SERVER_PORT_DOWNLOAD=443
         self.STORMCLOUD_VERSION="1.0.0"
 
+        # TODO: Uncomment this
         self.stormcloud_client_url   = "https://%s:%s/sc-dist/windows-x86_64-stormcloud-client-%s.exe" % (
             self.SERVER_NAME,
             self.SERVER_PORT_DOWNLOAD,
             self.STORMCLOUD_VERSION
         )
+        # self.stormcloud_client_url   = "https://%s:%s/sc-dist/test.txt" % (
+        #     self.SERVER_NAME,
+        #     self.SERVER_PORT_DOWNLOAD
+        # )
         print(self.stormcloud_client_url)
         self.register_new_device_url   = "https://%s:%s/api/register-new-device" % (
             self.SERVER_NAME,
@@ -307,7 +312,7 @@ class InstallPage(QWizardPage):
         if not get_result(register_result, result_type='register'):
             QMessageBox.warning(self, "Error", "Failed to register the new device. Please try again.")
         
-        download_result = self.download_to_folder(self.stormcloud_client_url, self.wizard().install_directory, "stormcloud.exe")
+        download_result = self.download_to_folder(self.stormcloud_client_url, self.wizard().install_directory, "stormcloud")#, 'test.txt')
         if not get_result(download_result, result_type='download'):
             QMessageBox.warning(self, "Error", "Failed to download stormcloud. Please try again.")
         
@@ -435,6 +440,22 @@ class InstallPage(QWizardPage):
 
         # Fail case
         return (1, None)
+    
+    # def download_to_folder(self, url, folder, file_name):
+    #     if not folder.endswith('\\'):
+    #         folder += "\\Stormcloud\\"
+    #     else:
+    #         folder += "Stormcloud\\"
+    #     full_path = folder + "testfile.txt"
+    #     try:
+    #         os.makedirs(os.path.dirname(full_path), exist_ok=True)
+    #         with open(full_path, 'w') as f:
+    #             f.write('This is a test.')
+    #         return (0, full_path)
+    #     except Exception as e:
+    #         logging.log(logging.ERROR, "Caught exception when trying to write to file: %s. Error: %s" % (full_path,e))
+    #     return (1, None)
+
 
 class FinishPage(QWizardPage):
     def __init__(self):
