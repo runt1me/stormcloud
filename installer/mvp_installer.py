@@ -24,9 +24,10 @@ class Installer(QWizard):
         self.setFixedSize(640, 480)
 
         # Scoping these variables to the installer so that I can use them later
-        self.system_info   = None
-        self.api_key       = None
-        self.target_folder = None
+        self.system_info       = None
+        self.api_key           = None
+        self.target_folder     = None
+        self.install_directory = None
 
         self.addPage(WelcomePage())
         self.addPage(APIKeyPage())
@@ -54,7 +55,7 @@ class APIKeyPage(QWizardPage):
         self.setLayout(layout)
 
     def initializePage(self):
-        print("In APIKey page: %s" % self.wizard())
+        pass
 
     def validatePage(self):
         api_key = self.api_key_edit.text()
@@ -91,7 +92,6 @@ class SystemInfoPage(QWizardPage):
         self.setLayout(layout)
 
     def initializePage(self):
-        print("In SystemInfo page: %s" % self.wizard())
         self.wizard().system_info = self.get_system_info()
         
         # Clear and repopulate the layout every time the page is shown
@@ -251,9 +251,6 @@ class BackupPage(QWizardPage):
             QMessageBox.warning(self, "No Installation Directory", "Please select an installation directory.")
             return False
         return True
-
-#     def nextId(self):
-#         return self.wizard().pageIds()[self.wizard().currentPageIndex() + 1]
 
 class InstallPage(QWizardPage):
     def __init__(self):
