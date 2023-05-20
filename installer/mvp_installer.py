@@ -60,9 +60,8 @@ class APIKeyPage(QWizardPage):
         pass
 
     def validatePage(self):
-        api_key = self.api_key_edit.text()
-        if self.validate_api_key(api_key):
-            self.wizard().api_key = api_key
+        if self.validate_api_key(self.api_key_edit.text()):
+            self.wizard().api_key = self.api_key_edit.text()
             return True
         else:
             QMessageBox.warning(self, "Invalid API Key", "The entered API key is invalid or could not be verified. Please try again.")
@@ -123,7 +122,6 @@ class SystemInfoPage(QWizardPage):
         return ipv4_addresses[0] if ipv4_addresses else None
 
     def validatePage(self):
-        api_key = self.wizard().api_key
         self.wizard().system_info["request_type"] = "register_new_device"
         self.wizard().system_info["device_status"] = 1
         self.wizard().system_info["device_type"] = "bar"
@@ -163,7 +161,8 @@ class BackupPage(QWizardPage):
         self.addButton.setMaximumWidth(80)
         
         self.install_label = QLineEdit()
-        self.install_label.setText("C:\\Program Files\\Stormcloud")
+        
+        self.install_label.setText(os.getenv("HOMEDRIVE") + os.getenv("HOMEPATH") + "\\AppData\\Roaming")
         self.install_label.setReadOnly(True)
         
         self.install_button = QPushButton("Select Installation Directory")
@@ -179,7 +178,7 @@ class BackupPage(QWizardPage):
         self.setLayout(layout)
 
     def initializePage(self):
-        self.wizard().install_directory = "C:\\Program Files\\Stormcloud"
+        self.wizard().install_directory = os.getenv("HOMEDRIVE") + os.getenv("HOMEPATH") + "\\AppData\\Roaming"
 
     def addFolder(self):
         folder = str(QFileDialog.getExistingDirectory(self, "Select Directory"))
@@ -199,25 +198,21 @@ class BackupPage(QWizardPage):
             path_and_checkbox_layout = QVBoxLayout()
             path_and_checkbox_layout.addLayout(path_layout)
             path_and_checkbox_layout.addLayout(checkboxLayout)
-            self.scrollLayout.addWidget(self.createFolderWidget(folder))
 
-            self.folder_layouts.append((path_and_checkbox_layout, removeButton))
+            self.scrollLayout.addWidget(self.createFolderWidget(folder, checkbox))  # Pass checkbox to method
 
-            # Update the clicked event connection to include the QVBoxLayout
-            removeButton.clicked.connect(lambda: self.removeFolder(path_and_checkbox_layout, removeButton))
+            # self.folder_layouts.append((folder, checkbox, path_and_checkbox_layout, removeButton))  # Store checkbox
 
-    def removeFolder(self, widget, button):
-        # Disconnect the clicked signal from the remove button
+            removeButton.clicked.connect(lambda: self.removeFolder(folder, checkbox, path_and_checkbox_layout, removeButton))
+
+    def removeFolder(self, folder, checkbox, widget, button):
         button.clicked.disconnect()
-
-        # Directly delete the widget from the layout
         self.scrollLayout.removeWidget(widget)
         widget.deleteLater()
 
-        self.folder_layouts.remove((widget, button))
+        self.folder_layouts.remove((folder, checkbox, widget, button))
 
-    def createFolderWidget(self, folder):
-        checkbox = QCheckBox("Include subfolders")
+    def createFolderWidget(self, folder, checkbox):  # Receive checkbox from caller
         checkboxLayout = QHBoxLayout()
         checkboxLayout.addSpacing(20)
         checkboxLayout.addWidget(checkbox)
@@ -236,10 +231,9 @@ class BackupPage(QWizardPage):
         folderWidget = QWidget()
         folderWidget.setLayout(path_and_checkbox_layout)
 
-        self.folder_layouts.append((folderWidget, removeButton))
+        self.folder_layouts.append((folder, checkbox, folderWidget, removeButton))  # Store checkbox
 
-        # Update the clicked event connection to include the QVBoxLayout
-        removeButton.clicked.connect(lambda: self.removeFolder(folderWidget, removeButton))
+        removeButton.clicked.connect(lambda: self.removeFolder(folder, checkbox, folderWidget, removeButton))  # Pass checkbox to method
 
         return folderWidget
         
@@ -250,6 +244,11 @@ class BackupPage(QWizardPage):
             self.install_label.setText(f"{self.wizard().install_directory}")
 
     def validatePage(self):
+        self.wizard().backup_paths = [folder for folder, checkbox, _, _ in self.folder_layouts if not checkbox.isChecked()]
+        self.wizard().backup_paths_recursive = [folder for folder, checkbox, _, _ in self.folder_layouts if checkbox.isChecked()]
+        
+        print(self.wizard().backup_paths)
+        print(self.wizard().backup_paths_recursive)
         
         if not self.wizard().install_directory:
             QMessageBox.warning(self, "No Installation Directory", "Please select an installation directory.")
@@ -270,6 +269,7 @@ class InstallPage(QWizardPage):
             self.SERVER_PORT_DOWNLOAD,
             self.STORMCLOUD_VERSION
         )
+        print(self.stormcloud_client_url)
         self.register_new_device_url   = "https://%s:%s/api/register-new-device" % (
             self.SERVER_NAME,
             self.SERVER_PORT_API
@@ -312,9 +312,11 @@ class InstallPage(QWizardPage):
             QMessageBox.warning(self, "Error", "Failed to download stormcloud. Please try again.")
         
         configure_result = self.configure_settings(
-            send_logs=1, backup_time=22, keepalive_freq=300,
-            backup_paths=self.wizard().system_info['backup_paths'],
-            backup_paths_recursive=self.wizard().system_info['backup_paths_recursive'],
+            send_logs=1,
+            backup_time=22,
+            keepalive_freq=300,
+            backup_paths=self.wizard().backup_paths,
+            backup_paths_recursive=self.wizard().backup_paths_recursive,
             secret_key=register_result['secret_key'],
             agent_id=register_result['agent_id'],
             api_key=self.wizard().system_info['api_key'],
@@ -342,7 +344,7 @@ class InstallPage(QWizardPage):
         except:
             return None
 
-    def configure_settings(self, send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive, secret_key, agent_id, api_key, target_folder, os_info):
+    def configure_settings(self, send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive, secret_key, agent_id, api_key, target_folder):
         backup_time        = int(backup_time)
         keepalive_freq     = int(keepalive_freq)
 
@@ -401,12 +403,12 @@ class InstallPage(QWizardPage):
 
             output_string = "\n".join(lines_to_write)
             settings_file.write(output_string)
+        return True
 
     def download_to_folder(self, url, folder, file_name):
-        # Make sure that the folder is in the form of INSTALL_DIRECTORY\\Stormcloud\\
         if not folder.endswith('\\'):
-            folder += "\\"
-        if not folder.endswith("Stormcloud"):
+            folder += "\\Stormcloud\\"
+        else:
             folder += "Stormcloud\\"
 
         try:
