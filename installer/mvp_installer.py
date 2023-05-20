@@ -122,10 +122,11 @@ class SystemInfoPage(QWizardPage):
 
     def validatePage(self):
         api_key = self.wizard().api_key
-        self.wizard().system_info["api_key"] = api_key
         self.wizard().system_info["request_type"] = "register_new_device"
         self.wizard().system_info["device_status"] = 1
         self.wizard().system_info["device_type"] = "bar"
+
+        return True
 
     def createReadOnlyText(self, text):
         readOnlyText = QTextEdit()
