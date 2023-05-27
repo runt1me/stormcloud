@@ -15,6 +15,8 @@ from PyQt5.QtWidgets import QCheckBox, QFileDialog, QScrollArea, QWidget, QHBoxL
 from PyQt5.QtCore import Qt
 from requests.exceptions import SSLError
 
+from pathlib import Path
+
 class Installer(QWizard):
     def __init__(self):
         super().__init__()
@@ -295,27 +297,27 @@ class InstallPage(QWizardPage):
     def install(self):
         def get_result(result, result_type):
             # Input checks
-            valid_result_types = ('register', 'download', 'configure')
+            valid_result_types = ('register', 'download', 'configure', 'persist')
             if result_type not in valid_result_types:
                 QMessageBox.warning(self, "Error", 'Invalid result_type provided. Valid result types include: `{}`'.format("`, `".join(valid_result_types)))
             
             if result:
                 return True
-            elif result_type == 'register':
-                return False
-            elif result_type == 'download':
-                return False
-            elif result_type == 'configure':
-                return False
+            return False
         
+        if not self.wizard().install_directory.endswith('\\'):
+            self.wizard().install_directory += "\\Stormcloud\\"
+        else:
+            self.wizard().install_directory += "Stormcloud\\"
+
         register_result = self.register_new_device()
         if not get_result(register_result, result_type='register'):
             QMessageBox.warning(self, "Error", "Failed to register the new device. Please try again.")
         
-        download_result = self.download_to_folder(self.stormcloud_client_url, self.wizard().install_directory, "stormcloud")#, 'test.txt')
+        download_result, full_exe_path = self.download_to_folder(self.stormcloud_client_url, self.wizard().install_directory, "stormcloud.exe")
         if not get_result(download_result, result_type='download'):
             QMessageBox.warning(self, "Error", "Failed to download stormcloud. Please try again.")
-        
+
         configure_result = self.configure_settings(
             send_logs=1,
             backup_time=22,
@@ -330,7 +332,9 @@ class InstallPage(QWizardPage):
         if not get_result(configure_result, result_type='configure'):
             QMessageBox.warning(self, "Error", "Failed to configure settings. Please try again.")
 
-        # TODO: configure_persistence()
+        persist_result = self.configure_persistence(self.wizard().system_info['operating_system'], full_exe_path)
+        if not get_result(persist_result, result_type='persist'):
+            QMessageBox.warning(self, "Error", "Failed to add stormcloud to startup process. Please try again.")
 
     def register_new_device(self):
         headers = {"Content-Type": "application/json"}
@@ -352,9 +356,6 @@ class InstallPage(QWizardPage):
     def configure_settings(self, send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive, secret_key, agent_id, api_key, target_folder):
         backup_time        = int(backup_time)
         keepalive_freq     = int(keepalive_freq)
-
-        if not target_folder.endswith("\\"):
-            target_folder += "\\"
 
         settings_file_path = target_folder + "settings.cfg"
         os.makedirs(os.path.dirname(settings_file_path), exist_ok=True)
@@ -408,14 +409,10 @@ class InstallPage(QWizardPage):
 
             output_string = "\n".join(lines_to_write)
             settings_file.write(output_string)
+
         return True
 
     def download_to_folder(self, url, folder, file_name):
-        if not folder.endswith('\\'):
-            folder += "\\Stormcloud\\"
-        else:
-            folder += "Stormcloud\\"
-
         try:
             response = requests.get(url)
         except SSLError as e:
@@ -434,28 +431,30 @@ class InstallPage(QWizardPage):
                         f.write(chunk)
                 
                 # Pass case
-                return (0, full_path)
+                return (1, full_path)
             except Exception as e:
                 logging.log(logging.ERROR, "Caught exception when trying to write stormcloud to file: %s. Error: %s" % (full_path,e))
 
         # Fail case
-        return (1, None)
-    
-    # def download_to_folder(self, url, folder, file_name):
-    #     if not folder.endswith('\\'):
-    #         folder += "\\Stormcloud\\"
-    #     else:
-    #         folder += "Stormcloud\\"
-    #     full_path = folder + "testfile.txt"
-    #     try:
-    #         os.makedirs(os.path.dirname(full_path), exist_ok=True)
-    #         with open(full_path, 'w') as f:
-    #             f.write('This is a test.')
-    #         return (0, full_path)
-    #     except Exception as e:
-    #         logging.log(logging.ERROR, "Caught exception when trying to write to file: %s. Error: %s" % (full_path,e))
-    #     return (1, None)
+        return (0, None)
 
+    def configure_persistence(self, os_info, sc_client_installed_path):
+        sc_client_installed_path_obj = Path(sc_client_installed_path)
+        try:
+            shortcut_path = os.getenv('APPDATA') + "\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\stormcloud.lnk"
+            target_path   = str(sc_client_installed_path_obj)
+            working_dir   = str(sc_client_installed_path_obj.parent)
+
+            shell = Dispatch('Wscript.Shell')
+            shortcut = shell.CreateShortCut(shortcut_path)
+            shortcut.Targetpath = target_path
+            shortcut.WorkingDirectory = working_dir
+            shortcut.save()
+
+            return (1, shortcut_path)
+        except Exception as e:
+            logging.log(logging.ERROR, "Failed to create shortcut: %s" % e)
+            return (0, None)
 
 class FinishPage(QWizardPage):
     def __init__(self):
