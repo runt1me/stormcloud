@@ -1,4 +1,3 @@
-# Register device request
 import json
 import logging
 import netifaces
@@ -9,6 +8,7 @@ import requests
 import socket
 import sys
 import winshell
+import subprocess
 from win32com.client import Dispatch
 
 from PyQt5.QtWidgets import QApplication, QVBoxLayout, QLabel, QPushButton, QProgressBar#, QMainWindow
@@ -22,7 +22,7 @@ from pathlib import Path
 class Installer(QWizard):
     def __init__(self):
         super().__init__()
-        # TODO: logging
+        # TODO: logging - best practices for how to incorporate this?
 
         self.setWindowTitle("Stormcloud Installer")
         self.setFixedSize(640, 480)
@@ -41,6 +41,16 @@ class Installer(QWizard):
         self.addPage(BackupPage())
         self.addPage(InstallPage())
         self.addPage(FinishPage())
+
+    def initialize_logging():
+        logging.basicConfig(
+            filename='install.log',
+            filemode='a',
+            format='%(asctime)s %(levelname)-8s %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S',
+            level=logging.DEBUG
+        )
+
 
 class WelcomePage(QWizardPage):
     def __init__(self):
@@ -268,17 +278,11 @@ class InstallPage(QWizardPage):
         self.SERVER_PORT_DOWNLOAD=443
         self.STORMCLOUD_VERSION="1.0.0"
 
-        # TODO: Uncomment this
         self.stormcloud_client_url   = "https://%s:%s/sc-dist/windows-x86_64-stormcloud-client-%s.exe" % (
             self.SERVER_NAME,
             self.SERVER_PORT_DOWNLOAD,
             self.STORMCLOUD_VERSION
         )
-        # self.stormcloud_client_url   = "https://%s:%s/sc-dist/test.txt" % (
-        #     self.SERVER_NAME,
-        #     self.SERVER_PORT_DOWNLOAD
-        # )
-        print(self.stormcloud_client_url)
         self.register_new_device_url   = "https://%s:%s/api/register-new-device" % (
             self.SERVER_NAME,
             self.SERVER_PORT_API
@@ -293,6 +297,10 @@ class InstallPage(QWizardPage):
         self.setLayout(layout)
 
     def initializePage(self):
+        # TODO: need to find the right place to call self.install()
+        # Need to make the progress bar move appropriately as functions complete
+        # Need to figure out how to display text on the screen while bar moves
+        # i.e. "registering device", "configuring settings", "downloading stormcloud client", "configuring startup process"
         self.progress.setValue(0)
         self.install()
 
@@ -441,9 +449,11 @@ class InstallPage(QWizardPage):
         return (0, None)
 
     def configure_persistence(self, os_info, sc_client_installed_path):
+        # TODO: need exception handling for if there is already a link there, this will break
+        # Ideally need to check for artifacts to determine if its already installed
         sc_client_installed_path_obj = Path(sc_client_installed_path)
         try:
-            shortcut_path = os.getenv('APPDATA') + "\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\stormcloud.lnk"
+            shortcut_path = os.getenv('APPDATA') + "\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\Stormcloud.lnk"
             target_path   = str(sc_client_installed_path_obj)
             working_dir   = str(sc_client_installed_path_obj.parent)
 
@@ -463,11 +473,24 @@ class FinishPage(QWizardPage):
         super().__init__()
 
         # TODO: have a checkbox to launch the installer
+        self.checkbox = QCheckBox("Run Stormcloud")
 
         layout = QVBoxLayout()
         label = QLabel("Installation completed! Click 'Finish' to close the installer.")
         layout.addWidget(label)
+        layout.addWidget(self.checkbox)
         self.setLayout(layout)
+
+    def validatePage(self):
+        if self.checkbox.isChecked():
+            self.run_stormcloud_client()
+
+        return True
+
+    def run_stormcloud_client(self):
+        path_to_exec = self.wizard().install_directory + "\\stormcloud.exe"
+        logging.log(logging.INFO, "start %s" %path_to_exec)
+        subprocess.Popen('start %s' %path_to_exec, cwd=self.wizard().install_directory, shell=True)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
