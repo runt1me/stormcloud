@@ -8,6 +8,8 @@ import psutil
 import requests
 import socket
 import sys
+import winshell
+from win32com.client import Dispatch
 
 from PyQt5.QtWidgets import QApplication, QVBoxLayout, QLabel, QPushButton, QProgressBar#, QMainWindow
 from PyQt5.QtWidgets import QWizard, QWizardPage, QLineEdit, QTextEdit, QMessageBox, QFormLayout
