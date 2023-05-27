@@ -261,9 +261,6 @@ class BackupPage(QWizardPage):
         self.wizard().backup_paths = [folder for folder, checkbox, _, _ in self.folder_layouts if not checkbox.isChecked()]
         self.wizard().backup_paths_recursive = [folder for folder, checkbox, _, _ in self.folder_layouts if checkbox.isChecked()]
         
-        print(self.wizard().backup_paths)
-        print(self.wizard().backup_paths_recursive)
-        
         if not self.wizard().install_directory:
             QMessageBox.warning(self, "No Installation Directory", "Please select an installation directory.")
             return False
@@ -323,10 +320,14 @@ class InstallPage(QWizardPage):
         register_result = self.register_new_device()
         if not get_result(register_result, result_type='register'):
             QMessageBox.warning(self, "Error", "Failed to register the new device. Please try again.")
-        
+
+        self.progress.setValue(30)
+
         download_result, full_exe_path = self.download_to_folder(self.stormcloud_client_url, self.wizard().install_directory, "stormcloud.exe")
         if not get_result(download_result, result_type='download'):
             QMessageBox.warning(self, "Error", "Failed to download stormcloud. Please try again.")
+
+        self.progress.setValue(60)
 
         configure_result = self.configure_settings(
             send_logs=1,
@@ -342,9 +343,13 @@ class InstallPage(QWizardPage):
         if not get_result(configure_result, result_type='configure'):
             QMessageBox.warning(self, "Error", "Failed to configure settings. Please try again.")
 
+        self.progress.setValue(70)
+
         persist_result = self.configure_persistence(self.wizard().system_info['operating_system'], full_exe_path)
         if not get_result(persist_result, result_type='persist'):
             QMessageBox.warning(self, "Error", "Failed to add stormcloud to startup process. Please try again.")
+
+        self.progress.setValue(100)
 
     def register_new_device(self):
         headers = {"Content-Type": "application/json"}
@@ -453,7 +458,7 @@ class InstallPage(QWizardPage):
         # Ideally need to check for artifacts to determine if its already installed
         sc_client_installed_path_obj = Path(sc_client_installed_path)
         try:
-            shortcut_path = os.getenv('APPDATA') + "\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\Stormcloud.lnk"
+            shortcut_path = os.getenv('APPDATA') + "\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\Stormcloud Backup Engine.lnk"
             target_path   = str(sc_client_installed_path_obj)
             working_dir   = str(sc_client_installed_path_obj.parent)
 
