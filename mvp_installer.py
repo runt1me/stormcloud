@@ -7,8 +7,10 @@ import psutil
 import requests
 import socket
 import sys
+import winreg # Used for uninstaller (create_uninstall_registry_key)
 import winshell
 import subprocess
+import yaml
 from win32com.client import Dispatch
 
 from PyQt5.QtWidgets import QApplication, QVBoxLayout, QLabel, QPushButton, QProgressBar#, QMainWindow
@@ -326,7 +328,7 @@ class InstallPage(QWizardPage):
 
         self.label.setText("Downloading stormcloud client...")
         download_result, full_exe_path = self.download_to_folder(self.stormcloud_client_url, self.wizard().install_directory, "stormcloud.exe")
-        print((download_result, full_exe_path))
+        
         if not get_result(download_result, result_type='download'):
             QMessageBox.warning(self, "Error", "Failed to download stormcloud. Please try again.")
         self.progress.setValue(50)
@@ -351,8 +353,11 @@ class InstallPage(QWizardPage):
         persist_result = self.configure_persistence(self.wizard().system_info['operating_system'], full_exe_path)
         if not get_result(persist_result, result_type='persist'):
             QMessageBox.warning(self, "Error", "Failed to add stormcloud to startup process. Please try again.")
-        self.progress.setValue(100)
+        self.progress.setValue(90)
         self.label.setText("Installation complete.")
+        
+        self.create_uninstall_registry_key('Stormcloud', 'Dark Age Technology Group', self.STORMCLOUD_VERSION, 'C:/Users/Tyler/AppData/Roaming/Stormcloud/Stormcloud', 'C:/Users/Tyler/AppData/Roaming/Stormcloud/Stormcloud/Uninstaller.exe')
+        self.progress.setValue(100)
 
     def register_new_device(self):
         headers = {"Content-Type": "application/json"}
@@ -428,6 +433,14 @@ class InstallPage(QWizardPage):
             output_string = "\n".join(lines_to_write)
             settings_file.write(output_string)
 
+        # Create a stable location for settings to ensure we can find the application later
+        stable_app_location = os.path.dirname(os.getenv('APPDATA') + "\\Stormcloud\\Stormcloud\\")
+        os.makedirs(stable_app_location, exist_ok=True)
+        with open(stable_app_location + "\\stable_settings.yaml", "w") as stable_settings_file:
+            stable_settings = {}
+            stable_settings['application_path'] = self.wizard().install_directory
+            yaml.dump(stable_settings, stable_settings_file)
+
         return True
 
     def download_to_folder(self, url, folder, file_name):
@@ -479,6 +492,25 @@ class InstallPage(QWizardPage):
             logging.log(logging.ERROR, "Failed to create shortcut: %s" % e)
             return (0, None)
 
+    def create_uninstall_registry_key(self, app_name, company_name, version, install_location, uninstall_string):
+        # Open the uninstall registry key.
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, 
+                             'Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall', 
+                             0, winreg.KEY_ALL_ACCESS)
+    
+        # Create a new key for our application.
+        app_key = winreg.CreateKey(key, app_name)
+    
+        # Set the values that will appear in the Add/Remove Programs entry.
+        winreg.SetValueEx(app_key, 'DisplayName', 0, winreg.REG_SZ, app_name)
+        winreg.SetValueEx(app_key, 'CompanyName', 0, winreg.REG_SZ, company_name)
+        winreg.SetValueEx(app_key, 'Version', 0, winreg.REG_SZ, version)
+        winreg.SetValueEx(app_key, 'InstallLocation', 0, winreg.REG_SZ, install_location)
+        winreg.SetValueEx(app_key, 'UninstallString', 0, winreg.REG_SZ, uninstall_string)
+    
+        # Close the keys.
+        winreg.CloseKey(app_key)
+        winreg.CloseKey(key)
 
 class FinishPage(QWizardPage):
     def __init__(self):
