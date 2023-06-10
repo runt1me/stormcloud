@@ -1,11 +1,18 @@
 import os
+import yaml
 # import requests
 # import subprocess
 # import sys
 # from win32com.client import Dispatch
 # from pathlib import Path
 
-app_path = os.getenv('APPDATA') + "\\Stormcloud"
+
+appdata_path = os.getenv('APPDATA') + "\\Stormcloud"
+
+with open(appdata_path + '\\Stormcloud\\stable_settings.yaml', 'r') as file:
+    stable_settings = yaml.safe_load(file)
+
+application_path = stable_settings['application_path']
 
 def stop_running_instances():
     # Use taskkill to stop any running instances
@@ -14,13 +21,10 @@ def stop_running_instances():
 # def unregister_device():
     # TODO: Perform unregister operation
 
-def remove_files(app_path):
-    # Remove the application directory
-    install_directory = app_path
-    os.system(f"rmdir /S /Q {install_directory}")
+def remove_files(application_path, appdata_path):
+    os.system(f"rmdir /S /Q {application_path}")
     
     # Uninstall from APPDATA
-    appdata_path = os.getenv('APPDATA') + "\\Stormcloud"
     if os.path.exists(appdata_path):
         os.system(f"rmdir /S /Q {appdata_path}")
 
@@ -33,7 +37,7 @@ def remove_shortcut():
 def main():
     stop_running_instances()
     # unregister_device()
-    remove_files(app_path)
+    remove_files(application_path, appdata_path)
     remove_shortcut()
 
 if __name__ == "__main__":
