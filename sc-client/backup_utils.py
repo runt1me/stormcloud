@@ -9,14 +9,17 @@ import network_utils
 BACKUP_STATUS_NO_CHANGE = 0
 BACKUP_STATUS_CHANGE    = 1
 
-def perform_backup(paths,paths_recursive,api_key,agent_id,secret_key,dbconn,ignore_hash):
+def perform_backup(paths,paths_recursive,api_key,agent_id,secret_key,dbconn,ignore_hash,systray):
     logging.log(logging.INFO,"Beginning backup!")
+    systray.update(hover_text="Stormcloud Backup Engine - Backing up now")
     
     if ignore_hash:
         logging.log(logging.INFO,"Ignoring the hash database and attempting to force backup of files.")
 
     process_paths_nonrecursive(paths,api_key,agent_id,secret_key,dbconn,ignore_hash)
     process_paths_recursive(paths_recursive,api_key,agent_id,secret_key,dbconn,ignore_hash)
+
+    systray.update(hover_text="Stormcloud Backup Engine")
 
 def process_paths_nonrecursive(paths,api_key,agent_id,secret_key,dbconn,ignore_hash):
     for path in paths:

@@ -31,23 +31,15 @@ def main(settings_file_path,hash_db_file_path,ignore_hash_db):
         (
             "Backup now",
             None,
-            lambda x: backup_utils.perform_backup(
-                settings['BACKUP_PATHS'],
-                settings['RECURSIVE_BACKUP_PATHS'],
-                settings['API_KEY'],
-                settings['AGENT_ID'],
-                settings['SECRET_KEY'],
-                hash_db_conn,
-                ignore_hash_db
-            )
+            lambda x: logging.log(logging.INFO, "User clicked 'Backup now', but backup is always running.")
         )
     ,)
     systray = SysTrayIcon("stormcloud.ico", "Stormcloud Backup Engine", systray_menu_options)
     systray.start()
 
-    action_loop_and_sleep(settings=settings,dbconn=hash_db_conn,ignore_hash=ignore_hash_db)
+    action_loop_and_sleep(settings=settings,dbconn=hash_db_conn,ignore_hash=ignore_hash_db,systray=systray)
 
-def action_loop_and_sleep(settings, dbconn, ignore_hash):
+def action_loop_and_sleep(settings, dbconn, ignore_hash, systray):
     active_thread = None
 
     while True:
@@ -70,7 +62,7 @@ def action_loop_and_sleep(settings, dbconn, ignore_hash):
             else:
                 active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id)
 
-        backup_utils.perform_backup(backup_paths,recursive_backup_paths,api_key,agent_id,secret_key,dbconn,ignore_hash)
+        backup_utils.perform_backup(backup_paths,recursive_backup_paths,api_key,agent_id,secret_key,dbconn,ignore_hash,systray)
 
         sleep(ACTION_TIMER)
 
