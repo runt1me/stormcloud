@@ -81,6 +81,7 @@ def get_name_and_address_info_mac():
     # This way runs netstat -rn -f inet and gets the interface associated with the default route
     # Then runs ifconfig <interface> and gets the inet address on that interface
     # TODO: handle if netstat doesn't work to get the routing table (maybe net-tools is not installed?)
+    # deprecated in favor of netifaces model
 
     try:
         device_name = socket.gethostname()
@@ -115,6 +116,7 @@ def get_name_and_address_info_mac():
 def get_name_and_address_info_windows():
     # Runs route print -4 and gets the address associated with the default route
     # TODO: handle if route print -4 doesnt work?
+    # deprecated in favor of netifaces model
     device_name = socket.gethostname()
 
     process = Popen(['route', 'print', '-4'], stdout=PIPE, stderr=PIPE)
@@ -313,11 +315,6 @@ def run_stormcloud_client(install_directory, os_info):
         path_to_exec = install_directory + "\\stormcloud.exe"
         logging.log(logging.INFO, "start %s" %path_to_exec)
         subprocess.Popen('start %s' %path_to_exec, cwd=install_directory, shell=True)
-    elif 'macOS' in os_info:
-        # TODO: on OSX figure out how to launch as separate process from installer - maybe just &
-        path_to_exec = install_directory + "/stormcloud"
-        logging.log(logging.INFO, "Starting up: %s" %path_to_exec)
-        subprocess.Popen(path_to_exec, cwd=install_directory, shell=True)
     else:
         logging.log(logging.WARN, "Did not know how to launch stormcloud for this operating system. (%s)" %os_info)
 

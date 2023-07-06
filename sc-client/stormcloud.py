@@ -4,6 +4,7 @@ import argparse
 import os
 
 import sqlite3
+import yaml
 
 import threading
 import logging
@@ -12,12 +13,12 @@ import keepalive_utils
 import backup_utils
 import logging_utils
 
-from infi.systray import SysTrayIcon
+from infi.systray import SysTrayIcon   # pip install infi.systray
 
 ACTION_TIMER = 90
 
 def main(settings_file_path,hash_db_file_path,ignore_hash_db):
-    settings                = read_settings_file(settings_file_path)
+    settings                = read_yaml_settings_file(settings_file_path)
 
     if int(settings['SEND_LOGS']):
         logging_utils.send_logs_to_server(settings['API_KEY'],settings['AGENT_ID'],settings['SECRET_KEY'])
@@ -73,33 +74,9 @@ def action_loop_and_sleep(settings, dbconn, ignore_hash):
 
         sleep(ACTION_TIMER)
 
-def read_settings_file(fn):
-    #TODO: fail gracefully if settings are not complete?
-    #revert to last known good settings?
-    with open(fn,'r') as settings_file:
-        settings_lines = [l for l in settings_file.read().split('\n') if l]
-        settings_lines = [l for l in settings_lines if l[0] != "#"]
-
-        settings = {}
-        backup_paths_line           = settings_lines.index("BACKUP_PATHS")
-        recursive_backup_paths_line = settings_lines.index("RECURSIVE_BACKUP_PATHS")
-
-        for s in settings_lines[0:backup_paths_line]:
-            settings[s.split()[0]] = s.split()[1]
-
-        backup_paths = []
-        recursive_backup_paths = []
-
-        for s in settings_lines[backup_paths_line+1:recursive_backup_paths_line]:
-            backup_paths.append(s)
-
-        for s in settings_lines[recursive_backup_paths_line+1:]:
-            recursive_backup_paths.append(s)
-
-        settings["BACKUP_PATHS"]           = backup_paths
-        settings["RECURSIVE_BACKUP_PATHS"] = recursive_backup_paths
-
-    return settings
+def read_yaml_settings_file(fn):
+    with open(fn, 'r') as settings_file:
+        return yaml.safe_load(settings_file)
 
 def start_keepalive_thread(freq,api_key,agent_id):
     logging.log(logging.INFO,"starting new keepalive thread with freq %d" % freq)
