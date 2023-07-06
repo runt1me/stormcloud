@@ -1,19 +1,21 @@
 import json
 import logging
-import netifaces
+import netifaces   # pip install netifaces
 import os
 import platform
-import psutil
-import requests
+import psutil      # pip install psutil
+import requests    # pip install requests
 import socket
 import sys
-import winshell
+import winshell    # pip install winshell
 import subprocess
-from win32com.client import Dispatch
+import yaml        # pip install pyyaml
+from win32com.client import Dispatch    # pip install pywin32
 
-from PyQt5.QtWidgets import QApplication, QVBoxLayout, QLabel, QPushButton, QProgressBar#, QMainWindow
+# pip install pyqt5
+from PyQt5.QtWidgets import QApplication, QVBoxLayout, QLabel, QPushButton, QProgressBar, QMainWindow
 from PyQt5.QtWidgets import QWizard, QWizardPage, QLineEdit, QTextEdit, QMessageBox, QFormLayout
-from PyQt5.QtWidgets import QCheckBox, QFileDialog, QScrollArea, QWidget, QHBoxLayout#, QGridLayout
+from PyQt5.QtWidgets import QCheckBox, QFileDialog, QScrollArea, QWidget, QHBoxLayout, QGridLayout
 from PyQt5.QtCore import Qt
 from requests.exceptions import SSLError
 
@@ -329,7 +331,7 @@ class InstallPage(QWizardPage):
 
         self.progress.setValue(60)
 
-        configure_result = self.configure_settings(
+        configure_result = self.configure_yaml_settings(
             send_logs=1,
             backup_time=22,
             keepalive_freq=300,
@@ -368,62 +370,27 @@ class InstallPage(QWizardPage):
         except:
             return None
 
-    def configure_settings(self, send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive, secret_key, agent_id, api_key, target_folder):
+    def configure_yaml_settings(self, send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive, secret_key, agent_id, api_key, target_folder):
         backup_time        = int(backup_time)
         keepalive_freq     = int(keepalive_freq)
 
         settings_file_path = target_folder + "settings.cfg"
         os.makedirs(os.path.dirname(settings_file_path), exist_ok=True)
-        with open(settings_file_path, "w") as settings_file:
-            lines_to_write = []
 
-            # Logging
-            lines_to_write.append("# send logging and error information to dark age servers")
-            lines_to_write.append("# to assist with development/bug fixes/discovery of errors")
-            lines_to_write.append("# 1 = ON, 0 = OFF")
-            if send_logs:
-                lines_to_write.append("SEND_LOGS 1")
-            else:
-                lines_to_write.append("SEND_LOGS 0")
-
-            # Backup time
-            lines_to_write.append("# controls backup time of day")
-            lines_to_write.append("# hour of the day/24hr time")
-            lines_to_write.append("# i.e. 23 = 11PM (system time)")
-            lines_to_write.append("BACKUP_TIME %d" % backup_time)
-
-            # Keepalive frequency
-            lines_to_write.append("# controls how frequently this device will send keepalive message to the stormcloud servers.")
-            lines_to_write.append("# Interval in seconds (90=send keepalive every 90 seconds)")
-            lines_to_write.append("KEEPALIVE_FREQ %d" % keepalive_freq)
-
-            # Secret Key
-            lines_to_write.append("# symmetric key for device encryption")
-            lines_to_write.append("SECRET_KEY %s" % secret_key)
-            
-            # Agent ID
-            lines_to_write.append("# Agent ID, for identifying this device to the stormcloud servers")
-            lines_to_write.append("AGENT_ID %s" % agent_id)
-
+        settings_dict = {
+            'SEND_LOGS': int(send_logs),
+            'BACKUP_TIME': backup_time,
+            'KEEPALIVE_FREQ': keepalive_freq,
+            'SECRET_KEY': secret_key,
+            'AGENT_ID': agent_id,
             # API key my husband is so smart
-            lines_to_write.append("# API key")
-            lines_to_write.append("API_KEY %s" % api_key)
+            'API_KEY': api_key,
+            'BACKUP_PATHS': backup_paths,
+            'RECURSIVE_BACKUP_PATHS': backup_paths_recursive if backup_paths_recursive else []
+        }
 
-            # Backup paths
-            lines_to_write.append("# paths to backup")
-            lines_to_write.append("BACKUP_PATHS")
-            for bp in backup_paths:
-                lines_to_write.append("%s" % bp)
-
-            # Recursive backup paths
-            lines_to_write.append("# paths to recursively backup")
-            lines_to_write.append("RECURSIVE_BACKUP_PATHS")
-            if backup_paths_recursive:
-                for rbp in backup_paths_recursive:
-                    lines_to_write.append("%s" % rbp)
-
-            output_string = "\n".join(lines_to_write)
-            settings_file.write(output_string)
+        with open(settings_file_path, "w") as settings_file:
+            yaml.dump(settings_dict, settings_file)
 
         return True
 
