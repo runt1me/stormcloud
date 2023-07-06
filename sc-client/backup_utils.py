@@ -45,12 +45,15 @@ def process_paths_recursive(paths,api_key,agent_id,secret_key,dbconn,ignore_hash
 
             process_one_path_recursive(path_obj,api_key,agent_id,secret_key,dbconn,ignore_hash)
         except Exception as e:
-            logging.log(logging.WARN, "Caught exception when trying to process recursive path %s: %s" % (path,e))
+            logging.log(logging.WARN, "Caught (higher-level) exception when trying to process recursive path %s: %s" % (path,e))
 
 def process_one_path_recursive(target_path,api_key,agent_id,secret_key,dbconn,ignore_hash):
     for file in target_path.iterdir():
         if file.is_dir():
-            process_one_path_recursive(file,api_key,agent_id,secret_key,dbconn,ignore_hash)
+            try:
+                process_one_path_recursive(file,api_key,agent_id,secret_key,dbconn,ignore_hash)
+            except Exception as e:
+                logging.log(logging.WARN, "Caught (lower-level) exception when trying to process recursive path %s: %s" % (path,e))
         else:
             process_file(file,api_key,agent_id,secret_key,dbconn,ignore_hash)
 
