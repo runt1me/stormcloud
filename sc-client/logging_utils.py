@@ -1,14 +1,10 @@
-from time import sleep
-from datetime import datetime, timedelta
-import socket
-import sys
+from datetime import datetime
 import os
 import glob
 import pathlib
 
 import logging
 
-import crypto_utils
 import network_utils
 
 def send_logs_to_server(api_key,agent_id,secret_key):

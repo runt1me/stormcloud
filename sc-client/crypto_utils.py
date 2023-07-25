@@ -1,4 +1,4 @@
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet   # pip install cryptography
 
 def encrypt_content(content,secret_key):
     f = Fernet(secret_key)

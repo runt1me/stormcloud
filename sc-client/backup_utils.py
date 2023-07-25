@@ -1,48 +1,25 @@
-# Requires Python 3.8!
-
-from datetime import datetime, timedelta
-from os import walk
-from time import sleep
+from datetime import datetime
 
 import pathlib
 import hashlib
 
-import socket
 import logging
-
-import crypto_utils
 import network_utils
 
 BACKUP_STATUS_NO_CHANGE = 0
 BACKUP_STATUS_CHANGE    = 1
 
-def check_for_backup(backup_time,current_run_time,previous_run_time):
-    datetime_of_backup = datetime(
-        year=datetime.now().year,
-        month=datetime.now().month,
-        day=datetime.now().day,
-        hour=backup_time,
-        minute=0,
-        second=0
-    )
-
-    logging.log(logging.INFO,"PREVIOUS RUN: %s" % previous_run_time)
-    logging.log(logging.INFO,"BACKUP TIME: %s" % datetime_of_backup)
-    logging.log(logging.INFO,"CURRENT RUN: %s" % current_run_time)
-
-    if previous_run_time < datetime_of_backup and current_run_time > datetime_of_backup:
-        return True
-    else:
-        return False
-
-def perform_backup(paths,paths_recursive,api_key,agent_id,secret_key,dbconn,ignore_hash):
+def perform_backup(paths,paths_recursive,api_key,agent_id,secret_key,dbconn,ignore_hash,systray):
     logging.log(logging.INFO,"Beginning backup!")
+    systray.update(hover_text="Stormcloud Backup Engine - Backing up now")
     
     if ignore_hash:
         logging.log(logging.INFO,"Ignoring the hash database and attempting to force backup of files.")
 
     process_paths_nonrecursive(paths,api_key,agent_id,secret_key,dbconn,ignore_hash)
     process_paths_recursive(paths_recursive,api_key,agent_id,secret_key,dbconn,ignore_hash)
+
+    systray.update(hover_text="Stormcloud Backup Engine")
 
 def process_paths_nonrecursive(paths,api_key,agent_id,secret_key,dbconn,ignore_hash):
     for path in paths:
@@ -68,12 +45,15 @@ def process_paths_recursive(paths,api_key,agent_id,secret_key,dbconn,ignore_hash
 
             process_one_path_recursive(path_obj,api_key,agent_id,secret_key,dbconn,ignore_hash)
         except Exception as e:
-            logging.log(logging.WARN, "Caught exception when trying to process recursive path %s: %s" % (path,e))
+            logging.log(logging.WARN, "Caught (higher-level) exception when trying to process recursive path %s: %s" % (path,e))
 
 def process_one_path_recursive(target_path,api_key,agent_id,secret_key,dbconn,ignore_hash):
     for file in target_path.iterdir():
         if file.is_dir():
-            process_one_path_recursive(file,api_key,agent_id,secret_key,dbconn,ignore_hash)
+            try:
+                process_one_path_recursive(file,api_key,agent_id,secret_key,dbconn,ignore_hash)
+            except Exception as e:
+                logging.log(logging.WARN, "Caught (lower-level) exception when trying to process recursive path %s: %s" % (path,e))
         else:
             process_file(file,api_key,agent_id,secret_key,dbconn,ignore_hash)
 

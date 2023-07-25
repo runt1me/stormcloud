@@ -1,10 +1,10 @@
 from time import sleep
-from datetime import datetime, timedelta
+from datetime import datetime
 import argparse
-import platform
 import os
 
 import sqlite3
+import yaml
 
 import threading
 import logging
@@ -13,11 +13,12 @@ import keepalive_utils
 import backup_utils
 import logging_utils
 
+from infi.systray import SysTrayIcon   # pip install infi.systray
+
 ACTION_TIMER = 90
-THREAD_NUM = 0
 
 def main(settings_file_path,hash_db_file_path,ignore_hash_db):
-    settings                = read_settings_file(settings_file_path)
+    settings                = read_yaml_settings_file(settings_file_path)
 
     if int(settings['SEND_LOGS']):
         logging_utils.send_logs_to_server(settings['API_KEY'],settings['AGENT_ID'],settings['SECRET_KEY'])
@@ -25,86 +26,53 @@ def main(settings_file_path,hash_db_file_path,ignore_hash_db):
     logging_utils.initialize_logging(uuid=settings['AGENT_ID'])
 
     hash_db_conn = get_or_create_hash_db(hash_db_file_path)
-    action_loop_and_sleep(settings=settings,dbconn=hash_db_conn,ignore_hash=ignore_hash_db)
 
-def action_loop_and_sleep(settings, dbconn, ignore_hash):
-    # For the first run, just check if the backup should have been run in the previous 10 minutes
-    prev_run_time = datetime.now() - timedelta(minutes=10)
-    prev_keepalive_freq = -1
+    systray_menu_options = (
+        (
+            "Backup now",
+            None,
+            lambda x: logging.log(logging.INFO, "User clicked 'Backup now', but backup is always running.")
+        )
+    ,)
+    systray = SysTrayIcon("stormcloud.ico", "Stormcloud Backup Engine", systray_menu_options)
+    systray.start()
+
+    action_loop_and_sleep(settings=settings,dbconn=hash_db_conn,ignore_hash=ignore_hash_db,systray=systray)
+
+def action_loop_and_sleep(settings, dbconn, ignore_hash, systray):
     active_thread = None
 
     while True:
-        cur_run_time           = datetime.now()
         cur_keepalive_freq = int(settings['KEEPALIVE_FREQ'])
-        backup_time        = int(settings['BACKUP_TIME'])
         backup_paths           = settings['BACKUP_PATHS']
         recursive_backup_paths = settings['RECURSIVE_BACKUP_PATHS']
         api_key                = settings['API_KEY']
         agent_id               = settings['AGENT_ID']
         secret_key             = settings['SECRET_KEY']
 
-        logging.log(logging.INFO,"Stormcloud is running with settings: %s" % (settings))
+        logging.log(logging.INFO,"Stormcloud is running with settings: %s"
+            % ([(s, settings[s]) for s in settings.keys() if s != 'SECRET_KEY'])
+        )
 
         if active_thread is None:
             active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id)
         else:
             if active_thread.is_alive():
-                if settings_have_changed(cur_keepalive_freq,prev_keepalive_freq):
-                    kill_current_keepalive_thread(active_thread)
-                    active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id)
+                pass
             else:
                 active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id)
 
-        backup_utils.perform_backup(backup_paths,recursive_backup_paths,api_key,agent_id,secret_key,dbconn,ignore_hash)
-
-        prev_keepalive_freq = cur_keepalive_freq
-        prev_run_time = cur_run_time
+        backup_utils.perform_backup(backup_paths,recursive_backup_paths,api_key,agent_id,secret_key,dbconn,ignore_hash,systray)
 
         sleep(ACTION_TIMER)
 
-def read_settings_file(fn):
-    #TODO: fail gracefully if settings are not complete?
-    #revert to last known good settings?
-    with open(fn,'r') as settings_file:
-        settings_lines = [l for l in settings_file.read().split('\n') if l]
-        settings_lines = [l for l in settings_lines if l[0] != "#"]
-
-        settings = {}
-        backup_paths_line           = settings_lines.index("BACKUP_PATHS")
-        recursive_backup_paths_line = settings_lines.index("RECURSIVE_BACKUP_PATHS")
-
-        for s in settings_lines[0:backup_paths_line]:
-            settings[s.split()[0]] = s.split()[1]
-
-        backup_paths = []
-        recursive_backup_paths = []
-
-        for s in settings_lines[backup_paths_line+1:recursive_backup_paths_line]:
-            backup_paths.append(s)
-
-        for s in settings_lines[recursive_backup_paths_line+1:]:
-            recursive_backup_paths.append(s)
-
-        settings["BACKUP_PATHS"]           = backup_paths
-        settings["RECURSIVE_BACKUP_PATHS"] = recursive_backup_paths
-
-    return settings
-
-def settings_have_changed(cur_keepalive_freq,prev_keepalive_freq):
-    if cur_keepalive_freq != prev_keepalive_freq:
-        return True
-    else:
-        return False
-
-def kill_current_keepalive_thread(active_thread):
-    #TODO: this function
-    #maybe change to multiprocessing instead of multithreading???
-    logging.log(logging.INFO,"killing %s" % active_thread)
+def read_yaml_settings_file(fn):
+    with open(fn, 'r') as settings_file:
+        return yaml.safe_load(settings_file)
 
 def start_keepalive_thread(freq,api_key,agent_id):
     logging.log(logging.INFO,"starting new keepalive thread with freq %d" % freq)
 
-    #make thread with this function as a target
     t = threading.Thread(target=keepalive_utils.execute_ping_loop,args=(freq,api_key,agent_id,"keepalive_thd"))
     t.start()
 
@@ -137,18 +105,6 @@ def create_hash_db(path_to_file):
 
 def get_hash_db(path_to_file):
     return sqlite3.connect(path_to_file)
-
-def read_api_key_file(keyfile_path):
-    with open(keyfile_path,'rb') as keyfile:
-        api_key = keyfile.read()
-
-    return api_key.decode("utf-8")
-
-def read_agent_id_file(agent_id_file_path):
-    with open(agent_id_file_path, 'rb') as agentfile:
-        agent_id = agentfile.read()
-
-    return agent_id.decode("utf-8")
 
 if __name__ == "__main__":
     description = r"""
