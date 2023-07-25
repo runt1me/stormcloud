@@ -56,9 +56,6 @@ class ChunkHandler:
             print("Don't have all chunks for the file yet... what do I do now?")
             return None
 
-
-
-
 def store_file(customer_id,device_id,path_to_device_secret_key,file_path,file_raw_content,max_versions):
     decrypted_raw_content, _ = crypto_utils.decrypt_msg(path_to_device_secret_key,file_raw_content,decode=False)
     decrypted_path, _        = crypto_utils.decrypt_msg(path_to_device_secret_key,file_path,decode=True)
@@ -105,6 +102,23 @@ def write_file_to_disk(path,content,max_versions):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as outfile:
         outfile.write(content)
+
+def stream_write_file_to_disk(path,file_handle,max_versions,chunk_size):
+    if os.path.exists(path):
+        handle_versions(path,max_versions)
+
+    print("Stream writing file to disk: %s   %s   %s   %s" % (path,file_handle,max_versions,chunk_size))
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'ab') as target_file:
+        while True:
+            chunk = file_handle.stream.read(chunk_size)
+
+            if not chunk:
+                break
+
+            print("got a chunk of %s" % path)
+            target_file.write(chunk)
 
 def handle_versions(path,max_versions):
     original_file_name = get_file_name(path)

@@ -36,6 +36,25 @@ def decrypt_msg(path_to_device_secret_key,raw_msg,decode):
 
     return decrypted, len(decrypted)
 
+def decrypt_in_place(path_to_device_secret_key,file_path,decode):
+    # Reads in chunks to minimize memory footprint
+    chunk_size = 64 * 1024  # 64KB
+    f = get_fernet(path_to_device_secret_key)
+
+    outfile = file_path + ".tmp"
+
+    with open(file_path, 'rb') as encrypted_file:
+        with open(outfile, 'wb') as decrypted_file:
+            while True:
+                chunk = encrypted_file.read(chunk_size)
+                if not chunk:
+                    break
+                decrypted_chunk = f.decrypt(chunk)
+                decrypted_file.write(decrypted_chunk)
+
+    os.rename(outfile, file_path)
+    return True
+
 def get_fernet(path_to_device_secret_key):
     with open(path_to_device_secret_key,'rb') as keyfile:
         key = keyfile.read()
