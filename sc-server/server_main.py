@@ -9,6 +9,9 @@ import pathlib
 import database_utils as db
 import crypto_utils, install_utils, backup_utils, keepalive_utils
 
+from requests_toolbelt.multipart.decoder import MultipartDecoder
+from werkzeug.datastructures import FileStorage
+
 from flask import Flask, jsonify
 import flask   # used for flask.request to prevent namespace conflicts with other variables named request
 app = Flask(__name__)
@@ -86,6 +89,7 @@ def handle_register_new_device_request(request):
 
 def handle_backup_file_request(request, file):
     global_logger.info("Server handling backup file request.")
+    global_logger.info("File type: %s" % type(file))
     backup_utils.print_request_no_file(request)
 
     customer_id = db.get_customer_id_by_api_key(request['api_key'])
@@ -231,6 +235,40 @@ def backup_file():
         file = flask.request.files['file_content']
     except:
         return jsonify({'error': 'Request must contain file_content.'}), 400
+
+    if data:
+        if not validate_request_generic(data):
+            return jsonify({'response':'Unable to authorize request'}), 401, {'Content-Type': 'application/json'}
+
+        ret_code, response_data = handle_backup_file_request(data, file)
+        return response_data, ret_code, {'Content-Type': 'application/json'}
+    else:
+        return jsonify({'error': 'bad request'}), 400, {'Content-Type': 'application/json'}
+
+@app.route('/api/backup-file-stream', methods=['POST'])
+def backup_file_stream():
+    # This endpoint should be used for clients that are streaming their uploads
+    # The server should stream the receipt of the file regardless of the endpoint that is used.
+    global_logger.info(flask.request)
+    global_logger.info(flask.request.headers)
+
+    if 'multipart/form-data' not in flask.request.headers['Content-Type']:
+        return jsonify({'error': 'Request must be multipart/form-data'}), 400
+
+    data = {}
+    file = None
+
+    global_logger.info("Trying to decode request with MultipartDecoder")
+    decoder = MultipartDecoder(flask.request.get_data(), flask.request.headers['Content-Type'])
+    for part in decoder.parts:
+        field_name = part.headers[b'Content-Disposition'].decode('utf-8').split('; ')[1].split('=')[1].strip('"')
+        if field_name == 'file_content':
+            file = FileStorage(stream=part.text.encode("utf-8"),filename='file_content')
+            global_logger.info("Parsed %s field as stream" % field_name)
+        else:
+            field_value = part.text
+            global_logger.info("Parsed %s field as text" % field_name)
+            data[field_name] = field_value
 
     if data:
         if not validate_request_generic(data):
