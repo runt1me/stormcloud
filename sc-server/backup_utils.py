@@ -6,73 +6,6 @@ import glob
 
 import crypto_utils
 
-class ChunkHandler:
-    def __init__(self):
-        self.active_chunks = []
-
-    def __repr__(self):
-        return "ChunkHandler: %s" % self.chunks_in_process
-
-    def __str__(self):
-        return "ChunkHandler: %s" % self.chunks_in_process
-
-    def add_active_chunk(self, agent_id, file_path, chunk_index, total_num_chunks, data):
-        chunk = (agent_id, file_path, chunk_index, total_num_chunks, data)
-        self.active_chunks.append(chunk)
-
-    def combine_chunks(self, agent_id, file_path):
-        # Get all chunks that have agent_id and file_path
-        # Arrange the byte stream properly and return it
-        # NOTE: This O(n) solution is probably not ideal if/when lots of customers involved
-
-        chunks_for_this_file = []
-        byte_stream_this_file = ""
-
-        for chunk in self.active_chunks:
-            if chunk[0] == agent_id and chunk[1] == file_path:
-                print("Found chunk %d for file: %s" % (chunk[2], chunk[1]))
-                chunks_for_this_file.append(chunk)
-
-        # Verify that we have all chunks and sort them into the correct order
-        if len(chunks_for_this_file) == chunks_for_this_file[0][3]:
-            print("Found correct number of chunks")
-            # TODO: change this to sort the list based on tuple key... some type of lambda syntax
-            # Best for optimization is to choose a sort that works well on mostly already-sorted lists
-            sorted_chunks_this_file = chunks_for_this_file
-
-            for chunk in sorted_chunks_this_file:
-                # Add the actual data of the chunk to the byte stream
-                print(type(chunk[4]))
-                byte_stream_this_file += chunk[4]
-
-            # Remove all of these chunks from the active_chunks pile
-            self.active_chunks = [c for c in self.active_chunks if c not in sorted_chunks_this_file]
-
-            return byte_stream_this_file
-
-        else:
-            # TODO: ???
-            # Well in theory this shouldn't happen if I only ack the chunks that I receive properly.
-            print("Don't have all chunks for the file yet... what do I do now?")
-            return None
-
-
-
-
-def store_file(customer_id,device_id,path_to_device_secret_key,file_path,file_raw_content,max_versions):
-    decrypted_raw_content, _ = crypto_utils.decrypt_msg(path_to_device_secret_key,file_raw_content,decode=False)
-    decrypted_path, _        = crypto_utils.decrypt_msg(path_to_device_secret_key,file_path,decode=True)
-
-    path_on_server, device_root_directory_on_server = get_server_path(customer_id,device_id,decrypted_path)
-    write_file_to_disk(path_on_server,decrypted_raw_content,max_versions)
-
-    log_file_info(decrypted_path,device_id,path_on_server)
-
-    with open(path_on_server,'wb') as outfile:
-        outfile.write(decrypted_raw_content)
-
-    return path_on_server, device_root_directory_on_server, decrypted_path, len(decrypted_raw_content)
-
 def get_file_name(path_on_server):
     return path_on_server.split("/")[-1]
 
@@ -98,13 +31,22 @@ def get_server_path(customer_id,device_id,decrypted_path):
     path = path.replace("//","/")
     return path, device_root_directory_on_server
 
-def write_file_to_disk(path,content,max_versions):
+def stream_write_file_to_disk(path,file_handle,max_versions,chunk_size):
     if os.path.exists(path):
         handle_versions(path,max_versions)
 
+    print("Stream writing file to disk: %s   %s   %s   %s" % (path,file_handle,max_versions,chunk_size))
+
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "wb") as outfile:
-        outfile.write(content)
+    with open(path, 'ab') as target_file:
+        while True:
+            chunk = file_handle.stream.read(chunk_size)
+
+            if not chunk:
+                break
+
+            print("got a chunk of %s" % path)
+            target_file.write(chunk)
 
 def handle_versions(path,max_versions):
     original_file_name = get_file_name(path)

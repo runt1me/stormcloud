@@ -6,7 +6,6 @@ import argparse
 import logging
 import pathlib
 
-import network_utils as scnet
 import database_utils as db
 import crypto_utils, install_utils, backup_utils, keepalive_utils
 
@@ -16,7 +15,8 @@ app = Flask(__name__)
 
 # globals for server
 global_logger = backup_utils.initialize_logging()
-ChunkHandler = backup_utils.ChunkHandler()
+
+CHUNK_SIZE = 1024*1024
 
 def main():
     app.run()
@@ -84,8 +84,8 @@ def handle_register_new_device_request(request):
 
     return 200, response_data
 
-def handle_backup_file_in_chunks_request(request):
-    global_logger.info("Server handling backup file in chunks request.")
+def handle_backup_file_request(request, file):
+    global_logger.info("Server handling backup file request.")
     backup_utils.print_request_no_file(request)
 
     customer_id = db.get_customer_id_by_api_key(request['api_key'])
@@ -99,66 +99,46 @@ def handle_backup_file_in_chunks_request(request):
 
     device_id,_,_,_,_,_,_,_,path_to_device_secret_key,_ = results
 
-    ChunkHandler.add_active_chunk(
-        request['agent_id'], request['file_path'],
-        request['chunk_number'], request['total_chunks'],
-        request['file_content_chunk']
+    path_on_device, _ = crypto_utils.decrypt_msg(path_to_device_secret_key,request['file_path'].encode("UTF-8"),decode=True)
+    path_on_server, device_root_directory_on_server = backup_utils.get_server_path(customer_id,device_id,path_on_device)
+
+    backup_utils.stream_write_file_to_disk(path=path_on_server,file_handle=file,max_versions=3,chunk_size=CHUNK_SIZE)
+
+    # TODO: eventually respond to client more quickly and queue the writes to disk / database calls until afterwards
+    global_logger.info("Done writing file to %s" % path_on_server)
+
+    result, file_size = crypto_utils.decrypt_in_place(path_to_device_secret_key,path_on_server,decode=False)
+
+    # TODO: clean this up and put as a helper function in backup_utils
+    if "\\" in path_on_device:
+        p = pathlib.PureWindowsPath(r'%s'%path_on_device)
+        path_on_device_posix = str(p.as_posix())
+        directory_on_device = p.parents[0]
+        directory_on_device_posix = str(directory_on_device.as_posix())
+    else:
+        # TODO: test does this work on unix?
+        p = pathlib.Path(path_on_device)
+        path_on_device_posix = path_on_device
+        directory_on_device = p.parents[0]
+        directory_on_device_posix = str(directory_on_device)
+
+    file_name = backup_utils.get_file_name(path_on_server)
+    file_path = backup_utils.get_file_path_without_name(path_on_server)
+    file_type = backup_utils.get_file_type(path_on_server)
+
+    _ = db.add_or_update_file_for_device(
+        device_id,
+        file_name,
+        file_path,
+        path_on_device,
+        path_on_device_posix,
+        directory_on_device_posix,
+        file_size,
+        file_type,
+        path_on_server
     )
 
-    if request['chunk_number'] == request['total_chunks'] - 1:
-        # If final chunk, combine chunks and write to disk
-        # respond with a 200 and indicate file written successfully
-        file_content_raw = ChunkHandler.combine_chunks(request['agent_id'],request['file_path'])
-
-        if file_content_raw is None:
-            raise Exception("Server could not combine chunks")
-
-        print("Successfully (?) combined file chunks into file_content_raw?")
-
-        path_on_server, device_root_directory_on_server, path_on_device, file_size = backup_utils.store_file(
-            customer_id,
-            device_id,
-            path_to_device_secret_key,
-            request['file_path'].encode("utf-8"),
-            file_content_raw.encode("utf-8"),
-            max_versions=3
-        )
-
-        # TODO: clean this up and put as a helper function in backup_utils
-        if "\\" in path_on_device:
-            p = pathlib.PureWindowsPath(r'%s'%path_on_device)
-            path_on_device_posix = str(p.as_posix())
-            directory_on_device = p.parents[0]
-            directory_on_device_posix = str(directory_on_device.as_posix())
-        else:
-            # TODO: test does this work on unix?
-            p = pathlib.Path(path_on_device)
-            path_on_device_posix = path_on_device
-            directory_on_device = p.parents[0]
-            directory_on_device_posix = str(directory_on_device)
-
-        file_name = backup_utils.get_file_name(path_on_server)
-        file_path = backup_utils.get_file_path_without_name(path_on_server)
-        file_type = backup_utils.get_file_type(path_on_server)
-
-        _ = db.add_or_update_file_for_device(
-            device_id,
-            file_name,
-            file_path,
-            path_on_device,
-            path_on_device_posix,
-            directory_on_device_posix,
-            file_size,
-            file_type,
-            path_on_server
-        )
-
-        return 200,json.dumps({'backup_file_in_chunks-response': 'Received all chunks and wrote file successfully.'})
-
-    else:
-        # If not final chunk, respond with a 200
-        # and indicate chunk received successfully
-        return 200,json.dumps({'backup_file_in_chunks-response':'Received chunk successfully.'})
+    return 200,json.dumps({'backup_file-response': 'Received file successfully.'})
 
 def handle_keepalive_request(request):
     global_logger.info("Server handling keepalive request.")
@@ -175,6 +155,32 @@ def handle_keepalive_request(request):
     ret = keepalive_utils.record_keepalive(device_id,datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
     return 200,json.dumps({'keepalive-response':'ahh, ahh, ahh, ahh, staying alive'})
+
+def handle_validate_api_key_request(request):
+    global_logger.info("Server handling validate API key request.")
+    global_logger.info("Server received API key: %s" % request['api_key'])
+    customer_id = db.get_customer_id_by_api_key(request['api_key'])
+
+    if not customer_id:
+        return 401,json.dumps({'response': 'Invalid API key.'})
+
+    return 200, json.dumps({'validate_api_key-response': 'Valid API key.'})
+
+@app.route('/api/validate-api-key', methods=['POST'])
+def validate_api_key():
+    global_logger.info(flask.request)
+    if flask.request.headers['Content-Type'] != 'application/json':
+        return jsonify({'error': 'Request must be JSON'}), 400
+
+    data = flask.request.get_json()
+    if data:
+        if not validate_request_generic(data, api_key_required=True, agent_id_required=False):
+            return jsonify({'response':'Unable to authorize request'}), 401, {'Content-Type': 'application/json'}
+            
+        ret_code, response_data = handle_validate_api_key_request(data)
+        return response_data, ret_code, {'Content-Type': 'application/json'}
+    else:
+        return jsonify({'error': 'bad request'}), 400, {'Content-Type': 'application/json'}
 
 @app.route('/api/hello', methods=['POST'])
 def hello():
@@ -211,32 +217,26 @@ def register_new_device():
 @app.route('/api/backup-file', methods=['POST'])
 def backup_file():
     global_logger.info(flask.request)
-    if flask.request.headers['Content-Type'] != 'application/json':
-        return jsonify({'error': 'Request must be JSON'}), 400
+    global_logger.info(flask.request.headers)
 
-    data = flask.request.get_json()
+    if 'multipart/form-data' not in flask.request.headers['Content-Type']:
+        return jsonify({'error': 'Request must be multipart/form-data'}), 400
+
+    try:
+        data = json.loads(flask.request.form['json'])
+    except:
+        return jsonify({'error': 'Request must contain JSON.'}), 400
+
+    try:
+        file = flask.request.files['file_content']
+    except:
+        return jsonify({'error': 'Request must contain file_content.'}), 400
+
     if data:
         if not validate_request_generic(data):
             return jsonify({'response':'Unable to authorize request'}), 401, {'Content-Type': 'application/json'}
 
-        ret_code, response_data = handle_backup_file_in_chunks_request(data)
-        return response_data, ret_code, {'Content-Type': 'application/json'}
-    else:
-        return jsonify({'error': 'bad request'}), 400, {'Content-Type': 'application/json'}
-
-@app.route('/api/backup-file-in-chunks', methods=['POST'])
-def backup_file_in_chunks():
-    global_logger.info(flask.request)
-
-    if flask.request.headers['Content-Type'] != 'application/json':
-        return jsonify({'error': 'Request must be JSON'}), 400
-
-    data = flask.request.get_json()
-    if data:
-        if not validate_request_generic(data):
-            return jsonify({'response':'Unable to authorize request'}), 401, {'Content-Type': 'application/json'}
-
-        ret_code, response_data = handle_backup_file_in_chunks_request(data)
+        ret_code, response_data = handle_backup_file_request(data, file)
         return response_data, ret_code, {'Content-Type': 'application/json'}
     else:
         return jsonify({'error': 'bad request'}), 400, {'Content-Type': 'application/json'}
