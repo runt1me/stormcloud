@@ -6,7 +6,6 @@ import argparse
 import logging
 import pathlib
 
-import network_utils as scnet
 import database_utils as db
 import crypto_utils, install_utils, backup_utils, keepalive_utils
 
