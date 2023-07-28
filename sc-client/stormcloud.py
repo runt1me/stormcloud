@@ -9,6 +9,8 @@ import yaml
 import threading
 import logging
 
+import sslkeylog
+
 import keepalive_utils
 import backup_utils
 import logging_utils
@@ -18,6 +20,8 @@ from infi.systray import SysTrayIcon   # pip install infi.systray
 ACTION_TIMER = 90
 
 def main(settings_file_path,hash_db_file_path,ignore_hash_db):
+    sslkeylog.set_keylog(os.environ.get('SSLKEYLOGFILE'))
+
     settings                = read_yaml_settings_file(settings_file_path)
 
     if int(settings['SEND_LOGS']):
