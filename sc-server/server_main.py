@@ -10,7 +10,9 @@ import database_utils as db
 import crypto_utils, install_utils, backup_utils, keepalive_utils
 
 from requests_toolbelt.multipart.decoder import MultipartDecoder
+from werkzeug.formparser import parse_form_data
 from werkzeug.datastructures import FileStorage
+from werkzeug.formparser import default_stream_factory
 
 from flask import Flask, jsonify
 import flask   # used for flask.request to prevent namespace conflicts with other variables named request
@@ -255,29 +257,23 @@ def backup_file_stream():
     if 'multipart/form-data' not in flask.request.headers['Content-Type']:
         return jsonify({'error': 'Request must be multipart/form-data'}), 400
 
-    data = {}
-    file = None
+    stream, form, files = parse_form_data(flask.request.environ, stream_factory=default_stream_factory)
+    data = form
+    file = files.get('file_content')
 
-    global_logger.info("Trying to decode request with MultipartDecoder")
-    decoder = MultipartDecoder(flask.request.get_data(), flask.request.headers['Content-Type'])
-    for part in decoder.parts:
-        field_name = part.headers[b'Content-Disposition'].decode('utf-8').split('; ')[1].split('=')[1].strip('"')
-        if field_name == 'file_content':
-            file = FileStorage(stream=part.text.encode("utf-8"),filename='file_content')
-            global_logger.info("Parsed %s field as stream" % field_name)
-        else:
-            field_value = part.text
-            global_logger.info("Parsed %s field as text" % field_name)
-            data[field_name] = field_value
+    if file is None:
+        return jsonify({'error': 'File content not found in request'}), 400
+    else:
+        print("Parsed file from request")
 
     if data:
         if not validate_request_generic(data):
             return jsonify({'response':'Unable to authorize request'}), 401, {'Content-Type': 'application/json'}
 
-        ret_code, response_data = handle_backup_file_request(data, file)
+        ret_code, response_data = handle_backup_file_request(data, file.stream)
         return response_data, ret_code, {'Content-Type': 'application/json'}
     else:
-        return jsonify({'error': 'bad request'}), 400, {'Content-Type': 'application/json'}
+        return jsonify({'error': 'Bad request'}), 400, {'Content-Type': 'application/json'}
 
 @app.route('/api/keepalive', methods=['POST'])
 def keepalive():
