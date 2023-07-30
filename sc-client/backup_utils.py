@@ -6,6 +6,8 @@ import hashlib
 import logging
 import network_utils
 
+import traceback
+
 BACKUP_STATUS_NO_CHANGE = 0
 BACKUP_STATUS_CHANGE    = 1
 
@@ -35,6 +37,7 @@ def process_paths_nonrecursive(paths,api_key,agent_id,secret_key,dbconn,ignore_h
                     process_file(file_obj,api_key,agent_id,secret_key,dbconn,ignore_hash)
 
         except Exception as e:
+            logging.log(logging.WARN, "%s" % traceback.format_exc())
             logging.log(logging.WARN, "Caught exception when trying to process path %s: %s" % (path,e))
 
 def process_paths_recursive(paths,api_key,agent_id,secret_key,dbconn,ignore_hash):
