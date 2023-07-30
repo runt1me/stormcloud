@@ -1,7 +1,6 @@
 import pathlib
 import logging
 import os
-import io
 import sys
 import glob
 
@@ -47,6 +46,8 @@ def stream_write_file_to_disk(path,file_handle,max_versions,chunk_size):
 
             print("got a chunk of %s" % path)
             target_file.write(chunk)
+
+    return os.path.getsize(path)
 
 def handle_versions(path,max_versions):
     original_file_name = get_file_name(path)

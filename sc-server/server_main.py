@@ -9,9 +9,7 @@ import pathlib
 import database_utils as db
 import crypto_utils, install_utils, backup_utils, keepalive_utils
 
-from requests_toolbelt.multipart.decoder import MultipartDecoder
 from werkzeug.formparser import parse_form_data
-from werkzeug.datastructures import FileStorage
 from werkzeug.formparser import default_stream_factory
 
 from flask import Flask, jsonify
@@ -108,12 +106,12 @@ def handle_backup_file_request(request, file):
     path_on_device, _ = crypto_utils.decrypt_msg(path_to_device_secret_key,request['file_path'].encode("UTF-8"),decode=True)
     path_on_server, device_root_directory_on_server = backup_utils.get_server_path(customer_id,device_id,path_on_device)
 
-    backup_utils.stream_write_file_to_disk(path=path_on_server,file_handle=file,max_versions=3,chunk_size=CHUNK_SIZE)
+    file_size = backup_utils.stream_write_file_to_disk(path=path_on_server,file_handle=file,max_versions=3,chunk_size=CHUNK_SIZE)
 
     # TODO: eventually respond to client more quickly and queue the writes to disk / database calls until afterwards
     global_logger.info("Done writing file to %s" % path_on_server)
 
-    result, file_size = crypto_utils.decrypt_in_place(path_to_device_secret_key,path_on_server,decode=False)
+    #result, file_size = crypto_utils.decrypt_in_place(path_to_device_secret_key,path_on_server,decode=False)
 
     # TODO: clean this up and put as a helper function in backup_utils
     if "\\" in path_on_device:
@@ -264,7 +262,7 @@ def backup_file_stream():
     if file is None:
         return jsonify({'error': 'File content not found in request'}), 400
     else:
-        print("Parsed file from request")
+        print("Parsed file from stream-based request")
 
     if data:
         if not validate_request_generic(data):
