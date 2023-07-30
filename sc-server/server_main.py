@@ -9,6 +9,9 @@ import pathlib
 import database_utils as db
 import crypto_utils, install_utils, backup_utils, keepalive_utils
 
+from werkzeug.formparser import parse_form_data
+from werkzeug.formparser import default_stream_factory
+
 from flask import Flask, jsonify
 import flask   # used for flask.request to prevent namespace conflicts with other variables named request
 app = Flask(__name__)
@@ -86,6 +89,7 @@ def handle_register_new_device_request(request):
 
 def handle_backup_file_request(request, file):
     global_logger.info("Server handling backup file request.")
+    global_logger.info("File type: %s" % type(file))
     backup_utils.print_request_no_file(request)
 
     customer_id = db.get_customer_id_by_api_key(request['api_key'])
@@ -102,12 +106,12 @@ def handle_backup_file_request(request, file):
     path_on_device, _ = crypto_utils.decrypt_msg(path_to_device_secret_key,request['file_path'].encode("UTF-8"),decode=True)
     path_on_server, device_root_directory_on_server = backup_utils.get_server_path(customer_id,device_id,path_on_device)
 
-    backup_utils.stream_write_file_to_disk(path=path_on_server,file_handle=file,max_versions=3,chunk_size=CHUNK_SIZE)
+    file_size = backup_utils.stream_write_file_to_disk(path=path_on_server,file_handle=file,max_versions=3,chunk_size=CHUNK_SIZE)
 
     # TODO: eventually respond to client more quickly and queue the writes to disk / database calls until afterwards
     global_logger.info("Done writing file to %s" % path_on_server)
 
-    result, file_size = crypto_utils.decrypt_in_place(path_to_device_secret_key,path_on_server,decode=False)
+    #result, file_size = crypto_utils.decrypt_in_place(path_to_device_secret_key,path_on_server,decode=False)
 
     # TODO: clean this up and put as a helper function in backup_utils
     if "\\" in path_on_device:
@@ -240,6 +244,34 @@ def backup_file():
         return response_data, ret_code, {'Content-Type': 'application/json'}
     else:
         return jsonify({'error': 'bad request'}), 400, {'Content-Type': 'application/json'}
+
+@app.route('/api/backup-file-stream', methods=['POST'])
+def backup_file_stream():
+    # This endpoint should be used for clients that are streaming their uploads
+    # The server should stream the receipt of the file regardless of the endpoint that is used.
+    global_logger.info(flask.request)
+    global_logger.info(flask.request.headers)
+
+    if 'multipart/form-data' not in flask.request.headers['Content-Type']:
+        return jsonify({'error': 'Request must be multipart/form-data'}), 400
+
+    stream, form, files = parse_form_data(flask.request.environ, stream_factory=default_stream_factory)
+    data = form
+    file = files.get('file_content')
+
+    if file is None:
+        return jsonify({'error': 'File content not found in request'}), 400
+    else:
+        print("Parsed file from stream-based request")
+
+    if data:
+        if not validate_request_generic(data):
+            return jsonify({'response':'Unable to authorize request'}), 401, {'Content-Type': 'application/json'}
+
+        ret_code, response_data = handle_backup_file_request(data, file.stream)
+        return response_data, ret_code, {'Content-Type': 'application/json'}
+    else:
+        return jsonify({'error': 'Bad request'}), 400, {'Content-Type': 'application/json'}
 
 @app.route('/api/keepalive', methods=['POST'])
 def keepalive():

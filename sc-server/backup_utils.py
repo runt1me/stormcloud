@@ -33,20 +33,21 @@ def get_server_path(customer_id,device_id,decrypted_path):
 
 def stream_write_file_to_disk(path,file_handle,max_versions,chunk_size):
     if os.path.exists(path):
-        handle_versions(path,max_versions)
+        handle_versions(path, max_versions)
 
     print("Stream writing file to disk: %s   %s   %s   %s" % (path,file_handle,max_versions,chunk_size))
 
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'ab') as target_file:
         while True:
-            chunk = file_handle.stream.read(chunk_size)
-
+            chunk = file_handle.read(chunk_size)
             if not chunk:
                 break
 
             print("got a chunk of %s" % path)
             target_file.write(chunk)
+
+    return os.path.getsize(path)
 
 def handle_versions(path,max_versions):
     original_file_name = get_file_name(path)
