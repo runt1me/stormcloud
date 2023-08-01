@@ -1,11 +1,9 @@
 import os
-import sys
 
 import secrets
 from cryptography.fernet import Fernet
 
 def create_key(key_path):
-    #For generating secret keys, one per device
     key = Fernet.generate_key()
 
     os.makedirs(os.path.dirname(key_path), exist_ok=True)
@@ -15,7 +13,6 @@ def create_key(key_path):
     return key
 
 def generate_api_key(key_path):
-    #Generate api keys, one per customer
     api_key = secrets.token_urlsafe(16)
 
     os.makedirs(os.path.dirname(key_path), exist_ok=True)
@@ -58,4 +55,3 @@ def get_fernet(path_to_device_secret_key):
         key = keyfile.read()
 
     return Fernet(key)
-

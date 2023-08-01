@@ -1,13 +1,11 @@
 #!/usr/bin/python
 import json
 from datetime import datetime
-import argparse
 
-import logging
 import pathlib
 
 import database_utils as db
-import crypto_utils, install_utils, backup_utils, keepalive_utils
+import crypto_utils, backup_utils, keepalive_utils
 
 from werkzeug.formparser import parse_form_data
 from werkzeug.formparser import default_stream_factory

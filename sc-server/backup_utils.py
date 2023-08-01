@@ -4,8 +4,6 @@ import os
 import sys
 import glob
 
-import crypto_utils
-
 def get_file_name(path_on_server):
     return path_on_server.split("/")[-1]
 
