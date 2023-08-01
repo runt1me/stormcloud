@@ -82,7 +82,7 @@ def process_file(file_path_obj,api_key,agent_id,secret_key,dbconn,ignore_hash):
                 logging.log(logging.WARNING, "Did not receive success code from server when trying to backup file, so not updating hash db.")
 
 def dump_file_info(path,size,encrypted_size):
-    logging.log(logging.INFO,"==== SENDING FILE : INFO ====")
+    logging.log(logging.INFO,"==== SENDING : ====")
     logging.log(logging.INFO,"\tPATH: %s" %path)
     logging.log(logging.INFO,"\tSIZE: %d" %size)
     logging.log(logging.INFO,"\tENCRYPTED SIZE: %d" %encrypted_size)

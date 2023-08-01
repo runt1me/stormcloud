@@ -25,3 +25,6 @@ def encrypt_file(file_path,secret_key):
             dst_file.write(encrypted_chunk)
 
     return output_path_temp, os.path.getsize(output_path_temp)
+
+def remove_temp_file(path):
+    os.remove(path)

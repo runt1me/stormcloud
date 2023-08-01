@@ -4,7 +4,7 @@ import logging
 
 import network_utils as scnet
 
-def execute_ping_loop(interval,api_key,agent_id,name):
+def execute_ping_loop(interval,api_key,agent_id):
     while True:
         logging.log(logging.INFO,"Sending keepalive to server")
         keepalive_request_data = json.dumps({
@@ -13,7 +13,7 @@ def execute_ping_loop(interval,api_key,agent_id,name):
             'agent_id': agent_id
         })
         
-        ret, response_data = scnet.tls_send_json_data(
+        scnet.tls_send_json_data(
             keepalive_request_data,
             200,
             show_json=True
