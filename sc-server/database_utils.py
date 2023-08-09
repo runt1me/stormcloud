@@ -6,7 +6,7 @@ import os
 # REMEMBER TO cnx.commit()!
 
 def passes_sanitize(input_string):
-  SANITIZE_LIST = ["'", '"', "\\", ";"]
+  SANITIZE_LIST = ["'", '"', ";"]
   for expr in SANITIZE_LIST:
     if expr in input_string:
       return False
@@ -133,6 +133,39 @@ def add_or_update_device_for_customer(customer_id, device_name, device_type, ip_
     cnx.commit()
     __teardown__(cursor,cnx)
     return ret
+
+def add_file_to_restore_queue(agent_id, file_path):
+    # IN agent_id varchar(256),
+    # IN ClientFullNameAndPathAsPosix varchar(1024)
+    ret = []
+
+    cnx = __connect_to_db__()
+    cursor = cnx.cursor(buffered=True)
+
+    file_object_id = -1
+    try:
+        cursor.callproc('get_file_object_id',
+            (agent_id,file_path)
+        )
+
+        for result in cursor.stored_results():
+            row = result.fetchall()
+            file_object_id = row[0]
+
+        if file_object_id == -1:
+            raise Exception("Did not get a valid file_object_id for agent_id and file_path combination.")
+
+        cursor.callproc('add_file_to_restore_queue',
+            (file_object_id)
+        )
+
+        affected = cursor.rowcount            
+    except Error as e:
+        print(e)
+    finally:
+        cnx.commit()
+        __teardown__(cursor,cnx)
+        return affected
 
 def get_last_10_callbacks_for_device(device_ip,device_name):
   # TODO: change this to use get_device_by_agent_id

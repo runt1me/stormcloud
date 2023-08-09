@@ -168,6 +168,28 @@ def handle_validate_api_key_request(request):
 
     return 200, json.dumps({'validate_api_key-response': 'Valid API key.'})
 
+def handle_queue_file_for_restore_request(request):
+    global_logger.info("Server handling queue file for restore request.")
+
+    if 'file_path' not in request.keys():
+        return jsonify({'error': 'Bad request.'}), 400
+
+    if 'api_key' not in request.keys():
+        return jsonify({'error': 'Bad request.'}), 400
+
+    customer_id = db.get_customer_id_by_api_key(request['api_key'])
+    if not customer_id:
+        return jsonify({'error': 'Invalid API key.'}), 401
+
+    ret = db.add_file_to_restore_queue(request['agent_id'], request['file_path'])
+
+    if ret:
+        global_logger.info("Successfully added file to restore queue.")
+        return 200, json.dumps({'queue_file_for_restore-response': 'Successfully added file to restore queue.'})
+    else:
+        global_logger.info("Got bad return code when trying to add file to restore queue.")
+        return 500, json.dumps({'server error': 'Unknown server error when processing restore request.'})
+
 @app.route('/api/validate-api-key', methods=['POST'])
 def validate_api_key():
     global_logger.info(flask.request)
@@ -286,6 +308,25 @@ def keepalive():
         return response_data, ret_code, {'Content-Type': 'application/json'}
     else:
         return jsonify({'error': 'bad request'}), 400, {'Content-Type': 'application/json'}
+
+@app.route('/api/queue-file-for-restore', methods=['POST'])
+def queue_file_for_restore():
+    global_logger.info(flask.request)
+    if flask.request.headers['Content-Type'] != 'application/json':
+        global_logger.info("Error immediately")
+        return jsonify({'error': 'Request must be JSON'}), 400
+
+    data = flask.request.get_json()
+    print("JSON from request: %s" %data)
+
+    if data:
+        if not validate_request_generic(data):
+            return jsonify({'response':'Unable to authorize request'}), 401, {'Content-Type': 'application/json'}
+
+        ret_code, response_data = handle_queue_file_for_restore_request(data)
+        return response_data, ret_code, {'Content-Type': 'application/json'}
+    else:
+        return jsonify({'error': 'Bad request'}), 400, {'Content-Type': 'application/json'}
 
 if __name__ == "__main__":
     main()
