@@ -2,8 +2,10 @@ import mysql.connector
 from mysql.connector import Error
 
 import os
+import traceback
 
 # REMEMBER TO cnx.commit()!
+# ALL SINGLE ARG STORED PROCEDURE CALLS MUST USE (field,) SYNTAX TO INDICATE TUPLE!!
 
 def passes_sanitize(input_string):
   SANITIZE_LIST = ["'", '"', ";"]
@@ -152,22 +154,45 @@ def add_file_to_restore_queue(agent_id, file_path):
         for result in cursor.stored_results():
             row = result.fetchall()
 
-            if row:
-                file_object_id = row[0]
-            else:
-                raise Exception("Did not get a valid file_object_id for agent_id and file_path combination.")
+        if row:
+            file_object_id = row[0]
+        else:
+            raise Exception("Did not get a valid file_object_id for agent_id and file_path combination.")
 
         cursor.callproc('add_file_to_restore_queue',
-            (file_object_id)
+            (file_object_id,)
         )
 
         affected = cursor.rowcount            
-    except Error as e:
+    except Exception as e:
         print(e)
     finally:
         cnx.commit()
         __teardown__(cursor,cnx)
         return affected
+
+def get_list_of_files_to_restore(device_id):
+    # IN device_id INT
+    ret = []
+
+    cnx = __connect_to_db__()
+    cursor = cnx.cursor(buffered=True)
+
+    try:
+        cursor.callproc('get_list_of_files_to_restore', (device_id,))
+
+        for result in cursor.stored_results():
+            row = result.fetchall()
+            ret.append(row)
+
+        if not ret:
+            return []
+
+    except Exception as e:
+        print("Got exception in get_list_of_files_to_restore: %s" %traceback.format_exc())
+    finally:
+        __teardown__(cursor,cnx)
+        return ret
 
 def get_last_10_callbacks_for_device(device_ip,device_name):
   # TODO: change this to use get_device_by_agent_id
@@ -187,7 +212,7 @@ def get_last_10_callbacks_for_device(device_ip,device_name):
         device_id = row[0]
 
     cursor.callproc('get_last_10_callbacks_for_device',
-      (device_id)
+      (device_id,)
     )
 
     for result in cursor.stored_results():

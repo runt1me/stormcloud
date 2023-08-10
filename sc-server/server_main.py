@@ -154,7 +154,9 @@ def handle_keepalive_request(request):
         return 401,json.dumps({'response': 'Bad request.'})
 
     device_id = results[0]
-    ret = keepalive_utils.record_keepalive(device_id,datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    keepalive_utils.record_keepalive(device_id,datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+    response_data = keepalive_utils.get_keepalive_response_data(device_id)
 
     return 200,json.dumps({'keepalive-response':'ahh, ahh, ahh, ahh, staying alive'})
 
