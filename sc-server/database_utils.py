@@ -143,6 +143,7 @@ def add_file_to_restore_queue(agent_id, file_path):
     cursor = cnx.cursor(buffered=True)
 
     file_object_id = -1
+    affected = 0
     try:
         cursor.callproc('get_file_object_id',
             (agent_id,file_path)
@@ -150,10 +151,11 @@ def add_file_to_restore_queue(agent_id, file_path):
 
         for result in cursor.stored_results():
             row = result.fetchall()
-            file_object_id = row[0]
 
-        if file_object_id == -1:
-            raise Exception("Did not get a valid file_object_id for agent_id and file_path combination.")
+            if row:
+                file_object_id = row[0]
+            else:
+                raise Exception("Did not get a valid file_object_id for agent_id and file_path combination.")
 
         cursor.callproc('add_file_to_restore_queue',
             (file_object_id)
