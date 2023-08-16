@@ -158,7 +158,7 @@ def handle_keepalive_request(request):
 
     response_data = keepalive_utils.get_keepalive_response_data(device_id)
 
-    return 200,json.dumps({'keepalive-response':'ahh, ahh, ahh, ahh, staying alive'})
+    return 200,json.dumps(response_data)
 
 def handle_validate_api_key_request(request):
     global_logger.info("Server handling validate API key request.")

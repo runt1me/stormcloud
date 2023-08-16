@@ -192,7 +192,7 @@ def get_list_of_files_to_restore(device_id):
         print("Got exception in get_list_of_files_to_restore: %s" %traceback.format_exc())
     finally:
         __teardown__(cursor,cnx)
-        return ret
+        return ret[0]
 
 def get_last_10_callbacks_for_device(device_ip,device_name):
   # TODO: change this to use get_device_by_agent_id

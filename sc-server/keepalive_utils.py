@@ -9,9 +9,13 @@ def record_keepalive(device_id,current_time):
     return ret
 
 def get_keepalive_response_data(device_id):
-    file_list = db.get_list_of_files_to_restore(device_id)
+    file_list_tuples = db.get_list_of_files_to_restore(device_id)
+    print(file_list_tuples)
+    file_names = [i[1] for i in file_list_tuples]
+    print(file_names)
 
-    print("File List: %s" % file_list)
+    data_dict = {
+        "restore_queue": file_names
+    }
 
-    # TODO: figure out how to encode file_list as json
-    return file_list
+    return data_dict
