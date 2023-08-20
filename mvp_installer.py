@@ -124,7 +124,7 @@ class SystemInfoPage(QWizardPage):
             "available_ram": str(round(psutil.virtual_memory().available / BYTES_IN_A_GB, 1)) + " GB",
             "total_ram": str(round(psutil.virtual_memory().total / BYTES_IN_A_GB, 1)) + " GB",
             "operating_system": platform.platform(),
-            "device_name": "foo"
+            "device_name": socket.gethostname()
         }
         return system_info
 
@@ -256,6 +256,7 @@ class BackupPage(QWizardPage):
     def select_install_directory(self):
         directory = str(QFileDialog.getExistingDirectory(self, "Select Installation Directory"))
         if directory:
+            directory = directory.replace("/", "\\")
             self.wizard().install_directory = directory
             self.install_label.setText(f"{self.wizard().install_directory}")
 
@@ -275,12 +276,21 @@ class InstallPage(QWizardPage):
         self.SERVER_NAME="www2.darkage.io"
         self.SERVER_PORT_API=8443
         self.SERVER_PORT_DOWNLOAD=443
-        self.STORMCLOUD_VERSION="1.0.0"
+        self.STORMCLOUD_VERSION="1.0.0" # TODO: Update this to dynamically pull the most recent version of Stormcloud from the web list
 
         self.stormcloud_client_url   = "https://%s:%s/sc-dist/windows-x86_64-stormcloud-client-%s.exe" % (
             self.SERVER_NAME,
             self.SERVER_PORT_DOWNLOAD,
             self.STORMCLOUD_VERSION
+        )
+        self.stormcloud_uninstaller_url   = "https://%s:%s/sc-dist/windows-x86_64-stormcloud-uninstaller-%s.exe" % (
+            self.SERVER_NAME,
+            self.SERVER_PORT_DOWNLOAD,
+            self.STORMCLOUD_VERSION
+        )
+        self.stormcloud_icon_url   = "https://%s:%s/sc-dist/stormcloud.ico" % (
+            self.SERVER_NAME,
+            self.SERVER_PORT_DOWNLOAD
         )
         self.register_new_device_url   = "https://%s:%s/api/register-new-device" % (
             self.SERVER_NAME,
@@ -329,9 +339,24 @@ class InstallPage(QWizardPage):
         self.label.setText("Downloading stormcloud client...")
         download_result, full_exe_path = self.download_to_folder(self.stormcloud_client_url, self.wizard().install_directory, "stormcloud.exe")
         
+        
         if not get_result(download_result, result_type='download'):
             QMessageBox.warning(self, "Error", "Failed to download stormcloud. Please try again.")
         self.progress.setValue(50)
+
+        stable_app_location = os.path.dirname(os.getenv('APPDATA') + "\\Stormcloud\\Stormcloud\\")
+        os.makedirs(stable_app_location, exist_ok=True)
+
+        download_uninstaller_result, uninstaller_path = self.download_to_folder(self.stormcloud_uninstaller_url, stable_app_location, "/uninstaller.exe")
+        
+        if not get_result(download_uninstaller_result, result_type='download'):
+            QMessageBox.warning(self, "Error", "Failed to download stormcloud uninstaller. Please try again.")
+        self.progress.setValue(60)
+
+        download_ico_result, ico_path = self.download_to_folder(self.stormcloud_icon_url, self.wizard().install_directory, "stormcloud.ico")
+        if not get_result(download_ico_result, result_type='download'):
+            QMessageBox.warning(self, "Error", "Failed to download required stormcloud package data. Please try again.")
+        self.progress.setValue(65)
 
         self.label.setText("Configuring settings...")
         configure_result = self.configure_settings(
@@ -356,7 +381,12 @@ class InstallPage(QWizardPage):
         self.progress.setValue(90)
         self.label.setText("Installation complete.")
         
-        self.create_uninstall_registry_key('Stormcloud', 'Dark Age Technology Group', self.STORMCLOUD_VERSION, 'C:/Users/Tyler/AppData/Roaming/Stormcloud/Stormcloud', 'C:/Users/Tyler/AppData/Roaming/Stormcloud/Stormcloud/Uninstaller.exe')
+        self.create_uninstall_registry_key('Stormcloud'
+                                           , 'Dark Age Technology Group'
+                                           , self.STORMCLOUD_VERSION
+                                           , self.wizard().install_directory
+                                           , stable_app_location + '/uninstaller.exe'
+                                           , self.wizard().install_directory + 'stormcloud.ico')
         self.progress.setValue(100)
 
     def register_new_device(self):
@@ -436,6 +466,7 @@ class InstallPage(QWizardPage):
         # Create a stable location for settings to ensure we can find the application later
         stable_app_location = os.path.dirname(os.getenv('APPDATA') + "\\Stormcloud\\Stormcloud\\")
         os.makedirs(stable_app_location, exist_ok=True)
+        
         with open(stable_app_location + "\\stable_settings.yaml", "w") as stable_settings_file:
             stable_settings = {}
             stable_settings['application_path'] = self.wizard().install_directory
@@ -492,11 +523,18 @@ class InstallPage(QWizardPage):
             logging.log(logging.ERROR, "Failed to create shortcut: %s" % e)
             return (0, None)
 
-    def create_uninstall_registry_key(self, app_name, company_name, version, install_location, uninstall_string):
+    def create_uninstall_registry_key(self
+                                      , app_name
+                                      , company_name
+                                      , version
+                                      , install_location
+                                      , uninstall_string
+                                      , display_icon):
         # Open the uninstall registry key.
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, 
-                             'Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall', 
-                             0, winreg.KEY_ALL_ACCESS)
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER
+                             , 'Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall'
+                             , 0
+                             , winreg.KEY_ALL_ACCESS)
     
         # Create a new key for our application.
         app_key = winreg.CreateKey(key, app_name)
@@ -507,6 +545,7 @@ class InstallPage(QWizardPage):
         winreg.SetValueEx(app_key, 'Version', 0, winreg.REG_SZ, version)
         winreg.SetValueEx(app_key, 'InstallLocation', 0, winreg.REG_SZ, install_location)
         winreg.SetValueEx(app_key, 'UninstallString', 0, winreg.REG_SZ, uninstall_string)
+        winreg.SetValueEx(app_key, 'DisplayIcon', 0, winreg.REG_SZ, display_icon)
     
         # Close the keys.
         winreg.CloseKey(app_key)
