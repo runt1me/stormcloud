@@ -60,12 +60,12 @@ def action_loop_and_sleep(settings, dbconn, ignore_hash, systray):
         )
 
         if active_thread is None:
-            active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id)
+            active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id,secret_key)
         else:
             if active_thread.is_alive():
                 pass
             else:
-                active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id)
+                active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id,secret_key)
 
         backup_utils.perform_backup(backup_paths,recursive_backup_paths,api_key,agent_id,secret_key,dbconn,ignore_hash,systray)
 
@@ -75,10 +75,10 @@ def read_yaml_settings_file(fn):
     with open(fn, 'r') as settings_file:
         return yaml.safe_load(settings_file)
 
-def start_keepalive_thread(freq,api_key,agent_id):
+def start_keepalive_thread(freq,api_key,agent_id,secret_key):
     logging.log(logging.INFO,"starting new keepalive thread with freq %d" % freq)
 
-    t = threading.Thread(target=keepalive_utils.execute_ping_loop,args=(freq,api_key,agent_id,"keepalive_thd"))
+    t = threading.Thread(target=keepalive_utils.execute_ping_loop,args=(freq,api_key,agent_id,secret_key,"keepalive_thd"))
     t.start()
 
     logging.log(logging.INFO,"returning from start thread")
