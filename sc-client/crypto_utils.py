@@ -26,5 +26,22 @@ def encrypt_file(file_path,secret_key):
 
     return output_path_temp, os.path.getsize(output_path_temp)
 
+def decrypt_in_place(file_path, secret_key):
+    f = get_fernet(secret_key)
+    outfile = file_path + ".tmp"
+    file_size = 0
+
+    with open(file_path, 'rb') as encrypted_file:
+        encrypted_data = encrypted_file.read()
+
+    decrypted_data = f.decrypt(encrypted_data)
+
+    with open(outfile, 'wb') as decrypted_file:
+        decrypted_file.write(decrypted_data)
+        file_size = len(decrypted_data)
+
+    os.rename(outfile, file_path)
+    return True, file_size
+
 def remove_temp_file(path):
     os.remove(path)

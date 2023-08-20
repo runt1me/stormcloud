@@ -12,6 +12,7 @@ SERVER_PORT=8443
 API_ENDPOINT_BACKUP_FILE         = 'https://%s:%d/api/backup-file'           % (SERVER_NAME,SERVER_PORT)
 API_ENDPOINT_BACKUP_FILE_STREAM  = 'https://%s:%d/api/backup-file-stream'    % (SERVER_NAME,SERVER_PORT)
 API_ENDPOINT_KEEPALIVE           = 'https://%s:%d/api/keepalive'             % (SERVER_NAME,SERVER_PORT)
+API_ENDPOINT_RESTORE_FILE        = 'https://%s:%d/api/restore-file'          % (SERVER_NAME,SERVER_PORT)
 
 ONE_MB = 1024*1024
 THRESHOLD_MB = 200
@@ -108,6 +109,30 @@ def tls_send_json_data(json_data_as_string, expected_response_code, show_json=Fa
 
     try:
         response = requests.post(url, headers=headers, data=json.dumps(json_data))
+
+    except Exception as e:
+        logging.log(logging.ERROR, "Send data failed: %s" % (e))
+
+    finally:
+        if response:
+            response_json = response.json()
+            logging.log(logging.INFO, "Received data: %s" % response_json)
+
+            if response.status_code == expected_response_code:
+                return (0, response_json)
+        else:
+            return (1, None)
+
+def tls_send_json_data_get(json_data_as_string, expected_response_code, show_json=False):
+    response = None
+    headers = {'Content-type': 'application/json'}
+    json_data = json.loads(json_data_as_string)
+    
+    if 'restore_file' in json_data['request_type']:
+        url = API_ENDPOINT_RESTORE_FILE
+
+    try:
+        response = requests.get(url, headers=headers, data=json.dumps(json_data))
 
     except Exception as e:
         logging.log(logging.ERROR, "Send data failed: %s" % (e))
