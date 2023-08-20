@@ -3,6 +3,11 @@ import os
 import secrets
 from cryptography.fernet import Fernet
 
+import logging_utils
+
+def __logger__():
+    return logging_utils.logger
+
 def create_key(key_path):
     key = Fernet.generate_key()
 

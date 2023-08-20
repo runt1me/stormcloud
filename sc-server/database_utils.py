@@ -7,6 +7,11 @@ import traceback
 # REMEMBER TO cnx.commit()!
 # ALL SINGLE ARG STORED PROCEDURE CALLS MUST USE (field,) SYNTAX TO INDICATE TUPLE!!
 
+import logging_utils
+
+def __logger__():
+    return logging_utils.logger
+
 def passes_sanitize(input_string):
   SANITIZE_LIST = ["'", '"', ";"]
   for expr in SANITIZE_LIST:
@@ -31,7 +36,7 @@ def update_callback_for_device(device_id, callback_time, status_code):
       ret.append(row)
 
   except Error as e:
-    print(e)
+    __logger__().error(e)
 
   finally:
     cnx.commit()
@@ -58,7 +63,7 @@ def add_or_update_customer(customer_name,username,password,api_key):
       ret.append(row)
 
   except Error as e:
-    print(e)
+    __logger__().error((e)
 
   finally:
     cnx.commit()
@@ -97,7 +102,7 @@ def add_or_update_file_for_device(device_id, file_name, file_path, client_full_n
       ret.append(row)
 
   except Error as e:
-    print(e)
+    __logger__().error(e)
 
   finally:
     cnx.commit()
@@ -129,7 +134,7 @@ def add_or_update_device_for_customer(customer_id, device_name, device_type, ip_
         ret.append(row)
 
   except Error as e:
-    print("Error: %s" %e)
+    __logger__().error(e)
 
   finally:
     cnx.commit()
@@ -165,7 +170,7 @@ def add_file_to_restore_queue(agent_id, file_path):
 
         affected = cursor.rowcount            
     except Exception as e:
-        print(e)
+        __logger__().error(e)
     finally:
         cnx.commit()
         __teardown__(cursor,cnx)
@@ -189,7 +194,7 @@ def get_list_of_files_to_restore(device_id):
             return []
 
     except Exception as e:
-        print("Got exception in get_list_of_files_to_restore: %s" %traceback.format_exc())
+        __logger__().error("Got exception in get_list_of_files_to_restore: %s" %traceback.format_exc())
     finally:
         __teardown__(cursor,cnx)
         return ret[0]
@@ -220,7 +225,7 @@ def get_last_10_callbacks_for_device(device_ip,device_name):
       ret.append(row)
 
   except Error as e:
-    print(e)
+    __logger__().error(e)
 
   finally:
     __teardown__(cursor,cnx)
@@ -243,7 +248,7 @@ def get_next_device_id():
         ret = int(highest_device_id)
 
     except Error as e:
-        print(e)
+        __logger__().error(e)
 
     finally:
         __teardown__(cursor,cnx)
@@ -266,7 +271,7 @@ def get_next_customer_id():
         ret = int(highest_customer_id)
 
     except Error as e:
-        print(e)
+        __logger__().error(e)
 
     finally:
         __teardown__(cursor,cnx)
@@ -289,7 +294,7 @@ def get_customer_id_by_api_key(api_key):
         ret = customer_id
 
   except Error as e:
-    print(e)
+    __logger__().error(e)
 
   finally:
     __teardown__(cursor,cnx)
@@ -309,7 +314,7 @@ def get_device_by_agent_id(agent_id):
         ret = row[0]
 
   except Error as e:
-    print(e)
+    __logger__().error(e)
 
   finally:
     __teardown__(cursor,cnx)
