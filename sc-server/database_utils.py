@@ -63,7 +63,7 @@ def add_or_update_customer(customer_name,username,password,api_key):
       ret.append(row)
 
   except Error as e:
-    __logger__().error((e)
+    __logger__().error(e)
 
   finally:
     cnx.commit()
@@ -152,6 +152,9 @@ def add_file_to_restore_queue(agent_id, file_path):
     file_object_id = -1
     affected = 0
     try:
+        __logger__().info('get_file_object_id(%s,%s)' % (agent_id,file_path))
+        print(type(agent_id))
+        print(type(file_path))
         cursor.callproc('get_file_object_id',
             (agent_id,file_path)
         )
@@ -164,13 +167,20 @@ def add_file_to_restore_queue(agent_id, file_path):
         else:
             raise Exception("Did not get a valid file_object_id for agent_id and file_path combination.")
 
+        print("Made it here, returning")
+        print(type(file_object_id))
+        literal_file_object_id = file_object_id[0]
+        __logger__().info('add_file_to_restore_queue(%s)' % file_object_id)
+
         cursor.callproc('add_file_to_restore_queue',
-            (file_object_id,)
+            (literal_file_object_id,)
         )
 
-        affected = cursor.rowcount            
+        affected = cursor.rowcount
+        print("Affected: %d" % affected)
+        affected = 1
     except Exception as e:
-        __logger__().error(e)
+        __logger__().error(traceback.format_exc())
     finally:
         cnx.commit()
         __teardown__(cursor,cnx)

@@ -101,6 +101,6 @@ def print_request_no_file(request):
         __logger__().info("%s: %s" % (k,request[k]))
 
 def log_file_info(decrypted_path,device_id,path_on_server):
-    __logger__().info(,"== STORING FILE : %s ==" % decrypted_path)
+    __logger__().info("== STORING FILE : %s ==" % decrypted_path)
     __logger__().info("Device ID:\t%d" % device_id)
     __logger__().info("writing content to %s" % path_on_server)
