@@ -20,7 +20,6 @@ def handle_queue_file_for_restore_request(request):
         return 401,json.dumps({'error': 'Invalid API key.'})
 
     ret = db.add_file_to_restore_queue(request['agent_id'], request['file_path'])
-    print(ret)
 
     if ret:
         __logger__().info("Successfully added file to restore queue.")

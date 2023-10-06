@@ -1,13 +1,15 @@
 import json
+from datetime import datetime
 
 import database_utils as db
 import logging_utils, keepalive_utils
+
 
 def __logger__():
     return logging_utils.logger
 
 def handle_keepalive_request(request):
-    logger.info("Server handling keepalive request.")
+    __logger__().info("Server handling keepalive request.")
     customer_id = db.get_customer_id_by_api_key(request['api_key'])
 
     if not customer_id:
