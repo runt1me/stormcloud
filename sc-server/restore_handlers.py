@@ -39,11 +39,18 @@ def handle_restore_file_request(request):
     if not results:
         return 401,json.dumps({'response': 'Bad request.'})
 
-    # TODO: change to restore
-    device_id = results[0]
-    keepalive_utils.record_keepalive(device_id,datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    device_id = int(results[0])
 
-    response_data = keepalive_utils.get_keepalive_response_data(device_id)
+    # TODO:
+    # 1. get path on server for file
+    path_on_server = db.get_server_path_for_file(
+            device_id,
+            request['file_path'],
+    )
 
-    return 200,json.dumps(response_data)
+    __logger__().info("Got path: %s" % path_on_server)
+    
+    # 2. read content into memory (stream?)
+
+    return 200,json.dumps({'handle_restore_file-response': 'File incoming.'})
 
