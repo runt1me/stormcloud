@@ -184,6 +184,8 @@ def restore_file():
         if not validate_request_generic(data):
             return jsonify({'response':'Unable to authorize request'}), 401, {'Content-Type': 'application/json'}
 
+        # TODO: streaming, but its difficult
+        # Probably need to do multipart response or just do octet-stream and ONLY send file
         ret_code, response_data = restore_handlers.handle_restore_file_request(data)
         return response_data, ret_code, {'Content-Type': 'application/json'}
     else:

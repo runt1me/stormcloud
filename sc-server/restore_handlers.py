@@ -1,7 +1,11 @@
 import json
+import os
 
 import database_utils as db
 import logging_utils
+
+# Unfortunately currently imposing a size limit on restore until I can figure out how to stream responses
+SIZE_LIMIT = 300*1024*1024
 
 def __logger__():
     return logging_utils.logger
@@ -41,16 +45,19 @@ def handle_restore_file_request(request):
 
     device_id = int(results[0])
 
-    # TODO:
-    # 1. get path on server for file
     path_on_server = db.get_server_path_for_file(
             device_id,
             request['file_path'],
     )
 
     __logger__().info("Got path: %s" % path_on_server)
-    
-    # 2. read content into memory (stream?)
+    file_size = os.path.getsize(path_on_server)
 
-    return 200,json.dumps({'handle_restore_file-response': 'File incoming.'})
+    if file_size > SIZE_LIMIT:
+        __logger__().error("File too large to restore via API.")
+        response_data = {
+            
+        }
 
+
+    return 200, json.dumps(response_data)
