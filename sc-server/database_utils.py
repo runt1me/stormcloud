@@ -214,6 +214,7 @@ def get_server_path_for_file(device_id, file_path):
   # IN file_path varchar(255)
   
   ret = []
+  server_path = ""
 
   cnx = __connect_to_db__()
   cursor = cnx.cursor(buffered=True)
@@ -224,16 +225,17 @@ def get_server_path_for_file(device_id, file_path):
 
     for result in cursor.stored_results():
       row = result.fetchall()
-      ret.append(row)
 
-    if not ret:
-      return []
+      if row:
+        server_path = row[0][0]
+      else:
+        raise Exception("Failed to get server path for file requested from client: %s" % file_path)
 
   except Exception as e:
     __logger__().error("Got exception in get_server_path_for_file: %s" %traceback.format_exc())
   finally:
     __teardown__(cursor,cnx)
-    return ret[0]
+    return server_path
 
 def get_last_10_callbacks_for_device(device_ip,device_name):
   # TODO: change this to use get_device_by_agent_id

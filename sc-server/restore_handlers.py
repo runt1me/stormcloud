@@ -56,8 +56,18 @@ def handle_restore_file_request(request):
     if file_size > SIZE_LIMIT:
         __logger__().error("File too large to restore via API.")
         response_data = {
-            
+            'restore_file-response': 'Error: File too large to restore via API. Please reach out to the Dark Age team for more information.'
         }
 
+        return 413, json.dumps(response_data)
 
-    return 200, json.dumps(response_data)
+    else:
+        __logger__().info("Reading file into memory for response")
+
+        file_content = open(path_on_server, 'rb').read()
+        response_data = {
+            'restore_file-response': 'File incoming',
+            'file_content': file_content.decode("utf-8")
+        }
+
+        return 200, json.dumps(response_data)
