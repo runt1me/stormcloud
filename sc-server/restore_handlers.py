@@ -2,7 +2,7 @@ import json
 import os
 
 import database_utils as db
-import logging_utils
+import logging_utils, crypto_utils
 
 # Unfortunately currently imposing a size limit on restore until I can figure out how to stream responses
 SIZE_LIMIT = 300*1024*1024
@@ -43,11 +43,17 @@ def handle_restore_file_request(request):
     if not results:
         return 401,json.dumps({'response': 'Bad request.'})
 
-    device_id = int(results[0])
+    device_id,_,_,_,_,_,_,_,path_to_device_secret_key,_ = results
+    path_on_device, _ = crypto_utils.decrypt_msg(path_to_device_secret_key,request['file_path'].encode("UTF-8"),decode=True)
+
+    print("[ryan_debug]")
+    print(results)
+    print("[ryan_debug] path_on_device: %s path_to_device_secret_key: %s" % (path_on_device,path_to_device_secret_key))
+    print("[ryan_debug] request[file_path]: %s" % request['file_path'])
 
     path_on_server = db.get_server_path_for_file(
             device_id,
-            request['file_path'],
+            path_on_device,
     )
 
     __logger__().info("Got path: %s" % path_on_server)
