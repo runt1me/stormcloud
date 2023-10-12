@@ -27,7 +27,7 @@ def encrypt_file(file_path,secret_key):
     return output_path_temp, os.path.getsize(output_path_temp)
 
 def decrypt_in_place(file_path, secret_key):
-    f = get_fernet(secret_key)
+    f = Fernet(secret_key)
     outfile = file_path + ".tmp"
     file_size = 0
 

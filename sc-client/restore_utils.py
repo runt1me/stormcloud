@@ -1,4 +1,6 @@
 import os
+import json
+import logging
 
 import crypto_utils
 import network_utils as scnet
@@ -8,7 +10,7 @@ def restore_file(file_path, api_key, agent_id, secret_key):
 
     restore_file_request_data = json.dumps({
         'request_type': 'restore_file',
-        'file_path': encrypted_path,
+        'file_path': encrypted_path.decode("utf-8"),
         'api_key': api_key,
         'agent_id': agent_id
     })
@@ -21,7 +23,7 @@ def restore_file(file_path, api_key, agent_id, secret_key):
 
     if response_data:
         if 'file_content' in response_data:
-            file_content = response_data['file_content']
+            file_content = response_data['file_content'].encode("utf-8")
 
             write_result   = write_file_to_disk(file_content, file_path)
 
