@@ -22,10 +22,10 @@ def execute_ping_loop(interval,api_key,agent_id,secret_key):
 
         if response_data:
             if 'restore_queue' in response_data:
-                restore_queue = response_data['restore_queue']:
+                restore_queue = response_data['restore_queue']
                 if restore_queue:
                     for file_name in restore_queue:
-                        if restore_utils.restore_file(file_name, api_key, agent_id, secret_key)
+                        if restore_utils.restore_file(file_name, api_key, agent_id, secret_key):
                             logging.log(logging.INFO, "Successfully restored file! Wrote to: %s" % file_name)
                         else:
                             logging.log(logging.WARNING, "Failed to restore file: Attempted: %s" % file_name)

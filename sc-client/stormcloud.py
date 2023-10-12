@@ -78,7 +78,7 @@ def read_yaml_settings_file(fn):
 def start_keepalive_thread(freq,api_key,agent_id,secret_key):
     logging.log(logging.INFO,"starting new keepalive thread with freq %d" % freq)
 
-    t = threading.Thread(target=keepalive_utils.execute_ping_loop,args=(freq,api_key,agent_id,secret_key,"keepalive_thd"))
+    t = threading.Thread(target=keepalive_utils.execute_ping_loop,args=(freq,api_key,agent_id,secret_key))
     t.start()
 
     logging.log(logging.INFO,"returning from start thread")
