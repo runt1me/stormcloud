@@ -4,6 +4,11 @@ from datetime import datetime
 import database_utils as db
 import logging_utils, crypto_utils, backup_utils
 
+import pathlib
+from pathlib import Path
+
+CHUNK_SIZE = 1024*1024
+
 def __logger__():
     return logging_utils.logger
 
