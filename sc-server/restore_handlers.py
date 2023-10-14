@@ -46,11 +46,6 @@ def handle_restore_file_request(request):
     device_id,_,_,_,_,_,_,_,path_to_device_secret_key,_ = results
     path_on_device, _ = crypto_utils.decrypt_msg(path_to_device_secret_key,request['file_path'].encode("UTF-8"),decode=True)
 
-    print("[ryan_debug]")
-    print(results)
-    print("[ryan_debug] path_on_device: %s path_to_device_secret_key: %s" % (path_on_device,path_to_device_secret_key))
-    print("[ryan_debug] request[file_path]: %s" % request['file_path'])
-
     path_on_server = db.get_server_path_for_file(
             device_id,
             path_on_device,
@@ -76,4 +71,13 @@ def handle_restore_file_request(request):
             'file_content': file_content.decode("utf-8")
         }
 
+        # TODO: update database to indicate restore date and mark the file as restored
+        # unfortunately this is non-trivial if we want to do it right, we have to make sure the client actually received the file
+        # before we mark it as complete, ideally the client would send a request back to us indicating that the file was restored
         return 200, json.dumps(response_data)
+
+def handle_restore_complete_request():
+    pass
+
+    # TODO: receive request with valid api key/agent id/file path (encrypted)
+    # Mark file in database as restored, 
