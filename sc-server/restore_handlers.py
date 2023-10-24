@@ -48,7 +48,7 @@ def handle_restore_file_request(request):
 
     path_on_server = db.get_server_path_for_file(
             device_id,
-            path_on_device,
+            path_on_device
     )
 
     __logger__().info("Got path: %s" % path_on_server)
@@ -70,6 +70,11 @@ def handle_restore_file_request(request):
             'restore_file-response': 'File incoming',
             'file_content': file_content.decode("utf-8")
         }
+
+        _ = db.mark_file_as_restored(
+                device_id,
+                path_on_device
+        )
 
         # TODO: update database to indicate restore date and mark the file as restored
         # unfortunately this is non-trivial if we want to do it right, we have to make sure the client actually received the file
