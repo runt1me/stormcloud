@@ -140,7 +140,9 @@ def tls_send_json_data_get(json_data_as_string, expected_response_code, show_jso
     finally:
         if response:
             response_json = response.json()
-            logging.log(logging.INFO, "Received data: %s" % response_json)
+
+            if show_json:
+                logging.log(logging.INFO, "Received data: %s" % response_json)
 
             if response.status_code == expected_response_code:
                 return (0, response_json)

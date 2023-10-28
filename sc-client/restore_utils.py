@@ -18,7 +18,7 @@ def restore_file(file_path, api_key, agent_id, secret_key):
     status_code, response_data = scnet.tls_send_json_data_get(
         restore_file_request_data,
         200,
-        show_json=True
+        show_json=False
     )
 
     if response_data:
