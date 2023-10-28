@@ -65,10 +65,14 @@ def handle_restore_file_request(request):
     else:
         __logger__().info("Reading file into memory for response")
 
-        file_content = open(path_on_server, 'rb').read()
+        # file_content should always be a fernet-encoded blob which is base64 encoded and URL-safe
+        # should not be a need to read in rb mode
+        # if this assumption breaks and we need to read in rb mode, then might be able to base64 encode/decode streams
+        # encoded_content = base64.b64encode(file_content).decode('utf-8')
+        file_content = open(path_on_server, 'r').read()
         response_data = {
             'restore_file-response': 'File incoming',
-            'file_content': file_content.decode("utf-8")
+            'file_content': file_content
         }
 
         _ = db.mark_file_as_restored(
