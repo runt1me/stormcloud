@@ -249,14 +249,14 @@ def mark_file_as_restored(device_id, file_path):
 
   try:
     cursor.callproc('mark_file_as_restored', (device_id, file_path))
+    affected = cursor.rowcount
 
-    for result in cursor.stored_results():
-      row = result.fetchall()
-      ret.append(row)
+    __logger__().info("Rows affected: %s" % affected)
 
   except Exception as e:
     __logger__().error("Got exception in mark_file_as_restored: %s" %traceback.format_exc())
   finally:
+    cnx.commit()
     __teardown__(cursor,cnx)
     return ret
 
