@@ -41,6 +41,9 @@ def process_paths_nonrecursive(paths,api_key,agent_id,secret_key,dbconn,ignore_h
             logging.log(logging.WARN, "Caught exception when trying to process path %s: %s" % (path,e))
 
 def process_paths_recursive(paths,api_key,agent_id,secret_key,dbconn,ignore_hash):
+    if not(paths):
+        return
+        
     for path in paths:
         try:
             logging.log(logging.INFO, "==   %s (-R)  ==" % path)
