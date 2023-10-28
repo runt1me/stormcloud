@@ -237,6 +237,29 @@ def get_server_path_for_file(device_id, file_path):
     __teardown__(cursor,cnx)
     return server_path
 
+def mark_file_as_restored(device_id, file_path):
+  # IN device_id INT
+  # IN file_path varchar(255)
+  
+  ret = []
+
+  cnx = __connect_to_db__()
+  cursor = cnx.cursor(buffered=True)
+  __logger__().info("Calling mark_file_as_restored(%d,%s)" % (device_id,file_path))
+
+  try:
+    cursor.callproc('mark_file_as_restored', (device_id, file_path))
+
+    for result in cursor.stored_results():
+      row = result.fetchall()
+      ret.append(row)
+
+  except Exception as e:
+    __logger__().error("Got exception in mark_file_as_restored: %s" %traceback.format_exc())
+  finally:
+    __teardown__(cursor,cnx)
+    return ret
+
 def get_last_10_callbacks_for_device(device_ip,device_name):
   # TODO: change this to use get_device_by_agent_id
   ret = []
