@@ -15,7 +15,6 @@ def encrypt_content(content,secret_key):
 def encrypt_file(file_path,secret_key):
     # Read in chunks to limit memory footprint.
     f = Fernet(secret_key)
-    encrypted = b""
 
     output_path_temp = "%s.tmp" % file_path
 
@@ -40,7 +39,7 @@ def decrypt_in_place(file_path, secret_key):
         decrypted_file.write(decrypted_data)
         file_size = len(decrypted_data)
 
-    os.rename(outfile, file_path)
+    os.replace(outfile, file_path)
     return True, file_size
 
 def remove_temp_file(path):
