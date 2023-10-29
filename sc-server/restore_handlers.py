@@ -7,6 +7,11 @@ import logging_utils, crypto_utils
 # Unfortunately currently imposing a size limit on restore until I can figure out how to stream responses
 SIZE_LIMIT = 300*1024*1024
 
+STRING_401_BAD_REQUEST = "Bad request."
+RESPONSE_401_BAD_REQUEST = (
+  401,json.dumps({'error':STRING_401_BAD_REQUEST})
+)
+
 def __logger__():
     return logging_utils.logger
 
@@ -14,11 +19,11 @@ def handle_queue_file_for_restore_request(request):
     __logger__().info("Server handling queue file for restore request.")
 
     if 'file_path' not in request.keys() or 'api_key' not in request.keys() or 'agent_id' not in request.keys():
-        return 400,json.dumps({'error': 'Bad request.'})
+        return RESPONSE_401_BAD_REQUEST
 
     customer_id = db.get_customer_id_by_api_key(request['api_key'])
     if not customer_id:
-        return 401,json.dumps({'error': 'Invalid API key.'})
+        return RESPONSE_401_BAD_REQUEST
 
     ret = db.add_file_to_restore_queue(request['agent_id'], request['file_path'])
 
@@ -34,17 +39,17 @@ def handle_restore_file_request(request):
     customer_id = db.get_customer_id_by_api_key(request['api_key'])
 
     if not customer_id:
-        return 401,json.dumps({'response': 'Bad request.'})
+        return RESPONSE_401_BAD_REQUEST
 
     results = db.get_device_by_agent_id(request['agent_id'])
     if not results:
-        return 401,json.dumps({'response': 'Bad request.'})
+        return RESPONSE_401_BAD_REQUEST
 
     device_id,_,_,_,_,_,_,_,path_to_device_secret_key,_ = results
     path_on_device, _ = crypto_utils.decrypt_msg(path_to_device_secret_key,request['file_path'].encode("UTF-8"),decode=True)
 
     if not path_on_device:
-        return 401,json.dumps({'response': 'Bad request.'})
+        return RESPONSE_401_BAD_REQUEST
 
     path_on_server = db.get_server_path_for_file(
             device_id,

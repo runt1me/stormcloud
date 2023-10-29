@@ -9,21 +9,20 @@ from pathlib import Path
 
 CHUNK_SIZE = 1024*1024
 
+STRING_401_BAD_REQUEST = "Bad request."
+RESPONSE_401_BAD_REQUEST = (
+  401,json.dumps({'error':STRING_401_BAD_REQUEST})
+)
+
 def __logger__():
     return logging_utils.logger
 
 def handle_register_new_device_request(request):
     __logger__().info("Server handling new device request.")
 
-    customer_id      = db.get_customer_id_by_api_key(request['api_key'])
+    customer_id = db.get_customer_id_by_api_key(request['api_key'])
     if not customer_id:
-        __logger__().warning("Could not find customer ID for the given API key: %s" % request['api_key'])
-        response_code = 401
-        response_data = json.dumps({
-            'response': 'Unable to authorize request',
-        })
-
-        return response_code, response_data
+        return RESPONSE_401_BAD_REQUEST
 
     device_name      = request['device_name']
     ip_address       = request['ip_address']
@@ -65,18 +64,18 @@ def handle_backup_file_request(request, file):
     customer_id = db.get_customer_id_by_api_key(request['api_key'])
 
     if not customer_id:
-        return 401,json.dumps({'response': 'Bad request.'})
+        return RESPONSE_401_BAD_REQUEST
 
     results = db.get_device_by_agent_id(request['agent_id'])
     if not results:
-        return 401,json.dumps({'response': 'Bad request.'})
+        return RESPONSE_401_BAD_REQUEST
 
     device_id,_,_,_,_,_,_,_,path_to_device_secret_key,_ = results
 
     path_on_device, _ = crypto_utils.decrypt_msg(path_to_device_secret_key,request['file_path'].encode("UTF-8"),decode=True)
 
     if not path_on_device:
-        return 401,json.dumps({'response': 'Bad request.'})
+        return RESPONSE_401_BAD_REQUEST
 
     path_on_server, device_root_directory_on_server = backup_utils.get_server_path(customer_id,device_id,path_on_device)
 
