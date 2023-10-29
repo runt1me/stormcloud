@@ -13,10 +13,7 @@ def __logger__():
 def handle_queue_file_for_restore_request(request):
     __logger__().info("Server handling queue file for restore request.")
 
-    if 'file_path' not in request.keys():
-        return 400,json.dumps({'error': 'Bad request.'})
-
-    if 'api_key' not in request.keys():
+    if 'file_path' not in request.keys() or 'api_key' not in request.keys() or 'agent_id' not in request.keys():
         return 400,json.dumps({'error': 'Bad request.'})
 
     customer_id = db.get_customer_id_by_api_key(request['api_key'])
