@@ -31,7 +31,12 @@ def generate_agent_id():
 
 def decrypt_msg(path_to_device_secret_key,raw_msg,decode):
     f = get_fernet(path_to_device_secret_key)
-    decrypted = f.decrypt(raw_msg)
+
+    try:
+        decrypted = f.decrypt(raw_msg)
+    except Exception as e:
+        __logger__().info("Caught exception when trying to decrypt. First ten bytes: %s" %raw_msg[0:10])
+        return "", -1
 
     if decode:
         decrypted = decrypted.decode("utf-8")

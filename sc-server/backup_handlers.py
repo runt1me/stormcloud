@@ -74,6 +74,10 @@ def handle_backup_file_request(request, file):
     device_id,_,_,_,_,_,_,_,path_to_device_secret_key,_ = results
 
     path_on_device, _ = crypto_utils.decrypt_msg(path_to_device_secret_key,request['file_path'].encode("UTF-8"),decode=True)
+
+    if not path_on_device:
+        return 401,json.dumps({'response': 'Bad request.'})
+
     path_on_server, device_root_directory_on_server = backup_utils.get_server_path(customer_id,device_id,path_on_device)
 
     file_size = backup_utils.stream_write_file_to_disk(path=path_on_server,file_handle=file,max_versions=3,chunk_size=CHUNK_SIZE)

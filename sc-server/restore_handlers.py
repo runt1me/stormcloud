@@ -43,6 +43,9 @@ def handle_restore_file_request(request):
     device_id,_,_,_,_,_,_,_,path_to_device_secret_key,_ = results
     path_on_device, _ = crypto_utils.decrypt_msg(path_to_device_secret_key,request['file_path'].encode("UTF-8"),decode=True)
 
+    if not path_on_device:
+        return 401,json.dumps({'response': 'Bad request.'})
+
     path_on_server = db.get_server_path_for_file(
             device_id,
             path_on_device
