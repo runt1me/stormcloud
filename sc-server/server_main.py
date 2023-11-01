@@ -11,8 +11,10 @@ from werkzeug.formparser import parse_form_data
 from werkzeug.formparser import default_stream_factory
 
 from flask import Flask, jsonify
+from flask_cors import CORS
 import flask   # used for flask.request to prevent namespace conflicts with other variables named request
 app = Flask(__name__)
+cors = CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 logger = logging_utils.initialize_logging()
 
@@ -46,6 +48,7 @@ RESPONSE_401_BAD_REQUEST = (
     401,
     {'Content-Type': 'application/json'}
 )
+
 
 def main():
     app.run()
