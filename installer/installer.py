@@ -101,32 +101,6 @@ class APIKeyPage(QWizardPage):
             return False
 
 class SystemInfoPage(QWizardPage):
-    # def __init__(self):
-    #     super().__init__()
-    #     self.setTitle("System Information")
-        
-    #     layout = QFormLayout()
-    #     self.setLayout(layout)
-
-    # def initializePage(self):
-    #     self.wizard().system_info = self.get_system_info()
-        
-    #     # Clear and repopulate the layout every time the page is shown
-    #     self.layout().removeRow(0)
-    #     for key, value in self.wizard().system_info.items():
-    #         self.layout().addRow(QLabel(key), self.createReadOnlyText(str(value)))
-
-    # def get_system_info(self):
-    #     BYTES_IN_A_GB = 1073741824
-    #     system_info = {
-    #         "hostname": socket.gethostname(),
-    #         "ip_address": self.get_ipv4_address_associated_with_default_gateway(),
-    #         "available_ram": str(round(psutil.virtual_memory().available / BYTES_IN_A_GB, 1)) + " GB",
-    #         "total_ram": str(round(psutil.virtual_memory().total / BYTES_IN_A_GB, 1)) + " GB",
-    #         "operating_system": platform.platform(),
-    #         "device_name": "foo"
-    #     }
-    #     return system_info
     
     def __init__(self):
         super().__init__()
