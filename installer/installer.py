@@ -29,7 +29,7 @@ class Installer(QWizard):
         self.setWindowTitle("Stormcloud Installer")
         self.setFixedSize(640, 480)
 
-        # Scoping these variables to the installer so that I can use them at another time
+        # Scoping these variables to the installer so that I can use them later
         self.system_info            = None
         self.api_key                = None
         self.target_folder          = None
@@ -101,20 +101,52 @@ class APIKeyPage(QWizardPage):
             return False
 
 class SystemInfoPage(QWizardPage):
+    # def __init__(self):
+    #     super().__init__()
+    #     self.setTitle("System Information")
+        
+    #     layout = QFormLayout()
+    #     self.setLayout(layout)
+
+    # def initializePage(self):
+    #     self.wizard().system_info = self.get_system_info()
+        
+    #     # Clear and repopulate the layout every time the page is shown
+    #     self.layout().removeRow(0)
+    #     for key, value in self.wizard().system_info.items():
+    #         self.layout().addRow(QLabel(key), self.createReadOnlyText(str(value)))
+
+    # def get_system_info(self):
+    #     BYTES_IN_A_GB = 1073741824
+    #     system_info = {
+    #         "hostname": socket.gethostname(),
+    #         "ip_address": self.get_ipv4_address_associated_with_default_gateway(),
+    #         "available_ram": str(round(psutil.virtual_memory().available / BYTES_IN_A_GB, 1)) + " GB",
+    #         "total_ram": str(round(psutil.virtual_memory().total / BYTES_IN_A_GB, 1)) + " GB",
+    #         "operating_system": platform.platform(),
+    #         "device_name": "foo"
+    #     }
+    #     return system_info
+    
     def __init__(self):
         super().__init__()
         self.setTitle("System Information")
         
         layout = QFormLayout()
+        self.device_name_edit = QLineEdit()  # Add QLineEdit for device name
+        self.device_name_edit.setPlaceholderText("Enter device name")  # Optional placeholder text
+        layout.addRow("Device Name:", self.device_name_edit)  # Add QLineEdit to the form
         self.setLayout(layout)
 
     def initializePage(self):
-        self.wizard().system_info = self.get_system_info()
-        
+        if not self.wizard().system_info:
+            self.wizard().system_info = self.get_system_info()
+
         # Clear and repopulate the layout every time the page is shown
-        self.layout().removeRow(0)
+        self.layout().removeRow(1)  # Update the index to remove the correct row
         for key, value in self.wizard().system_info.items():
-            self.layout().addRow(QLabel(key), self.createReadOnlyText(str(value)))
+            if key != "device_name":  # Skip the device name as it's already in QLineEdit
+                self.layout().addRow(QLabel(key), self.createReadOnlyText(str(value)))
 
     def get_system_info(self):
         BYTES_IN_A_GB = 1073741824
@@ -124,7 +156,7 @@ class SystemInfoPage(QWizardPage):
             "available_ram": str(round(psutil.virtual_memory().available / BYTES_IN_A_GB, 1)) + " GB",
             "total_ram": str(round(psutil.virtual_memory().total / BYTES_IN_A_GB, 1)) + " GB",
             "operating_system": platform.platform(),
-            "device_name": "foo"
+            "device_name": ""  # Initialize as empty string
         }
         return system_info
 
@@ -140,7 +172,8 @@ class SystemInfoPage(QWizardPage):
     def validatePage(self):
         self.wizard().system_info["request_type"] = "register_new_device"
         self.wizard().system_info["device_status"] = 1
-        self.wizard().system_info["device_type"] = "bar"
+        self.wizard().system_info["device_type"] = "Windows"
+        self.wizard().system_info["device_name"] = self.device_name_edit.text()
 
         return True
 
