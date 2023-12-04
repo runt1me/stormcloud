@@ -1,246 +1,431 @@
-from datetime import datetime
-import socket, ssl
 import json
+import logging
+import netifaces   # pip install netifaces
+import os
 import platform
-from subprocess import Popen, PIPE
-from pathlib import Path
+import psutil      # pip install psutil
+import requests    # pip install requests
+import socket
+import sys
+import winshell    # pip install winshell
+import subprocess
+import yaml        # pip install pyyaml
+from win32com.client import Dispatch    # pip install pywin32
 
-import webbrowser
-import requests
+# pip install pyqt5
+from PyQt5.QtWidgets import QApplication, QVBoxLayout, QLabel, QPushButton, QProgressBar, QMainWindow
+from PyQt5.QtWidgets import QWizard, QWizardPage, QLineEdit, QTextEdit, QMessageBox, QFormLayout
+from PyQt5.QtWidgets import QCheckBox, QFileDialog, QScrollArea, QWidget, QHBoxLayout, QGridLayout
+from PyQt5.QtCore import Qt
 from requests.exceptions import SSLError
 
-import os, winshell
-from win32com.client import Dispatch
-import subprocess
+from pathlib import Path
 
-import logging
-import argparse
+class Installer(QWizard):
+    def __init__(self):
+        super().__init__()
+        # TODO: logging - best practices for how to incorporate this?
 
-from time import sleep
+        self.setWindowTitle("Stormcloud Installer")
+        self.setFixedSize(640, 480)
 
-import tkinter as tk
-from tkinter import ttk
-from tkinter import messagebox
-from tkinter import filedialog
+        # Scoping these variables to the installer so that I can use them at another time
+        self.system_info            = None
+        self.api_key                = None
+        self.target_folder          = None
+        self.install_directory      = None
+        self.backup_paths           = None
+        self.backup_paths_recursive = None
 
-# saving this as a test case for later when i make unit tests
-#ret, _ = tls_send_json_data("not valid json data", "response", SERVER_NAME, SERVER_PORT)
+        self.addPage(WelcomePage())
+        self.addPage(APIKeyPage())
+        self.addPage(SystemInfoPage())
+        self.addPage(BackupPage())
+        self.addPage(InstallPage())
+        self.addPage(FinishPage())
 
-SERVER_NAME="www2.darkage.io"
-SERVER_PORT=8443
-STORMCLOUD_VERSION="1.0.0"
-
-WINDOWS_OS_SC_CLIENT_URL = "https://%s/sc-dist/windows-x86_64-stormcloud-client-%s.exe"   % (SERVER_NAME, STORMCLOUD_VERSION)
-MACOS_SC_CLIENT_URL      = "https://%s/sc-dist/macos-x86_64-i386-64-stormcloud-client-%s" % (SERVER_NAME, STORMCLOUD_VERSION)
-
-API_ENDPOINT_HELLO               = 'https://%s:%d/api/hello'               % (SERVER_NAME,SERVER_PORT)
-API_ENDPOINT_REGISTER_NEW_DEVICE = 'https://%s:%d/api/register-new-device' % (SERVER_NAME,SERVER_PORT)
-
-def conduct_connectivity_test(api_key,server_name,server_port):
-    logging.log(
-        logging.INFO, "Attempting connectivity test with server: %s:%d" % (server_name, server_port)
-    )
-
-    # TODO: Return codes
-    # 0 -> success
-    # 1 -> invalid api key presented
-    # 2 -> no response from server
-    send_hello_data = json.dumps({'request_type':'hello','api_key':api_key})
-    return tls_send_json_data(send_hello_data, 'hello-response')
-
-def conduct_device_initial_survey(api_key,dtype):
-    try:
-        operating_system = platform.platform()
-
-        if 'macOS' in operating_system:
-            device_name, ip_address = get_name_and_address_info_mac()
-        elif 'Windows' in operating_system:
-            device_name, ip_address = get_name_and_address_info_windows()
-
-        device_type = dtype
-        device_status = 1
-
-    except Exception as e:
-        logging.log(
-            logging.ERROR, "Initial survey failed: %s" % e
+    def initialize_logging():
+        logging.basicConfig(
+            filename='install.log',
+            filemode='a',
+            format='%(asctime)s %(levelname)-8s %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S',
+            level=logging.DEBUG
         )
 
-    finally:
-        return json.dumps({
-            'request_type': "register_new_device",
-            'api_key': api_key,
-            'device_type': device_type,
-            'device_name': device_name,
-            'ip_address': ip_address,
-            'operating_system': operating_system,
-            'device_status': device_status
-        })
 
-def get_name_and_address_info_mac():
-    # Originally I tried to do socket.gethostbyname() on the hostname, but that usually spit out localhost
-    # This way runs netstat -rn -f inet and gets the interface associated with the default route
-    # Then runs ifconfig <interface> and gets the inet address on that interface
-    # TODO: handle if netstat doesn't work to get the routing table (maybe net-tools is not installed?)
-    # deprecated in favor of netifaces model
+class WelcomePage(QWizardPage):
+    def __init__(self):
+        super().__init__()
+        layout = QVBoxLayout()
+        label = QLabel("Welcome to the Stormcloud Installer. Click 'Next' to begin.")
+        layout.addWidget(label)
+        self.setLayout(layout)
 
-    try:
-        device_name = socket.gethostname()
+class APIKeyPage(QWizardPage):    
+    def __init__(self):
+        super().__init__()
+        layout = QVBoxLayout()
+        label = QLabel("Enter your API key:")
+        self.api_key_edit = QLineEdit()
+        layout.addWidget(label)
+        layout.addWidget(self.api_key_edit)
+        self.setLayout(layout)
 
-    except Exception as e:
-        logging.log(
-            logging.ERROR, "Unable to get device name: %s" % e
-        )
-        device_name = "UNKNOWN_HOSTNAME"
+    def initializePage(self):
+        pass
 
-    try: 
-        process = Popen(['netstat', '-rn', '-f', 'inet'], stdout=PIPE, stderr=PIPE)
-        stdout, stderr = process.communicate()
-
-        default_route_line = [l for l in str(stdout).split("\\n") if 'default' in l][0]
-        default_route_interface = default_route_line.split()[3]
-
-        process = Popen(['ifconfig', default_route_interface], stdout=PIPE, stderr=PIPE)
-        stdout, stderr = process.communicate()
-
-        ifconfig_inet_line = [l for l in str(stdout).split('\\n\\t') if l.split()[0] == "inet"][0]
-        ip_address = ifconfig_inet_line.split()[1]
-
-    except Exception as e:
-        logging.log(
-            logging.ERROR, "Unable to get IP address: %s" %e
-        )
-        ip_address = "UNKNOWN_IP_ADDRESS"
-
-    return device_name, ip_address
- 
-def get_name_and_address_info_windows():
-    # Runs route print -4 and gets the address associated with the default route
-    # TODO: handle if route print -4 doesnt work?
-    # deprecated in favor of netifaces model
-    device_name = socket.gethostname()
-
-    process = Popen(['route', 'print', '-4'], stdout=PIPE, stderr=PIPE)
-    stdout, stderr = process.communicate()
-
-    lines = [l for l in stdout.decode("utf-8").split("\r\n") if l]
-    default_route_line = [l for l in lines if l.split()[0] == '0.0.0.0'][0]
-    default_route_address = default_route_line.split()[3]
-
-    return device_name, default_route_address
-
-def read_api_key_file(keyfile_path):
-    with open(keyfile_path,'rb') as keyfile:
-        api_key = keyfile.read()
-
-    return api_key.decode("utf-8")
-
-def configure_settings(send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive, secret_key, agent_id, api_key, target_folder, os_info):
-    backup_time        = int(backup_time)
-    keepalive_freq     = int(keepalive_freq)
-
-    if 'Windows' in os_info:
-        target_folder += "\\"
-    elif 'macOS' in os_info:
-        target_folder += "/"
-
-    settings_file_path = target_folder + "settings.cfg"
-    os.makedirs(os.path.dirname(settings_file_path), exist_ok=True)
-    with open(settings_file_path, "w") as settings_file:
-        lines_to_write = []
-
-        # Logging
-        lines_to_write.append("# send logging and error information to dark age servers")
-        lines_to_write.append("# to assist with development/bug fixes/discovery of errors")
-        lines_to_write.append("# 1 = ON, 0 = OFF")
-        if send_logs:
-            lines_to_write.append("SEND_LOGS 1")
+    def validatePage(self):
+        if self.validate_api_key(self.api_key_edit.text()):
+            self.wizard().api_key = self.api_key_edit.text()
+            return True
         else:
-            lines_to_write.append("SEND_LOGS 0")
+            QMessageBox.warning(self, "Invalid API Key", "The entered API key is invalid or could not be verified. Please try again.")
+            return False
 
-        # Backup time
-        lines_to_write.append("# controls backup time of day")
-        lines_to_write.append("# hour of the day/24hr time")
-        lines_to_write.append("# i.e. 23 = 11PM (system time)")
-        lines_to_write.append("BACKUP_TIME %d" % backup_time)
-
-        # Keepalive frequency
-        lines_to_write.append("# controls how frequently this device will send keepalive message to the stormcloud servers.")
-        lines_to_write.append("# Interval in seconds (90=send keepalive every 90 seconds)")
-        lines_to_write.append("KEEPALIVE_FREQ %d" % keepalive_freq)
-
-        # Secret Key
-        lines_to_write.append("# symmetric key for device encryption")
-        lines_to_write.append("SECRET_KEY %s" % secret_key)
+    def validate_api_key(self, api_key):
+        url = "https://www2.darkage.io:8443/api/validate-api-key"
+        headers = {"Content-Type": "application/json"}
+        data = {"api_key": api_key}        
         
-        # Agent ID
-        lines_to_write.append("# Agent ID, for identifying this device to the stormcloud servers")
-        lines_to_write.append("AGENT_ID %s" % agent_id)
-
-        # API key my husband is so smart
-        lines_to_write.append("# API key")
-        lines_to_write.append("API_KEY %s" % api_key)
-
-        # Backup paths
-        lines_to_write.append("# paths to backup")
-        lines_to_write.append("BACKUP_PATHS")
-        for bp in backup_paths:
-            lines_to_write.append("%s" % bp)
-
-        # Recursive backup paths
-        lines_to_write.append("# paths to recursively backup")
-        lines_to_write.append("RECURSIVE_BACKUP_PATHS")
-        if backup_paths_recursive:
-            for rbp in backup_paths_recursive:
-                lines_to_write.append("%s" % rbp)
-
-        output_string = "\n".join(lines_to_write)
-        settings_file.write(output_string)
-
-def download_stormcloud_client(os_info, target_folder):
-    if 'Windows' in os_info:
-        if not target_folder.endswith('\\'):
-            target_folder += "\\"
-        return download_to_folder(WINDOWS_OS_SC_CLIENT_URL, target_folder, "stormcloud.exe")
-        
-    elif 'macOS' in os_info:
-        if not target_folder.endswith('/'):
-            target_folder += "/"
-        return download_to_folder(MACOS_SC_CLIENT_URL, target_folder, "stormcloud")
-
-    else:
-        logging.log(logging.ERROR, "No supported version of stormcloud was found for the Operating System detected.")
-        logging.log(logging.ERROR, "Please reach out to our customer support team for assistance.")
-        return (1, None)
-
-def download_to_folder(url, folder, file_name):
-    try:
-        response = requests.get(url)
-    except SSLError as e:
-        logging.log(logging.ERROR, "Caught SSL Error when trying to download from %s: %s" % (url,e))
-    except Exception as e:
-        logging.log(logging.ERROR, "Caught exception when trying to download from %s: %s" % (url,e))
-
-    if response:
         try:
-            full_path = folder + file_name
-            os.makedirs(os.path.dirname(full_path), exist_ok=True)
-            
-            with open(full_path,'wb') as f:
-                for chunk in response.iter_content():
-                    f.write(chunk)
+            response = requests.post(url, headers=headers, json=data)
+            if response.status_code == 200:
+                QMessageBox.information(self, "API Key Validated", "The API key has been successfully validated!")
+                return True
+            else:
+                return False
 
-            return (0, full_path)
         except Exception as e:
-            logging.log(logging.ERROR, "Caught exception when trying to write stormcloud to file: %s. Error: %s" % (full_path,e))
+            print(e)
+            return False
 
-    # Fail case
-    return (1, None)
+class SystemInfoPage(QWizardPage):
+    def __init__(self):
+        super().__init__()
+        self.setTitle("System Information")
+        
+        layout = QFormLayout()
+        self.setLayout(layout)
 
-def configure_persistence(os_info, sc_client_installed_path):
-    sc_client_installed_path_obj = Path(sc_client_installed_path)
-    if 'Windows' in os_info:
+    def initializePage(self):
+        self.wizard().system_info = self.get_system_info()
+        
+        # Clear and repopulate the layout every time the page is shown
+        self.layout().removeRow(0)
+        for key, value in self.wizard().system_info.items():
+            self.layout().addRow(QLabel(key), self.createReadOnlyText(str(value)))
+
+    def get_system_info(self):
+        BYTES_IN_A_GB = 1073741824
+        system_info = {
+            "hostname": socket.gethostname(),
+            "ip_address": self.get_ipv4_address_associated_with_default_gateway(),
+            "available_ram": str(round(psutil.virtual_memory().available / BYTES_IN_A_GB, 1)) + " GB",
+            "total_ram": str(round(psutil.virtual_memory().total / BYTES_IN_A_GB, 1)) + " GB",
+            "operating_system": platform.platform(),
+            "device_name": "foo"
+        }
+        return system_info
+
+    def get_ipv4_address_associated_with_default_gateway(self):
+        default_gateway = netifaces.gateways()['default'][netifaces.AF_INET]
+        default_gateway_interface = default_gateway[1]
+        ipv4_addresses = [
+            addr['addr']
+            for addr in netifaces.ifaddresses(default_gateway_interface)[netifaces.AF_INET]
+        ]
+        return ipv4_addresses[0] if ipv4_addresses else None
+
+    def validatePage(self):
+        self.wizard().system_info["request_type"] = "register_new_device"
+        self.wizard().system_info["device_status"] = 1
+        self.wizard().system_info["device_type"] = "bar"
+
+        return True
+
+    def createReadOnlyText(self, text):
+        readOnlyText = QTextEdit()
+        readOnlyText.setPlainText(text)
+        readOnlyText.setReadOnly(True)
+        readOnlyText.setFixedHeight(25)
+        readOnlyText.setStyleSheet("""
+            QTextEdit {
+                background-color: #F0F0F0;
+                color: #333;
+                border: none;
+            }
+        """)
+        return readOnlyText
+
+class BackupPage(QWizardPage):
+    def __init__(self):
+        super().__init__()
+        self.folder_layouts = []
+        
+        self.setTitle("Backup and Installation Settings")
+        
+        self.scrollArea = QScrollArea()
+        self.scrollArea.setWidgetResizable(True)
+
+        self.scrollContent = QWidget(self.scrollArea)
+        self.scrollLayout = QFormLayout(self.scrollContent)
+        self.scrollArea.setWidget(self.scrollContent)
+
+        self.addButton = QPushButton("Add Folder", self)
+        self.addButton.clicked.connect(self.addFolder)
+        self.addButton.setMaximumWidth(80)
+        
+        self.install_label = QLineEdit()
+        
+        self.install_label.setText(os.getenv("HOMEDRIVE") + os.getenv("HOMEPATH") + "\\AppData\\Roaming")
+        self.install_label.setReadOnly(True)
+        
+        self.install_button = QPushButton("Select Installation Directory")
+        self.install_button.clicked.connect(self.select_install_directory)
+        self.install_button.setMaximumWidth(180)
+        
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel("Select the folders you want to backup:"))
+        layout.addWidget(self.scrollArea)
+        layout.addWidget(self.addButton)
+        layout.addWidget(self.install_label)
+        layout.addWidget(self.install_button)
+        self.setLayout(layout)
+
+    def initializePage(self):
+        self.wizard().install_directory = os.getenv("HOMEDRIVE") + os.getenv("HOMEPATH") + "\\AppData\\Roaming"
+
+    def addFolder(self):
+        folder = str(QFileDialog.getExistingDirectory(self, "Select Directory"))
+        if folder:
+            checkbox = QCheckBox("Include subfolders")
+            checkboxLayout = QHBoxLayout()
+            checkboxLayout.addSpacing(20)
+            checkboxLayout.addWidget(checkbox)
+
+            removeButton = QPushButton("Remove Folder")
+            removeButton.setMaximumWidth(120)
+            
+            path_layout = QHBoxLayout()
+            path_layout.addWidget(QLabel(folder))
+            path_layout.addWidget(removeButton, alignment=Qt.AlignRight)
+            
+            path_and_checkbox_layout = QVBoxLayout()
+            path_and_checkbox_layout.addLayout(path_layout)
+            path_and_checkbox_layout.addLayout(checkboxLayout)
+
+            self.scrollLayout.addWidget(self.createFolderWidget(folder, checkbox))  # Pass checkbox to method
+
+            # self.folder_layouts.append((folder, checkbox, path_and_checkbox_layout, removeButton))  # Store checkbox
+
+            removeButton.clicked.connect(lambda: self.removeFolder(folder, checkbox, path_and_checkbox_layout, removeButton))
+
+    def removeFolder(self, folder, checkbox, widget, button):
+        button.clicked.disconnect()
+        self.scrollLayout.removeWidget(widget)
+        widget.deleteLater()
+
+        self.folder_layouts.remove((folder, checkbox, widget, button))
+
+    def createFolderWidget(self, folder, checkbox):  # Receive checkbox from caller
+        checkboxLayout = QHBoxLayout()
+        checkboxLayout.addSpacing(20)
+        checkboxLayout.addWidget(checkbox)
+
+        removeButton = QPushButton("Remove Folder")
+        removeButton.setMaximumWidth(120)
+
+        path_layout = QHBoxLayout()
+        path_layout.addWidget(QLabel(folder))
+        path_layout.addWidget(removeButton, alignment=Qt.AlignRight)
+
+        path_and_checkbox_layout = QVBoxLayout()
+        path_and_checkbox_layout.addLayout(path_layout)
+        path_and_checkbox_layout.addLayout(checkboxLayout)
+
+        folderWidget = QWidget()
+        folderWidget.setLayout(path_and_checkbox_layout)
+
+        self.folder_layouts.append((folder, checkbox, folderWidget, removeButton))  # Store checkbox
+
+        removeButton.clicked.connect(lambda: self.removeFolder(folder, checkbox, folderWidget, removeButton))  # Pass checkbox to method
+
+        return folderWidget
+        
+    def select_install_directory(self):
+        directory = str(QFileDialog.getExistingDirectory(self, "Select Installation Directory"))
+        if directory:
+            self.wizard().install_directory = directory
+            self.install_label.setText(f"{self.wizard().install_directory}")
+
+    def validatePage(self):
+        self.wizard().backup_paths = [folder for folder, checkbox, _, _ in self.folder_layouts if not checkbox.isChecked()]
+        self.wizard().backup_paths_recursive = [folder for folder, checkbox, _, _ in self.folder_layouts if checkbox.isChecked()]
+        
+        if not self.wizard().install_directory:
+            QMessageBox.warning(self, "No Installation Directory", "Please select an installation directory.")
+            return False
+        return True
+
+class InstallPage(QWizardPage):
+    def __init__(self):
+        super().__init__()
+
+        self.SERVER_NAME="www2.darkage.io"
+        self.SERVER_PORT_API=8443
+        self.SERVER_PORT_DOWNLOAD=443
+        self.STORMCLOUD_VERSION="1.0.0"
+
+        self.stormcloud_client_url   = "https://%s:%s/sc-dist/windows-x86_64-stormcloud-client-%s.exe" % (
+            self.SERVER_NAME,
+            self.SERVER_PORT_DOWNLOAD,
+            self.STORMCLOUD_VERSION
+        )
+        self.register_new_device_url   = "https://%s:%s/api/register-new-device" % (
+            self.SERVER_NAME,
+            self.SERVER_PORT_API
+        )
+
+        layout = QVBoxLayout()
+        label = QLabel("Installing Stormcloud...")
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        layout.addWidget(label)
+        layout.addWidget(self.progress)
+        self.setLayout(layout)
+
+    def initializePage(self):
+        # TODO: need to find the right place to call self.install()
+        # Need to make the progress bar move appropriately as functions complete
+        # Need to figure out how to display text on the screen while bar moves
+        # i.e. "registering device", "configuring settings", "downloading stormcloud client", "configuring startup process"
+        self.progress.setValue(0)
+        self.install()
+
+    def install(self):
+        def get_result(result, result_type):
+            # Input checks
+            valid_result_types = ('register', 'download', 'configure', 'persist')
+            if result_type not in valid_result_types:
+                QMessageBox.warning(self, "Error", 'Invalid result_type provided. Valid result types include: `{}`'.format("`, `".join(valid_result_types)))
+            
+            if result:
+                return True
+            return False
+        
+        if not self.wizard().install_directory.endswith('\\'):
+            self.wizard().install_directory += "\\Stormcloud\\"
+        else:
+            self.wizard().install_directory += "Stormcloud\\"
+
+        register_result = self.register_new_device()
+        if not get_result(register_result, result_type='register'):
+            QMessageBox.warning(self, "Error", "Failed to register the new device. Please try again.")
+
+        self.progress.setValue(30)
+
+        download_result, full_exe_path = self.download_to_folder(self.stormcloud_client_url, self.wizard().install_directory, "stormcloud.exe")
+        if not get_result(download_result, result_type='download'):
+            QMessageBox.warning(self, "Error", "Failed to download stormcloud. Please try again.")
+
+        self.progress.setValue(60)
+
+        configure_result = self.configure_yaml_settings(
+            send_logs=1,
+            backup_time=22,
+            keepalive_freq=300,
+            backup_paths=self.wizard().backup_paths,
+            backup_paths_recursive=self.wizard().backup_paths_recursive,
+            secret_key=register_result['secret_key'],
+            agent_id=register_result['agent_id'],
+            api_key=self.wizard().system_info['api_key'],
+            target_folder=self.wizard().install_directory,
+        )
+        if not get_result(configure_result, result_type='configure'):
+            QMessageBox.warning(self, "Error", "Failed to configure settings. Please try again.")
+
+        self.progress.setValue(70)
+
+        persist_result = self.configure_persistence(self.wizard().system_info['operating_system'], full_exe_path)
+        if not get_result(persist_result, result_type='persist'):
+            QMessageBox.warning(self, "Error", "Failed to add stormcloud to startup process. Please try again.")
+
+        self.progress.setValue(100)
+
+    def register_new_device(self):
+        headers = {"Content-Type": "application/json"}
+
+        post_data = self.wizard().system_info
+        post_data['api_key'] = self.wizard().api_key
+        print("register_new_device: %s" % post_data)
+
         try:
-            shortcut_path = os.getenv('APPDATA') + "\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\stormcloud.lnk"
+            response = requests.post(url=self.register_new_device_url, headers=headers, json=post_data)
+            if response.status_code == 200:
+                print("Response: %s" % response.json())
+                return response.json()
+            else:
+                return None
+        except:
+            return None
+
+    def configure_yaml_settings(self, send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive, secret_key, agent_id, api_key, target_folder):
+        backup_time        = int(backup_time)
+        keepalive_freq     = int(keepalive_freq)
+
+        settings_file_path = target_folder + "settings.cfg"
+        os.makedirs(os.path.dirname(settings_file_path), exist_ok=True)
+
+        settings_dict = {
+            'SEND_LOGS': int(send_logs),
+            'BACKUP_TIME': backup_time,
+            'KEEPALIVE_FREQ': keepalive_freq,
+            'SECRET_KEY': secret_key,
+            'AGENT_ID': agent_id,
+            # API key my husband is so smart
+            'API_KEY': api_key,
+            'BACKUP_PATHS': backup_paths,
+            'RECURSIVE_BACKUP_PATHS': backup_paths_recursive if backup_paths_recursive else []
+        }
+
+        with open(settings_file_path, "w") as settings_file:
+            yaml.dump(settings_dict, settings_file)
+
+        return True
+
+    def download_to_folder(self, url, folder, file_name):
+        try:
+            response = requests.get(url)
+        except SSLError as e:
+            
+            logging.log(logging.ERROR, "Caught SSL Error when trying to download from %s: %s" % (url,e))
+        except Exception as e:
+            logging.log(logging.ERROR, "Caught exception when trying to download from %s: %s" % (url,e))
+            
+        if response:
+            try:
+                full_path = folder + file_name
+                os.makedirs(os.path.dirname(full_path), exist_ok=True)
+                
+                with open(full_path,'wb') as f:
+                    for chunk in response.iter_content():
+                        f.write(chunk)
+                
+                # Pass case
+                return (1, full_path)
+            except Exception as e:
+                logging.log(logging.ERROR, "Caught exception when trying to write stormcloud to file: %s. Error: %s" % (full_path,e))
+
+        # Fail case
+        return (0, None)
+
+    def configure_persistence(self, os_info, sc_client_installed_path):
+        # TODO: need exception handling for if there is already a link there, this will break
+        # Ideally need to check for artifacts to determine if its already installed
+        sc_client_installed_path_obj = Path(sc_client_installed_path)
+        try:
+            shortcut_path = os.getenv('APPDATA') + "\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\Stormcloud Backup Engine.lnk"
             target_path   = str(sc_client_installed_path_obj)
             working_dir   = str(sc_client_installed_path_obj.parent)
 
@@ -250,431 +435,39 @@ def configure_persistence(os_info, sc_client_installed_path):
             shortcut.WorkingDirectory = working_dir
             shortcut.save()
 
-            return (0, shortcut_path)
+            return (1, shortcut_path)
         except Exception as e:
             logging.log(logging.ERROR, "Failed to create shortcut: %s" % e)
-            return (1, None)
+            return (0, None)
 
-    elif 'macOS' in os_info:
-        # TODO: ???
-        logging.log(logging.ERROR, "Unsupported operating system encountered when trying to add to startup process.")
-    else:
-        logging.log(logging.ERROR, "Unsupported operating system encountered when trying to add to startup process.")
+class FinishPage(QWizardPage):
+    def __init__(self):
+        super().__init__()
 
-    return (1, None)
+        # TODO: have a checkbox to launch the installer
+        self.checkbox = QCheckBox("Run Stormcloud")
 
-def tls_send_json_data(json_data_as_string, expected_response_data):
-    headers = {'Content-type': 'application/json'}
-    if not validate_json(json_data_as_string):
-        logging.log(logging.INFO, "Invalid JSON data received in tls_send_json_data(); not sending to server.")
-        return (1, None)
+        layout = QVBoxLayout()
+        label = QLabel("Installation completed! Click 'Finish' to close the installer.")
+        layout.addWidget(label)
+        layout.addWidget(self.checkbox)
+        self.setLayout(layout)
 
-    json_data = json.loads(json_data_as_string)
-    
-    if 'hello' in json_data['request_type']:
-        url = API_ENDPOINT_HELLO
-    elif 'register_new_device' in json_data['request_type']:
-        url = API_ENDPOINT_REGISTER_NEW_DEVICE
+    def validatePage(self):
+        if self.checkbox.isChecked():
+            self.run_stormcloud_client()
 
-    try:
-        logging.log(logging.INFO, "Sending %s" %json_data)
-        response = requests.post(url, headers=headers, data=json.dumps(json_data))
-
-    except Exception as e:
-        logging.log(logging.ERROR, "Send data failed: %s" % (e))
-
-    finally:
-        if response:
-            response_json = response.json()
-            logging.log(logging.INFO, "Received data: %s" % response_json)
-
-            if expected_response_data in response_json:
-                return (0, response_json)
-        else:
-            return (1, None)
-
-def validate_json(data):
-    try:
-        json.loads(data)
-    except json.decoder.JSONDecodeError:
-        return False
-    else:
         return True
 
-def initialize_logging():
-    logging.basicConfig(
-        filename='install.log',
-        filemode='a',
-        format='%(asctime)s %(levelname)-8s %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S',
-        level=logging.DEBUG
-    )
-
-def run_stormcloud_client(install_directory, os_info):
-    if 'Windows' in os_info:
-        path_to_exec = install_directory + "\\stormcloud.exe"
+    def run_stormcloud_client(self):
+        path_to_exec = self.wizard().install_directory + "\\stormcloud.exe"
         logging.log(logging.INFO, "start %s" %path_to_exec)
-        subprocess.Popen('start %s' %path_to_exec, cwd=install_directory, shell=True)
-    else:
-        logging.log(logging.WARN, "Did not know how to launch stormcloud for this operating system. (%s)" %os_info)
+        subprocess.Popen('start %s' %path_to_exec, cwd=self.wizard().install_directory, shell=True)
 
-class MainApplication(tk.Frame):
-    # TODO: maybe refactor this to use a tk Frame at some point, but too much work for now.
-    def __init__(self,parent,*args,**kwargs):
-        tk.Frame.__init__(self,parent,*args,**kwargs)
-        self.parent = parent
-        self.backup_paths = []
-        self.recursive_backup_paths = []
-        self.api_key_file_path = ""
-        self.device_name = ""
-        self.install_directory = ""
-        self.stdout_msgs = []
-        self.TERMS_AND_CONDITIONS_URL = "https://www.github.com/runt1me/stormcloud"
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
 
-        self.backup_label_current_row = 1
-        self.backup_paths_master_list = []
+    window = Installer()
+    window.show()
 
-        self.configure_gui()
-
-        # Currently cannot iterate over all widgets without using a tk frame.
-        # If I switch this over to a tk frame I could clean this up by looping over
-        # all widgets and then checking the value of the row
-        self.widgets_below_backup_labels = [
-            self.api_key_label,
-            self.api_key_actual_label,
-            self.api_key_browse_button,
-            self.install_directory_label,
-            self.install_directory_actual_label,
-            self.install_directory_browse_button,
-            self.agree_checkbox,
-            self.link_label,
-            self.submit_button,
-            self.error_label,
-            self.stdout_label
-        ]
-
-    def __str__(self):
-        return "%s" % vars(self)
-
-    def configure_gui(self):
-        self.add_device_name_label_and_entry()
-        self.add_backup_paths_labels()
-        self.add_backup_browse_button()
-        self.add_api_key_labels()
-        self.add_api_key_browse_button()
-        self.add_install_directory_browse_labels()
-        self.add_install_directory_browse_button()
-        self.add_diagnostic_checkbox_and_label()
-        self.add_submit_button()
-        self.add_error_label()
-        self.add_stdout_label()
-
-    def add_device_name_label_and_entry(self):
-        self.device_name_label                   = tk.Label(window,text="Device Nickname",bg="white")
-        self.device_name_label.grid(row=0,column=0,padx=(30,15),pady=(100,20),sticky=tk.W)
-
-        self.device_name_entry                   = tk.Entry(window, width=50)
-        self.device_name_entry.grid(row=0,column=1,padx=(15,15),pady=(100,20),columnspan=3,sticky=tk.E)
-
-    def add_backup_paths_labels(self):
-        self.backup_paths_label                  = tk.Label(window,text="Paths to backup",bg="white")
-        self.backup_paths_label.grid(row=1,column=0,padx=(30,15),pady=(0,5),sticky=tk.NS)
-
-    def add_backup_browse_button(self):
-        # Place backup label and checkboxes at self.backup_label_current_row
-        self.paths_browse_button                 = tk.Button(window,text="Add a Folder",command=self.browse_files)
-        self.paths_browse_button.grid(row=2,column=0,padx=(30,15),pady=(0,10),sticky=tk.NS)
-
-    def add_api_key_labels(self):
-        self.api_key_label                       = tk.Label(window,text="Path to API key file",bg="white")
-        self.api_key_label.grid(row=3,column=0,padx=(30,15),pady=(0,10),sticky=tk.NS)
-
-        self.api_key_actual_label                = tk.Label(window,bg="white")
-        self.api_key_actual_label.grid(row=3,column=1,padx=(15,15),pady=(0,10),sticky=tk.W)
-
-    def add_api_key_browse_button(self):
-        self.api_key_browse_button               = tk.Button(window,text="Select a File",command=self.browse_api_key)
-        self.api_key_browse_button.grid(row=4,column=0,padx=(30,15),pady=(0,10),sticky=tk.NS)
-
-    def add_install_directory_browse_labels(self):
-        self.install_directory_label                       = tk.Label(window,text="Install directory",bg="white")
-        self.install_directory_label.grid(row=5,column=0,padx=(30,15),pady=(0,10),sticky=tk.NS)
-
-        self.install_directory_actual_label                = tk.Label(window,bg="white")
-        self.install_directory_actual_label.grid(row=5,column=1,padx=(15,15),pady=(0,10),sticky=tk.W)
-        self.install_directory_actual_label.configure(text=self.get_default_install_path())
-
-    def add_install_directory_browse_button(self):
-        self.install_directory_browse_button      = tk.Button(window,text="Select a Directory",command=self.browse_install_directory)
-        self.install_directory_browse_button.grid(row=6,column=0,padx=(30,15),pady=(0,10),sticky=tk.NS)
-
-    def get_default_install_path(self):
-        os_info = platform.platform()
-
-        if 'Windows' in os_info:
-            return os.getenv("HOMEDRIVE") + os.getenv("HOMEPATH") + "\\AppData\\Roaming\\stormcloud"
-        else:
-            # TODO: come up with default paths for other OSes
-            return ""
-
-    def add_diagnostic_checkbox_and_label(self):
-        def callback(url):
-            webbrowser.open_new_tab(url)
-
-        self.agree_checkbox                  = ttk.Checkbutton(window)
-
-        # clear checkbox "half-checked" state and set new state
-        self.agree_checkbox.state(['!alternate'])
-        self.agree_checkbox.state(['!disabled','selected'])
-
-        self.agree_checkbox.grid(row=7,column=0,padx=(30,5),pady=(0,20),sticky=tk.E)
-
-        self.link_label                      = tk.Label(window, text="I agree to the Stormcloud Terms and Conditions.", bg="white", fg="blue", cursor="hand2")
-        self.link_label.bind("<Button-1>", lambda e: callback(self.TERMS_AND_CONDITIONS_URL))
-        self.link_label.grid(row=7,column=1,padx=(0,15),pady=(0,20),columnspan=3,sticky=tk.W)
-
-    def add_submit_button(self):
-        self.submit_button                       = tk.Button(window,text="Install",width=20,command=self.verify_settings_and_begin_install)
-        self.submit_button.place(x = 120, y = 300)
-        self.submit_button.grid(row=8,column=0,padx=(40,0),pady=(0,20),columnspan=2,sticky=tk.NS)
-
-    def add_error_label(self):
-        self.error_label                         = tk.Label(window,text="",bg="white",fg="red")
-        self.error_label.grid(row=9,column=0,padx=(40,0),pady=(0,5),columnspan=5,sticky=tk.NS)
-
-    def add_stdout_label(self):
-        self.stdout_label                        = tk.Label(window,text="",bg="white",fg="green",anchor="w",justify=tk.LEFT)
-        self.stdout_label.grid(row=10,column=0,padx=(40,0),pady=(0,20),columnspan=5,sticky=tk.NS)
-
-    def browse_files(self):
-        filename = tk.filedialog.askdirectory(
-            initialdir = "/",
-            title = "Select a Folder",
-        )
-
-        if filename:
-            self.add_backup_path_one_row(filename)
-
-            if self.backup_label_current_row > 2:
-                for widget in self.widgets_below_backup_labels:
-                    self.move_widget_down_one_row(widget)
-
-    def add_backup_path_one_row(self, filename):
-        actual_label_this_row = tk.Label(window,bg="white")
-        actual_label_this_row.grid(row=self.backup_label_current_row,column=1,padx=(15,15),pady=(0,5),sticky=tk.W)
-        actual_label_this_row.configure(text=filename)
-
-        checkbox_this_row = ttk.Checkbutton(window)
-        checkbox_this_row.state(['!alternate'])
-        checkbox_this_row.state(['!disabled','selected'])
-        checkbox_this_row.grid(row=self.backup_label_current_row,column=2,padx=(15,0),pady=(0,5),sticky=tk.E)
-
-        include_subfolders_label_this_row = tk.Label(window,bg="white")
-        include_subfolders_label_this_row.grid(row=self.backup_label_current_row,column=3,padx=(0,15),pady=(0,5),sticky=tk.W)
-        include_subfolders_label_this_row.configure(text="Include Subfolders")
-
-        self.backup_paths_master_list.append((filename, checkbox_this_row))
-        self.backup_label_current_row += 1
-
-    def move_widget_down_one_row(self, widget):
-        widget.grid(row=widget.grid_info()['row']+1)
-
-    def browse_api_key(self):
-        filename = filedialog.askopenfilename(
-            initialdir = ".",
-            title = "Select your API key file",
-        )
-
-        if filename:
-            self.api_key_file_path = filename
-            self.api_key_actual_label.configure(text="%s" % filename)
-
-    def browse_install_directory(self):
-        filename = filedialog.askdirectory(
-            initialdir = "/",
-            title = "Select directory to install stormcloud files to",
-        )
-
-        if filename:
-            self.install_directory = filename
-            self.install_directory_actual_label.configure(text="%s" % filename)
-
-    def verify_settings_and_begin_install(self):
-        self.device_name       = self.device_name_entry.get()
-        self.install_directory = self.install_directory_actual_label.cget("text")
-
-        for path, checkbox in self.backup_paths_master_list:
-            if checkbox.instate(['selected']):
-                self.recursive_backup_paths.append(path)
-            else:
-                self.backup_paths.append(path)
-
-        # TODO: make backup paths unique (have some self respect Ryan!)
-
-        if self.verify_settings():
-            self.begin_install()
-
-    def verify_settings(self):
-        if not self.device_name:
-            error_text = "You must supply a device name."
-            self.error_label.configure(text="Error: %s" %error_text)
-
-            return False
-
-        if not self.recursive_backup_paths and not self.backup_paths:
-            error_text = "You must have at least one path to backup."
-            self.error_label.configure(text="Error: %s" %error_text)
-
-            return False
-
-        if not self.api_key_file_path:
-            error_text = "You must provide the path to your API key."
-            self.error_label.configure(text="Error: %s" %error_text)
-
-            return False
-
-        if not self.agree_checkbox.instate(['selected']):
-            error_text = "You must agree to the terms and conditions."
-            self.error_label.configure(text="Error: %s" %error_text)
-
-            return False
-
-        if not self.install_directory:
-            error_text = "You must select a valid install directory."
-            self.error_label.configure(text="Error: %s" %error_text)
-
-            return False
-
-        self.error_label.configure(text="Settings are valid, continuing...",fg="black")
-        self.error_label.update()
-        return True
-
-    def begin_install(self):
-        # Set default values here, might make these alterable through "advanced settings" later
-        backup_time = 23
-        keepalive_freq = 300
-
-        self.main(
-            self.device_name,
-            self.agree_checkbox.instate(['selected']),
-            backup_time,
-            keepalive_freq,
-            self.backup_paths,
-            self.recursive_backup_paths,
-            self.api_key_file_path,
-            self.install_directory
-        )
-
-    def update_stdout(self, msg):
-        self.stdout_msgs.append(msg)
-        self.stdout_label.configure(text="\n".join(self.stdout_msgs))
-        self.stdout_label.update()
-
-    def clear_stdout_and_display_error(self, msg):
-        self.stdout_msgs.clear()
-        self.stdout_label.configure(text="")
-
-        self.error_label.configure(text=msg, fg="red")
-        self.error_label.update()
-
-    def log_and_update_stdout(self, msg):
-        logging.log(logging.INFO, msg)
-        self.update_stdout(msg)
-
-        sleep(1)
-
-    def log_and_update_stderr(self, msg):
-        logging.log(logging.ERROR, msg)
-        self.clear_stdout_and_display_error(msg)
-
-        sleep(1)
-
-    def main(self, device_type, send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive, api_key_file_path, target_folder):
-        initialize_logging()
-        self.log_and_update_stdout("Beginning install of Stormcloud v%s" % STORMCLOUD_VERSION)
-
-        # TODO: handle the following exceptions
-        # 1. invalid API key format in file
-        # 2. valid API key format but server rejects it as not in the database
-        # TODO: some kind of "live validation" that API key is legit
-        api_key = read_api_key_file(api_key_file_path)
-
-        # TODO: Return codes
-        # 0 -> success
-        # 1 -> invalid api key presented
-        # 2 -> no response from server
-        ret, _ = conduct_connectivity_test(api_key, SERVER_NAME, SERVER_PORT)
-        if ret != 0:
-            self.log_and_update_stderr("Install failed (unable to conduct connectivity test with server). Return code: %d.\nPlease verify that you are connected to the internet.\nIf problems continue, please contact our customer support team." % ret)
-            return
-        
-        self.log_and_update_stdout("Successfully conducted connectivity test with server.")
-        
-        logging.log(logging.INFO, "Conducting initial device survey...")
-
-        survey_data = conduct_device_initial_survey(api_key,device_type)
-
-        try:
-            survey_data_json = json.loads(survey_data)
-        except Exception as e:
-            logging.log(logging.ERROR, "Unable to parse JSON from device survey.")
-            survey_data_json = None
-
-        logging.log(logging.INFO, "Device survey complete.")
-        self.log_and_update_stdout("Sending device registration request to server...")
-
-        ret, response_data = tls_send_json_data(survey_data, "register_new_device-response")
-        if ret != 0:
-            self.log_and_update_stderr("Install failed (unable to register device with server). Return code: %d" % ret)
-            return
-
-        self.log_and_update_stdout("Device successfully registered.")
-
-        secret_key, agent_id = response_data['secret_key'], response_data['agent_id']
-
-        logging.log(logging.INFO, "Configuring backup process and writing settings file.")
-        ret = configure_settings(
-            send_logs, backup_time,
-            keepalive_freq, backup_paths,
-            backup_paths_recursive,
-            secret_key, agent_id,
-            api_key, target_folder,
-            survey_data_json['operating_system']
-        )
-
-        self.log_and_update_stdout("Downloading stormcloud client...")
-        ret, sc_client_installed_path = download_stormcloud_client(survey_data_json['operating_system'], target_folder)
-        if ret != 0:
-            self.log_and_update_stderr("Failed to download stormcloud for your platform. Return code: %d.\nPlease contact our customer support team for further assistance." %ret)
-        else:
-            self.log_and_update_stdout("Successfully downloaded stormcloud client..")
-            logging.log(logging.INFO, "Downloaded to %s" % sc_client_installed_path)
-
-        self.log_and_update_stdout("Adding stormcloud to startup directory...")
-        ret, persistence_location = configure_persistence(survey_data_json['operating_system'], sc_client_installed_path)
-        if ret != 0:
-            self.log_and_update_stderr("Failed to add stormcloud to startup process. Return code: %d.\nPlease contact our customer support team for further assistance." %ret)
-        else:
-            self.log_and_update_stdout("Successfully added stormcloud to startup process.")
-            logging.log(logging.INFO, "Persistence location: %s" %persistence_location)
-
-        self.log_and_update_stdout("Ready to launch stormcloud!")
-
-        if messagebox.askokcancel("Installation Successful!", "The installation process is finished. Launch Stormcloud?"):
-            run_stormcloud_client(target_folder, survey_data_json['operating_system'])
-
-if __name__ == '__main__':
-    window = tk.Tk()
-    app = MainApplication(window)
-    window.title("Stormcloud Installer")
-    window.geometry("900x800")
-    window.config(background="white")
-
-    # TODO: try to figure out how to center window on screen
-    
-    def on_closing():
-        if messagebox.askokcancel("Quit", "Are you sure you want to exit?"):
-            window.destroy()
-
-    window.protocol("WM_DELETE_WINDOW", on_closing)
-    window.mainloop()
+    sys.exit(app.exec_())
