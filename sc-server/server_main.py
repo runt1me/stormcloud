@@ -6,6 +6,7 @@ import logging_utils
 
 import backup_handlers, keepalive_handlers, restore_handlers
 import generic_handlers
+import new_customer_handlers
 
 from werkzeug.formparser import parse_form_data
 from werkzeug.formparser import default_stream_factory
@@ -14,7 +15,7 @@ from flask import Flask, jsonify
 from flask_cors import CORS
 import flask   # used for flask.request to prevent namespace conflicts with other variables named request
 app = Flask(__name__)
-cors = CORS(app, resources={r"/api/*": {"origins": "*"}})
+cors = CORS(app, resources={r"/api/*": {"origins": "https://apps.darkage.io"}})
 
 logger = logging_utils.initialize_logging()
 
@@ -68,6 +69,17 @@ def validate_request_generic(request, api_key_required=True, agent_id_required=T
         if not db.passes_sanitize(str(request[field])):
             logger.warning("Failed sanitization check: %s" %request[field])
             return False
+
+    return True
+
+def validate_request_admin(request):
+    if 'api_key' not in request.keys():
+        logger.info("Did not find api_key field which was required for request.")
+        return False
+
+    if not db.is_api_key_superuser(request['api_key']):
+        logger.warning("Found non-superuser api_key field on request which required it!")
+        return False
 
     return True
 
@@ -223,6 +235,25 @@ def restore_file():
         # TODO: streaming, but its difficult
         # Probably need to do multipart response or just do octet-stream and ONLY send file
         ret_code, response_data = restore_handlers.handle_restore_file_request(data)
+        return response_data, ret_code, {'Content-Type': 'application/json'}
+    else:
+        return RESPONSE_400_BAD_REQUEST
+
+@app.route('/api/create-customer', methods=['POST'])
+def create_customer():
+    logger.info(flask.request)
+    if flask.request.headers['Content-Type'] != 'application/json':
+        return RESPONSE_400_MUST_BE_JSON
+
+    data = flask.request.get_json()
+    if data:
+        if not validate_request_generic(data, agent_id_required=False):
+            return RESPONSE_401_BAD_REQUEST
+
+        if not validate_request_admin(data):
+            return RESPONSE_401_BAD_REQUEST
+
+        ret_code, response_data = new_customer_handlers.handle_create_customer_request(data)
         return response_data, ret_code, {'Content-Type': 'application/json'}
     else:
         return RESPONSE_400_BAD_REQUEST

@@ -13,9 +13,12 @@ def __logger__():
     return logging_utils.logger
 
 def passes_sanitize(input_string):
-  SANITIZE_LIST = ["'", '"', ";"]
+  # Function for validating input to the database.
+  # 
+  SANITIZE_LIST = ["'", '"', ";", "\\", "--", "*", "%"]
   for expr in SANITIZE_LIST:
     if expr in input_string:
+      __logger__().warning("")
       return False
 
   return True
@@ -43,9 +46,9 @@ def update_callback_for_device(device_id, callback_time, status_code):
     __teardown__(cursor,cnx)
     return ret
 
-def add_or_update_customer(customer_name,username,password,api_key):
+def add_or_update_customer(customer_name,customer_email,password,api_key):
   # IN customer_name varchar(256),
-  # IN username varchar(256),
+  # IN customer_email varchar(256),
   # IN password varchar(256),
   # IN api_key varchar(64)
 
@@ -55,7 +58,7 @@ def add_or_update_customer(customer_name,username,password,api_key):
 
   try:
     cursor.callproc('add_or_update_customer',
-      (customer_name,username,password,api_key)
+      (customer_name,customer_email,password,api_key)
     )
 
     for result in cursor.stored_results():
@@ -152,9 +155,7 @@ def add_file_to_restore_queue(agent_id, file_path):
     file_object_id = -1
     affected = 0
     try:
-        __logger__().info('get_file_object_id(%s,%s)' % (agent_id,file_path))
-        print(type(agent_id))
-        print(type(file_path))
+        __logger__().info("CALL get_file_object_id('%s','%s');" % (agent_id,file_path))
         cursor.callproc('get_file_object_id',
             (agent_id,file_path)
         )
@@ -167,17 +168,15 @@ def add_file_to_restore_queue(agent_id, file_path):
         else:
             raise Exception("Did not get a valid file_object_id for agent_id and file_path combination.")
 
-        print("Made it here, returning")
-        print(type(file_object_id))
         literal_file_object_id = file_object_id[0]
-        __logger__().info('add_file_to_restore_queue(%s)' % file_object_id)
+        __logger__().info("CALL add_file_to_restore_queue('%s');" % file_object_id)
 
         cursor.callproc('add_file_to_restore_queue',
             (literal_file_object_id,)
         )
 
         affected = cursor.rowcount
-        print("Affected: %d" % affected)
+        print("Rows affected: %d" % affected)
         affected = 1
     except Exception as e:
         __logger__().error(traceback.format_exc())
@@ -218,7 +217,7 @@ def get_server_path_for_file(device_id, file_path):
 
   cnx = __connect_to_db__()
   cursor = cnx.cursor(buffered=True)
-  __logger__().info("Calling get_server_path_for_file(%d,%s)" % (device_id,file_path))
+  __logger__().info("CALL get_server_path_for_file('%d','%s');" % (device_id,file_path))
 
   try:
     cursor.callproc('get_server_path_for_file', (device_id, file_path))
@@ -380,6 +379,29 @@ def get_device_by_agent_id(agent_id):
   finally:
     __teardown__(cursor,cnx)
     return ret
+
+def is_api_key_superuser(api_key):
+  ret = []
+
+  cnx = __connect_to_db__()
+  cursor = cnx.cursor(buffered=True)
+
+  try:
+    cursor.callproc('is_api_key_superuser', (api_key,))
+
+    for result in cursor.stored_results():
+        row = result.fetchall()
+        ret = row[0][0]
+
+  except Error as e:
+    __logger__().error(e)
+
+  finally:
+    __teardown__(cursor,cnx)
+    if ret:
+      return True
+    else:
+      return False
 
 def __connect_to_db__():
   mysql_username = os.getenv('MYSQLUSER')

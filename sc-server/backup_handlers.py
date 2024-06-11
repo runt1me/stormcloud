@@ -24,6 +24,10 @@ def handle_register_new_device_request(request):
     if not customer_id:
         return RESPONSE_401_BAD_REQUEST
 
+    print(request)
+    print(request['ip_address'])
+    print(request['device_name'])
+
     device_name      = request['device_name']
     ip_address       = request['ip_address']
     device_type      = request['device_type']

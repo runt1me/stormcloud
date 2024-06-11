@@ -4,6 +4,7 @@ import secrets
 from cryptography.fernet import Fernet
 
 import logging_utils
+import database_utils as db
 
 def __logger__():
     return logging_utils.logger
@@ -18,7 +19,14 @@ def create_key(key_path):
     return key
 
 def generate_api_key(key_path):
-    api_key = secrets.token_urlsafe(16)
+    api_key = ""
+    valid_token = False
+
+    while not valid_token:
+      api_key = secrets.token_urlsafe(16)
+
+      if db.passes_sanitize(api_key):
+        valid_token = True
 
     os.makedirs(os.path.dirname(key_path), exist_ok=True)
     with open(key_path, "wb") as api_key_file:
@@ -27,7 +35,16 @@ def generate_api_key(key_path):
     return api_key
 
 def generate_agent_id():
-    return secrets.token_urlsafe(8) + "-" + secrets.token_urlsafe(8)
+    valid_token = False
+    token = ""
+
+    while not valid_token:
+      token = secrets.token_urlsafe(8) + "-" + secrets.token_urlsafe(8)
+
+      if db.passes_sanitize(token):
+        valid_token = True
+
+    return token
 
 def decrypt_msg(path_to_device_secret_key,raw_msg,decode):
     f = get_fernet(path_to_device_secret_key)
