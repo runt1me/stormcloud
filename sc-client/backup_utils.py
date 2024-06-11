@@ -59,7 +59,7 @@ def process_one_path_recursive(target_path,api_key,agent_id,secret_key,dbconn,ig
             try:
                 process_one_path_recursive(file,api_key,agent_id,secret_key,dbconn,ignore_hash)
             except Exception as e:
-                logging.log(logging.WARN, "Caught (lower-level) exception when trying to process recursive path %s: %s" % (path,e))
+                logging.log(logging.WARN, "Caught (lower-level) exception when trying to process recursive path %s: %s" % (target_path,e))
         else:
             process_file(file,api_key,agent_id,secret_key,dbconn,ignore_hash)
 
