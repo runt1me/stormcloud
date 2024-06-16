@@ -14,6 +14,7 @@ import sslkeylog
 import keepalive_utils
 import backup_utils
 import logging_utils
+import reconfigure_utils
 
 from infi.systray import SysTrayIcon   # pip install infi.systray
 
@@ -42,10 +43,11 @@ def main(settings_file_path,hash_db_file_path,ignore_hash_db):
     systray = SysTrayIcon("stormcloud.ico", "Stormcloud Backup Engine", systray_menu_options)
     systray.start()
 
-    action_loop_and_sleep(settings=settings,dbconn=hash_db_conn,ignore_hash=ignore_hash_db,systray=systray)
+    action_loop_and_sleep(settings=settings,settings_file_path=settings_file_path,dbconn=hash_db_conn,ignore_hash=ignore_hash_db,systray=systray)
 
-def action_loop_and_sleep(settings, dbconn, ignore_hash, systray):
+def action_loop_and_sleep(settings, settings_file_path, dbconn, ignore_hash, systray):
     active_thread = None
+    update_thread = None
 
     while True:
         cur_keepalive_freq = int(settings['KEEPALIVE_FREQ'])
@@ -58,6 +60,10 @@ def action_loop_and_sleep(settings, dbconn, ignore_hash, systray):
         logging.log(logging.INFO,"Stormcloud is running with settings: %s"
             % ([(s, settings[s]) for s in settings.keys() if s != 'SECRET_KEY'])
         )
+
+        if update_thread is None or not update_thread.is_alive():
+            update_thread = threading.Thread(target=reconfigure_utils.fetch_and_update_backup_paths, args=(settings_file_path, settings['API_KEY'], settings['AGENT_ID']))
+            update_thread.start()
 
         if active_thread is None:
             active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id,secret_key)

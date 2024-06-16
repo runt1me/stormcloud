@@ -68,7 +68,7 @@ def stream_upload_file(api_key,agent_id,encrypted_path,unencrypted_path_to_encry
     except Exception as e:
         logging.log(logging.ERROR, "Got exception when trying to post MultipartEncoded file: %s" % e)
     finally:
-        return response.status_code
+        return response.status_code if response else 500
 
 def upload_file(api_key,agent_id,encrypted_path,unencrypted_path_to_encrypted_file,size_of_encrypted_content):
     url = API_ENDPOINT_BACKUP_FILE
@@ -97,7 +97,7 @@ def upload_file(api_key,agent_id,encrypted_path,unencrypted_path_to_encrypted_fi
     except Exception as e:
         logging.log(logging.ERROR, "Got exception when trying to post file: %s" % e)
     finally:
-        return response.status_code
+        return response.status_code if response else 500
 
 def tls_send_json_data(json_data_as_string, expected_response_code, show_json=False):
     response = None
