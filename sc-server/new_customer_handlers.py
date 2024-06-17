@@ -16,13 +16,21 @@ def handle_create_customer_request(request):
     __logger__().info("Server handling create customer request.")
     ret = None
 
-    if 'customer_name' not in request.keys() or 'customer_email' not in request.keys() or 'api_key' not in request.keys():
+    required_fields = [
+      'customer_name',
+      'customer_email',
+      'plan'
+    ]
+
+    for field in required_fields:
+      if field not in request.keys():
         return RESPONSE_401_BAD_REQUEST
 
     else:
         ncu.register_new_customer(
             request['customer_name'],
-            request['customer_email']
+            request['customer_email'],
+            request['plan']
         )
 
         ret = True

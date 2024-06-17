@@ -28,10 +28,6 @@ def generate_api_key(key_path):
       if db.passes_sanitize(api_key):
         valid_token = True
 
-    os.makedirs(os.path.dirname(key_path), exist_ok=True)
-    with open(key_path, "wb") as api_key_file:
-        api_key_file.write(api_key.encode("utf-8"))
-
     return api_key
 
 def generate_agent_id():

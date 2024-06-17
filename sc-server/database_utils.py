@@ -46,11 +46,14 @@ def update_callback_for_device(device_id, callback_time, status_code):
     __teardown__(cursor,cnx)
     return ret
 
-def add_or_update_customer(customer_name,customer_email,password,api_key):
+def add_or_update_customer(customer_name,customer_email,plan,api_key):
   # IN customer_name varchar(256),
   # IN customer_email varchar(256),
-  # IN password varchar(256),
+  # IN plan varchar(64),
   # IN api_key varchar(64)
+
+  print("About to insert into database: plan [%s]" % plan)
+  __logger__().info("About to insert into database: plan [%s]" % plan)
 
   ret = []
   cnx = __connect_to_db__()
@@ -58,7 +61,7 @@ def add_or_update_customer(customer_name,customer_email,password,api_key):
 
   try:
     cursor.callproc('add_or_update_customer',
-      (customer_name,customer_email,password,api_key)
+      (customer_name,customer_email,plan,api_key)
     )
 
     for result in cursor.stored_results():
