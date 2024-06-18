@@ -9,7 +9,7 @@ import yaml
 import threading
 import logging
 
-import sslkeylog
+# import sslkeylog
 
 import keepalive_utils
 import backup_utils
@@ -22,7 +22,7 @@ ACTION_TIMER = 90
 
 def main(settings_file_path,hash_db_file_path,ignore_hash_db):
     # Honor SSLKEYLOGFILE if set by the OS
-    sslkeylog.set_keylog(os.environ.get('SSLKEYLOGFILE'))
+    # sslkeylog.set_keylog(os.environ.get('SSLKEYLOGFILE'))
 
     settings                = read_yaml_settings_file(settings_file_path)
 
