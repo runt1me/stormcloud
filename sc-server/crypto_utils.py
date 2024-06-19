@@ -28,6 +28,9 @@ def generate_api_key(key_path):
       if db.passes_sanitize(api_key):
         valid_token = True
 
+      # Replace "-" with "_" to better accommodate some frontend display-logic
+      api_key = api_key.replace("-", "_")
+
     return api_key
 
 def generate_agent_id():
@@ -35,10 +38,13 @@ def generate_agent_id():
     token = ""
 
     while not valid_token:
-      token = secrets.token_urlsafe(8) + "-" + secrets.token_urlsafe(8)
+      token = secrets.token_urlsafe(8) + "_" + secrets.token_urlsafe(8)
 
       if db.passes_sanitize(token):
         valid_token = True
+
+      # Replace "-" with "_" to better accommodate some frontend display-logic
+      token = token.replace("-", "_")
 
     return token
 
