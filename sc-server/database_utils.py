@@ -52,9 +52,6 @@ def add_or_update_customer(customer_name,customer_email,plan,api_key):
   # IN plan varchar(64),
   # IN api_key varchar(64)
 
-  print("About to insert into database: plan [%s]" % plan)
-  __logger__().info("About to insert into database: plan [%s]" % plan)
-
   ret = []
   cnx = __connect_to_db__()
   cursor = cnx.cursor(buffered=True)
