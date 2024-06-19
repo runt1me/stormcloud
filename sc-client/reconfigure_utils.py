@@ -9,6 +9,8 @@ import pdb
 import crypto_utils
 import network_utils as scnet
 
+from time import sleep
+
 def fetch_and_update_backup_paths(settings_file_path, api_key, agent_id, interval=30):
     while True:
         url = "https://apps.darkage.io/darkage/api/fetch_backup_folders.cfm"
@@ -26,7 +28,7 @@ def fetch_and_update_backup_paths(settings_file_path, api_key, agent_id, interva
                     columns_list = result['DATA']['COLUMNS']
                     data = result['DATA']['DATA']
 
-                    pdb.set_trace()
+                    # pdb.set_trace()
                     backup_paths = [row[columns_list.index("FOLDER_PATH")] for row in data if row[columns_list.index("IS_RECURSIVE")] == 0]
                     recursive_backup_paths = [row[columns_list.index("FOLDER_PATH")] for row in data if row[columns_list.index("IS_RECURSIVE")] == 1]
 
