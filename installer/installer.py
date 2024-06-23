@@ -332,6 +332,16 @@ class InstallPage(QWizardPage):
 
         self.progress.setValue(30)
 
+        folders = [
+            {"path": folder, "recursive": 0} for folder in self.wizard().backup_paths
+        ] + [
+            {"path": folder, "recursive": 1} for folder in self.wizard().backup_paths_recursive
+        ]
+
+        if not self.register_initial_backup_folders(self.wizard().api_key, register_result['agent_id'], folders):
+            QMessageBox.warning(self, "Error", "Failed to register backup folders. Please try again.")
+            return
+
         download_result, full_exe_path = self.download_to_folder(self.stormcloud_client_url, self.wizard().install_directory, "stormcloud.exe")
         if not get_result(download_result, result_type='download'):
             QMessageBox.warning(self, "Error", "Failed to download stormcloud. Please try again.")
@@ -392,7 +402,7 @@ class InstallPage(QWizardPage):
             'AGENT_ID': agent_id,
             # API key my husband is so smart
             'API_KEY': api_key,
-            'BACKUP_PATHS': backup_paths,
+            'BACKUP_PATHS': backup_paths if backup_paths else [],
             'RECURSIVE_BACKUP_PATHS': backup_paths_recursive if backup_paths_recursive else []
         }
 
@@ -446,6 +456,32 @@ class InstallPage(QWizardPage):
         except Exception as e:
             logging.log(logging.ERROR, "Failed to create shortcut: %s" % e)
             return (0, None)
+
+    def register_initial_backup_folders(self, api_key, agent_id, folders):
+        url = "https://apps.darkage.io/darkage/api/register_backup_folders.cfm"
+        headers = {"Content-Type": "application/json"}
+        data = {
+            "api_key": api_key,
+            "agent_id": agent_id,
+            "folders": folders
+        }
+
+        try:
+            response = requests.post(url, headers=headers, json=data)
+            if response.status_code == 200:
+                result = response.json()
+                if result.get('SUCCESS'):
+                    print("Folders registered successfully.")
+                    return True
+                else:
+                    print(f"Error: {result.get('MESSAGE')}")
+                    return False
+            else:
+                print(f"Failed to register folders. Status code: {response.status_code}")
+                return False
+        except Exception as e:
+            print(f"Exception occurred: {e}")
+            return False
 
 class FinishPage(QWizardPage):
     def __init__(self):
