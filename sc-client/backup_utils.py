@@ -1,5 +1,8 @@
 from datetime import datetime
 
+import concurrent.futures
+import os
+
 import pathlib
 import hashlib
 
@@ -10,6 +13,10 @@ import traceback
 
 BACKUP_STATUS_NO_CHANGE = 0
 BACKUP_STATUS_CHANGE    = 1
+
+MAX_WORKERS = 4
+
+CHUNK_SIZE = 1024 * 1024  # 1 MB chunks
 
 def perform_backup(paths,paths_recursive,api_key,agent_id,secret_key,dbconn,ignore_hash,systray):
     logging.log(logging.INFO,"Beginning backup!")
@@ -40,28 +47,19 @@ def process_paths_nonrecursive(paths,api_key,agent_id,secret_key,dbconn,ignore_h
             logging.log(logging.WARN, "%s" % traceback.format_exc())
             logging.log(logging.WARN, "Caught exception when trying to process path %s: %s" % (path,e))
 
-def process_paths_recursive(paths,api_key,agent_id,secret_key,dbconn,ignore_hash):
-    if not(paths):
+def process_paths_recursive(paths, api_key, agent_id, secret_key, dbconn, ignore_hash):
+    if not paths:
         return
-        
-    for path in paths:
-        try:
-            logging.log(logging.INFO, "==   %s (-R)  ==" % path)
-            path_obj = pathlib.Path(path)
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        for path in paths:
+            executor.submit(process_one_path_recursive, path, api_key, agent_id, secret_key, dbconn, ignore_hash)
 
-            process_one_path_recursive(path_obj,api_key,agent_id,secret_key,dbconn,ignore_hash)
-        except Exception as e:
-            logging.log(logging.WARN, "Caught (higher-level) exception when trying to process recursive path %s: %s" % (path,e))
-
-def process_one_path_recursive(target_path,api_key,agent_id,secret_key,dbconn,ignore_hash):
-    for file in target_path.iterdir():
-        if file.is_dir():
-            try:
-                process_one_path_recursive(file,api_key,agent_id,secret_key,dbconn,ignore_hash)
-            except Exception as e:
-                logging.log(logging.WARN, "Caught (lower-level) exception when trying to process recursive path %s: %s" % (target_path,e))
-        else:
-            process_file(file,api_key,agent_id,secret_key,dbconn,ignore_hash)
+def process_one_path_recursive(target_path, api_key, agent_id, secret_key, dbconn, ignore_hash):
+    for root, _, files in os.walk(target_path):
+        for file in files:
+            file_path = os.path.join(root, file)
+            process_file(file_path, api_key, agent_id, secret_key, dbconn, ignore_hash)
 
 def process_file(file_path_obj,api_key,agent_id,secret_key,dbconn,ignore_hash):
     if not ignore_hash:
@@ -139,11 +137,13 @@ def is_file_in_db(file_path, cursor):
     return cursor.fetchall()
 
 def get_md5_hash(path_to_file):
+    file_hash = hashlib.md5()
     with open(path_to_file, "rb") as f:
-        file_hash = hashlib.md5()
-        while chunk := f.read(8192):
+        while True:
+            chunk = f.read(CHUNK_SIZE)
+            if not chunk:
+                break
             file_hash.update(chunk)
-
     return file_hash.hexdigest()
 
 def verify_file_integrity(file_path_obj):
