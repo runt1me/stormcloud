@@ -2,6 +2,8 @@ import os
 
 from cryptography.fernet import Fernet   # pip install cryptography
 
+CHUNK_SIZE = 1024 * 1024  # 1 MB chunks
+
 def encrypt_content(content,secret_key):
     # Should not be used for especially large content.
     # Reads entire message into memory to encrypt.
@@ -12,14 +14,15 @@ def encrypt_content(content,secret_key):
 
     return encrypted, len(encrypted)
 
-def encrypt_file(file_path,secret_key):
-    # Read in chunks to limit memory footprint.
+def encrypt_file(file_path, secret_key):
     f = Fernet(secret_key)
-
-    output_path_temp = "%s.tmp" % file_path
-
+    output_path_temp = f"{file_path}.tmp"
+    
     with open(file_path, "rb") as src_file, open(output_path_temp, "wb") as dst_file:
-        for chunk in iter(lambda: src_file.read(4096), b""):
+        while True:
+            chunk = src_file.read(CHUNK_SIZE)
+            if not chunk:
+                break
             encrypted_chunk = f.encrypt(chunk)
             dst_file.write(encrypted_chunk)
 
@@ -27,17 +30,17 @@ def encrypt_file(file_path,secret_key):
 
 def decrypt_in_place(file_path, secret_key):
     f = Fernet(secret_key)
-    outfile = file_path + ".tmp"
+    outfile = f"{file_path}.tmp"
     file_size = 0
 
-    with open(file_path, 'rb') as encrypted_file:
-        encrypted_data = encrypted_file.read()
-
-    decrypted_data = f.decrypt(encrypted_data)
-
-    with open(outfile, 'wb') as decrypted_file:
-        decrypted_file.write(decrypted_data)
-        file_size = len(decrypted_data)
+    with open(file_path, 'rb') as encrypted_file, open(outfile, 'wb') as decrypted_file:
+        while True:
+            chunk = encrypted_file.read(CHUNK_SIZE)
+            if not chunk:
+                break
+            decrypted_chunk = f.decrypt(chunk)
+            decrypted_file.write(decrypted_chunk)
+            file_size += len(decrypted_chunk)
 
     os.replace(outfile, file_path)
     return True, file_size
