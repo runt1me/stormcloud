@@ -9,8 +9,27 @@ import traceback
 
 import logging_utils
 
+from db_connection_pool import db_pool
+
 def __logger__():
     return logging_utils.logger
+
+def execute_query(query, params=None, many=False):
+    cnx = db_pool.get_connection()
+    cursor = cnx.cursor(buffered=True)
+    try:
+        if many:
+            cursor.executemany(query, params)
+        else:
+            cursor.execute(query, params)
+        cnx.commit()
+        return cursor.fetchall()
+    except Exception as e:
+        __logger__().error(f"Database error: {e}")
+        cnx.rollback()
+    finally:
+        cursor.close()
+        cnx.close()
 
 def passes_sanitize(input_string):
   # Function for validating input to the database.
@@ -24,54 +43,12 @@ def passes_sanitize(input_string):
   return True
 
 def update_callback_for_device(device_id, callback_time, status_code):
-  # IN DID INT, IN callback_time varchar(512), IN device_status INT
-  ret = []
-  cnx = __connect_to_db__()
-  cursor = cnx.cursor(buffered=True)
+    query = "CALL update_callback_for_device(%s, %s, %s)"
+    return execute_query(query, (device_id, callback_time, status_code))
 
-  try:
-    cursor.callproc('update_callback_for_device',
-      (device_id, callback_time, status_code)
-    )
-
-    for result in cursor.stored_results():
-      row = result.fetchall()
-      ret.append(row)
-
-  except Error as e:
-    __logger__().error(e)
-
-  finally:
-    cnx.commit()
-    __teardown__(cursor,cnx)
-    return ret
-
-def add_or_update_customer(customer_name,customer_email,plan,api_key):
-  # IN customer_name varchar(256),
-  # IN customer_email varchar(256),
-  # IN plan varchar(64),
-  # IN api_key varchar(64)
-
-  ret = []
-  cnx = __connect_to_db__()
-  cursor = cnx.cursor(buffered=True)
-
-  try:
-    cursor.callproc('add_or_update_customer',
-      (customer_name,customer_email,plan,api_key)
-    )
-
-    for result in cursor.stored_results():
-      row = result.fetchall()
-      ret.append(row)
-
-  except Error as e:
-    __logger__().error(e)
-
-  finally:
-    cnx.commit()
-    __teardown__(cursor,cnx)
-    return ret
+def add_or_update_customer(customer_name, username, password, api_key):
+    query = "CALL add_or_update_customer(%s, %s, %s, %s)"
+    return execute_query(query, (customer_name, username, password, api_key))
 
 def add_or_update_file_for_device(device_id, file_name, file_path, client_full_name_and_path, client_full_name_and_path_as_posix, client_directory_as_posix, file_size, file_type, stormcloud_full_name_and_path):
   # IN DID INT,
@@ -338,27 +315,22 @@ def get_next_customer_id():
         return ret
 
 def get_customer_id_by_api_key(api_key):
-  ret = []
+    ret = []
+    cnx = __connect_to_db__()
+    cursor = cnx.cursor(buffered=True)
 
-  cnx = __connect_to_db__()
-  cursor = cnx.cursor(buffered=True)
-
-  customer_id = -1
-  try:
-    cursor.callproc('get_customer_id_by_api_key', (api_key,))
-
-    for result in cursor.stored_results():
-        row = result.fetchall()
-        customer_id = row[0][0]
-
-        ret = customer_id
-
-  except Error as e:
-    __logger__().error(e)
-
-  finally:
-    __teardown__(cursor,cnx)
-    return ret
+    customer_id = -1
+    try:
+        cursor.callproc('get_customer_id_by_api_key', (api_key,))
+        for result in cursor.stored_results():
+            row = result.fetchall()
+            customer_id = row[0][0]
+            ret = customer_id
+    except Error as e:
+        __logger__().error(e)
+    finally:
+        __teardown__(cursor, cnx)
+        return ret
 
 def get_device_by_agent_id(agent_id):
   ret = []
