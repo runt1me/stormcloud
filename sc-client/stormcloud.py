@@ -50,6 +50,9 @@ def action_loop_and_sleep(settings, settings_file_path, dbconn, ignore_hash, sys
     update_thread = None
 
     while True:
+        # Ingest settings file again in case settings have changed via reconfigure_utils thread
+        settings = read_yaml_settings_file(settings_file_path)
+
         cur_keepalive_freq = int(settings['KEEPALIVE_FREQ'])
         backup_paths           = settings['BACKUP_PATHS']
         recursive_backup_paths = settings['RECURSIVE_BACKUP_PATHS']
