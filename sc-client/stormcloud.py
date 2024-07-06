@@ -1,3 +1,4 @@
+import time
 from time import sleep
 from datetime import datetime
 import argparse
@@ -50,6 +51,9 @@ def action_loop_and_sleep(settings, settings_file_path, dbconn, ignore_hash, sys
     update_thread = None
 
     while True:
+        # Ingest settings file again in case settings have changed via reconfigure_utils thread
+        settings = read_yaml_settings_file(settings_file_path)
+
         cur_keepalive_freq = int(settings['KEEPALIVE_FREQ'])
         backup_paths           = settings['BACKUP_PATHS']
         recursive_backup_paths = settings['RECURSIVE_BACKUP_PATHS']
@@ -73,7 +77,9 @@ def action_loop_and_sleep(settings, settings_file_path, dbconn, ignore_hash, sys
             else:
                 active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id,secret_key)
 
+        backup_start_time = time.time()
         backup_utils.perform_backup(backup_paths,recursive_backup_paths,api_key,agent_id,secret_key,dbconn,ignore_hash,systray)
+        logging.log(logging.INFO, "Backup took {} seconds.".format(time.time() - backup_start_time))
 
         sleep(ACTION_TIMER)
 
