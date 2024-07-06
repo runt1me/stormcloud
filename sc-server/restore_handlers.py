@@ -75,6 +75,8 @@ def handle_restore_file_request(request):
         # if this assumption breaks and we need to read in rb mode, then might be able to base64 encode/decode streams
         # encoded_content = base64.b64encode(file_content).decode('utf-8')
         file_content = open(path_on_server, 'r').read()
+        __logger__().info("Length of file: %d" % len(file_content))
+
         response_data = {
             'restore_file-response': 'File incoming',
             'file_content': file_content

@@ -1,6 +1,8 @@
 import os
 
 import secrets
+import string
+import random
 from cryptography.fernet import Fernet
 
 import logging_utils
@@ -45,6 +47,20 @@ def generate_agent_id():
 
       # Replace "-" with "_" to better accommodate some frontend display-logic
       token = token.replace("-", "_")
+
+    return token
+
+def generate_customer_guid():
+    valid_token = False
+    token = ""
+
+    characters = string.ascii_letters + string.digits
+
+    while not valid_token:
+      token = ''.join(random.choice(characters) for _ in range(32))
+
+      if db.passes_sanitize(token):
+        valid_token = True
 
     return token
 

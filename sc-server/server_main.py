@@ -258,5 +258,7 @@ def create_customer():
     else:
         return RESPONSE_400_BAD_REQUEST
 
+
+
 if __name__ == "__main__":
     main()

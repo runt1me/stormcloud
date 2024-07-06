@@ -46,9 +46,10 @@ def update_callback_for_device(device_id, callback_time, status_code):
     __teardown__(cursor,cnx)
     return ret
 
-def add_or_update_customer(customer_name,customer_email,plan,api_key):
+def add_or_update_customer(customer_name,customer_email,customer_guid,plan,api_key):
   # IN customer_name varchar(256),
   # IN customer_email varchar(256),
+  # IN customer_guid varchar(64),
   # IN plan varchar(64),
   # IN api_key varchar(64)
 
@@ -58,7 +59,7 @@ def add_or_update_customer(customer_name,customer_email,plan,api_key):
 
   try:
     cursor.callproc('add_or_update_customer',
-      (customer_name,customer_email,plan,api_key)
+      (customer_name,customer_email,customer_guid,plan,api_key)
     )
 
     for result in cursor.stored_results():
@@ -400,6 +401,62 @@ def is_api_key_superuser(api_key):
     __teardown__(cursor,cnx)
     if ret:
       return True
+    else:
+      return False
+
+def add_daily_disk_usage(customer_id, disk_usage_in_gb):
+  """
+    Adds an entry into disk usage table for the given customer
+  """
+  success = False
+
+  cnx = __connect_to_db__()
+  cursor = cnx.cursor(buffered=True)
+
+  disk_usage_in_gb = float(disk_usage_in_gb)
+
+  # Normalize to 2 decimal places
+  disk_usage_in_gb = round(disk_usage_in_gb, 2)
+
+  try:
+    cursor.callproc('add_daily_disk_usage', (customer_id,disk_usage_in_gb))
+    success = True
+
+  except Error as e:
+    __logger__().error(e)
+    success = False
+
+  finally:
+    cnx.commit()
+    __teardown__(cursor,cnx)
+
+    return success
+
+def get_monthly_average_disk_usage(customer_id):
+  """
+    Gets average disk usage for customer_id for current month
+  """
+  ret = []
+
+  cnx = __connect_to_db__()
+  cursor = cnx.cursor(buffered=True)
+
+  try:
+    cursor.callproc('calculate_monthly_average_disk_usage', (customer_id,))
+
+    for result in cursor.stored_results():
+        row = result.fetchall()
+        print(row)
+
+        ret = row[0][0]
+
+  except Error as e:
+    __logger__().error(e)
+
+  finally:
+    __teardown__(cursor,cnx)
+    if ret:
+      return ret
     else:
       return False
 
