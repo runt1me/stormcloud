@@ -17,8 +17,6 @@ def fetch_and_update_backup_paths(settings_file_path, api_key, agent_id, interva
         headers = {"Content-Type": "application/json"}
         data = {"api_key": api_key, "agent_id": agent_id}
 
-        print("Trying to fetch updates to backup paths.")
-
         try:
             response = requests.post(url, headers=headers, json=data)
             if response.status_code == 200:
@@ -39,7 +37,6 @@ def fetch_and_update_backup_paths(settings_file_path, api_key, agent_id, interva
                     with open(settings_file_path, 'w') as settings_file:
                         yaml.dump(settings, settings_file)
 
-                    print("Backup paths updated successfully.")
                 else:
                     print(f"Error: {result.get('message')}")
             else:
