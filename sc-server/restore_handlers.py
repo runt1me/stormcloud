@@ -48,9 +48,6 @@ def handle_restore_file_request(request):
         return RESPONSE_401_BAD_REQUEST
 
     device_id,_,_,_,_,_,_,_,_,_ = results
-    #path_on_device, _ = crypto_utils.decrypt_msg(path_to_device_secret_key,request['file_path'].encode("UTF-8"),decode=True)
-    print(request['file_path'])
-    print(type(request['file_path']))
     path_on_device = base64.b64decode(request['file_path']).decode("utf-8")
 
     if not path_on_device:
