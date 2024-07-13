@@ -1,6 +1,8 @@
 import json
 import os
 
+import base64
+
 import database_utils as db
 import logging_utils, crypto_utils
 
@@ -45,8 +47,11 @@ def handle_restore_file_request(request):
     if not results:
         return RESPONSE_401_BAD_REQUEST
 
-    device_id,_,_,_,_,_,_,_,path_to_device_secret_key,_ = results
-    path_on_device, _ = crypto_utils.decrypt_msg(path_to_device_secret_key,request['file_path'].encode("UTF-8"),decode=True)
+    device_id,_,_,_,_,_,_,_,_,_ = results
+    #path_on_device, _ = crypto_utils.decrypt_msg(path_to_device_secret_key,request['file_path'].encode("UTF-8"),decode=True)
+    print(request['file_path'])
+    print(type(request['file_path']))
+    path_on_device = base64.b64decode(request['file_path']).decode("utf-8")
 
     if not path_on_device:
         return RESPONSE_401_BAD_REQUEST
@@ -70,16 +75,14 @@ def handle_restore_file_request(request):
     else:
         __logger__().info("Reading file into memory for response")
 
-        # file_content should always be a fernet-encoded blob which is base64 encoded and URL-safe
-        # should not be a need to read in rb mode
-        # if this assumption breaks and we need to read in rb mode, then might be able to base64 encode/decode streams
-        # encoded_content = base64.b64encode(file_content).decode('utf-8')
-        file_content = open(path_on_server, 'r').read()
+        file_content = open(path_on_server, 'rb').read()
+        file_content_b64 = base64.b64encode(file_content).decode('utf-8')
+
         __logger__().info("Length of file: %d" % len(file_content))
 
         response_data = {
             'restore_file-response': 'File incoming',
-            'file_content': file_content
+            'file_content': file_content_b64
         }
 
         _ = db.mark_file_as_restored(

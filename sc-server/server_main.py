@@ -67,7 +67,7 @@ def validate_request_generic(request, api_key_required=True, agent_id_required=T
 
     for field in request.keys():
         if not db.passes_sanitize(str(request[field])):
-            logger.warning("Failed sanitization check: %s" %request[field])
+            logger.warning("Failed sanitization check (field name: '%s'): %s" %(field,request[field]))
             return False
 
     return True
