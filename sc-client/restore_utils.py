@@ -1,16 +1,17 @@
 import os
 import json
 import logging
+import base64
 
 import crypto_utils
 import network_utils as scnet
 
 def restore_file(file_path, api_key, agent_id, secret_key):
-    encrypted_path, _ = crypto_utils.encrypt_content(file_path,secret_key)
+    path_for_request = base64.b64encode(str(file_path).encode("utf-8")).decode('utf-8')
 
     restore_file_request_data = json.dumps({
         'request_type': 'restore_file',
-        'file_path': encrypted_path.decode("utf-8"),
+        'file_path': path_for_request,
         'api_key': api_key,
         'agent_id': agent_id
     })
@@ -23,19 +24,12 @@ def restore_file(file_path, api_key, agent_id, secret_key):
 
     if response_data:
         if 'file_content' in response_data:
-            file_content = response_data['file_content'].encode("utf-8")
-
+            file_content = base64.b64decode(response_data['file_content'])
             write_result   = write_file_to_disk(file_content, file_path)
 
             if write_result:
-                decrypt_result, file_size = crypto_utils.decrypt_in_place(file_path, secret_key)
+                return True
 
-                if decrypt_result:
-                    return True
-
-                else:
-                    logging.log(logging.WARNING, "Failed to decrypt file in place.")
-                    return False
             else:
                 logging.log(logging.WARNING, "Failed to write response file to disk.")
                 return False
@@ -47,7 +41,7 @@ def restore_file(file_path, api_key, agent_id, secret_key):
         return False
 
 def write_file_to_disk(file_content, file_path):
-    with open(file_path, 'wb') as outfile_encrypted:
-        outfile_encrypted.write(file_content)
+    with open(file_path, 'wb') as outfile:
+        outfile.write(file_content)
 
     return True
