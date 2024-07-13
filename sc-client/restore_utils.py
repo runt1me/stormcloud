@@ -41,6 +41,8 @@ def restore_file(file_path, api_key, agent_id, secret_key):
         return False
 
 def write_file_to_disk(file_content, file_path):
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    
     with open(file_path, 'wb') as outfile:
         outfile.write(file_content)
 

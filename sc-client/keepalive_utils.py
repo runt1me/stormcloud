@@ -5,6 +5,8 @@ import logging
 import network_utils as scnet
 import restore_utils
 
+from win10toast import ToastNotifier
+
 def execute_ping_loop(interval,api_key,agent_id,secret_key):
     while True:
         logging.log(logging.INFO,"Sending keepalive to server")
@@ -29,6 +31,17 @@ def execute_ping_loop(interval,api_key,agent_id,secret_key):
                             logging.log(logging.INFO, "Successfully restored file! Wrote to: %s" % file_name)
                         else:
                             logging.log(logging.WARNING, "Failed to restore file: Attempted: %s" % file_name)
+                    
+                    try:
+                        toaster = ToastNotifier()
+                        toaster.show_toast("Stormcloud restore complete",
+                            "Finished restoring %d files!" % len(restore_queue),
+                            duration=10,
+                            icon_path=""
+                        )
+                    except:
+                        logging.log(logging.INFO, "Failed to display toast notification to user upon successful restore.")
+
             else:
                 logging.log(logging.WARNING, "Got keepalive response from server that appeared to be malformed.")
 
