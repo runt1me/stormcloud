@@ -4,6 +4,7 @@ from datetime import datetime
 import database_utils as db
 import logging_utils, crypto_utils, backup_utils
 
+import base64
 import pathlib
 from pathlib import Path
 
@@ -76,7 +77,9 @@ def handle_backup_file_request(request, file):
 
     device_id,_,_,_,_,_,_,_,path_to_device_secret_key,_ = results
 
-    path_on_device, _ = crypto_utils.decrypt_msg(path_to_device_secret_key,request['file_path'].encode("UTF-8"),decode=True)
+    #path_on_device, _ = crypto_utils.decrypt_msg(path_to_device_secret_key,request['file_path'].encode("UTF-8"),decode=True)
+    path_on_device = base64.b64decode(request['file_path']).decode("utf-8")
+    print("Path on device decoded: %s" % path_on_device)
 
     if not path_on_device:
         return RESPONSE_401_BAD_REQUEST
