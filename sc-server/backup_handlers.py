@@ -75,11 +75,9 @@ def handle_backup_file_request(request, file):
     if not results:
         return RESPONSE_401_BAD_REQUEST
 
-    device_id,_,_,_,_,_,_,_,path_to_device_secret_key,_ = results
+    device_id,_,_,_,_,_,_,_,_,_ = results
 
-    #path_on_device, _ = crypto_utils.decrypt_msg(path_to_device_secret_key,request['file_path'].encode("UTF-8"),decode=True)
     path_on_device = base64.b64decode(request['file_path']).decode("utf-8")
-    print("Path on device decoded: %s" % path_on_device)
 
     if not path_on_device:
         return RESPONSE_401_BAD_REQUEST
@@ -90,9 +88,6 @@ def handle_backup_file_request(request, file):
 
     # TODO: eventually respond to client more quickly and queue the writes to disk / database calls until afterwards
     __logger__().info("Done writing file to %s" % path_on_server)
-
-    # Not decrypting at this time due to issues with fernet and file size / memory constraints
-    # result, file_size = crypto_utils.decrypt_in_place(path_to_device_secret_key,path_on_server,decode=False)
 
     # TODO: clean this up and put as a helper function in backup_utils
     if "\\" in path_on_device:
