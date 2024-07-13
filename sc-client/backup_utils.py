@@ -73,22 +73,13 @@ def process_file(file_path_obj,api_key,agent_id,secret_key,dbconn,ignore_hash):
         logging.log(logging.INFO,"no change to file, continuing")
 
     elif status == BACKUP_STATUS_CHANGE:
-        if not verify_file_integrity(file_path_obj):
-            logging.log(logging.WARNING,"File integrity check failed for file %s." %file_path_obj)
+        logging.log(logging.INFO,"Backing up file: %s" %file_path_obj.name)
+
+        ret = network_utils.ship_file_to_server(api_key,agent_id,secret_key,file_path_obj.resolve())
+        if ret == 200:
+            update_hash_db(file_path_obj, dbconn)
         else:
-            logging.log(logging.INFO,"Backing up file: %s" %file_path_obj.name)
-
-            ret = network_utils.ship_file_to_server(api_key,agent_id,secret_key,file_path_obj.resolve())
-            if ret == 200:
-                update_hash_db(file_path_obj, dbconn)
-            else:
-                logging.log(logging.WARNING, "Did not receive success code from server when trying to backup file, so not updating hash db.")
-
-def dump_file_info(path,size,encrypted_size):
-    logging.log(logging.INFO,"==== SENDING : ====")
-    logging.log(logging.INFO,"\tPATH: %s" %path)
-    logging.log(logging.INFO,"\tSIZE: %d" %size)
-    logging.log(logging.INFO,"\tENCRYPTED SIZE: %d" %encrypted_size)
+            logging.log(logging.WARNING, "Did not receive success code from server when trying to backup file, so not updating hash db.")
 
 def check_hash_db(file_path_obj,conn):
     cursor = conn.cursor()
@@ -145,7 +136,3 @@ def get_md5_hash(path_to_file):
             file_hash.update(chunk)
 
     return file_hash.hexdigest()
-
-def verify_file_integrity(file_path_obj):
-    #TODO: make sure there is no ransomware in the file, anything wrong etc.
-    return 1
