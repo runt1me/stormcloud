@@ -79,7 +79,7 @@ def validate_request_generic(request, api_key_required=True, agent_id_required=T
             logger.info("Did not find api_key field which was required for request.")
             return False, RESPONSE_401_BAD_REQUEST
 
-        result = db.get_api_key_status(str(request.keys["api_key"]))
+        result = db.get_api_key_status(str(request["api_key"]))
         if result == "API_KEY_DOES_NOT_EXIST":
             # API key doesn't exist here, no need to give more information back to the client than necessary
             logger.info("Request was made with a non-existent API key.")
