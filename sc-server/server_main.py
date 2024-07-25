@@ -185,7 +185,7 @@ def backup_file():
         return RESPONSE_400_BAD_REQUEST
 
     if data:
-        result, response = validate_request_generic(data):
+        result, response = validate_request_generic(data)
         if not result:
             return response
 
