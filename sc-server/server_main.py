@@ -23,6 +23,8 @@ STRING_400_BAD_REQUEST = "Bad request."
 STRING_400_MUST_BE_JSON = "Request must be JSON."
 STRING_400_MUST_BE_MULTIPART = "Request must be multipart/form-data."
 STRING_401_BAD_REQUEST = "Unable to authorize request."
+STRING_401_INACTIVE_API_KEY = "API key is not active."
+STRING_401_UNSAFE_CHARACTERS = "Request contained illegal characters."
 
 # Doing responses this way, we don't get a few of the benefits that jsonify() provides,
 # but this should probably suffice for the simple error cases.
@@ -50,25 +52,52 @@ RESPONSE_401_BAD_REQUEST = (
     {'Content-Type': 'application/json'}
 )
 
+RESPONSE_401_INACTIVE_API_KEY = (
+    json.dumps({'error': STRING_401_INACTIVE_API_KEY}),
+    401,
+    {'Content-Type': 'application/json'}
+)
+
+RESPONSE_401_UNSAFE_CHARACTERS = (
+    json.dumps({'error': STRING_401_UNSAFE_CHARACTERS}),
+    401,
+    {'Content-Type': 'application/json'}
+)
 
 def main():
     app.run()
 
+# TODO: each call to validate_request_generic needs to adopt the new definition
 def validate_request_generic(request, api_key_required=True, agent_id_required=True):
+    for field in request.keys():
+        if not db.passes_sanitize(str(request[field])):
+            logger.warning("Failed sanitization check (field name: '%s'): %s" %(field,request[field]))
+            return False, RESPONSE_401_UNSAFE_CHARACTERS
+
     if api_key_required:
         if 'api_key' not in request.keys():
             logger.info("Did not find api_key field which was required for request.")
-            return False
+            return False, RESPONSE_401_BAD_REQUEST
+
+        result = db.get_api_key_status(str(request.keys["api_key"]))
+        if result == "API_KEY_DOES_NOT_EXIST":
+            # API key doesn't exist here, no need to give more information back to the client than necessary
+            logger.info("Request was made with a non-existent API key.")
+            return False, RESPONSE_401_BAD_REQUEST
+        elif result == "API_KEY_INACTIVE":
+            # Valid API key, but inactive, subscription probably expired
+            logger.info("Request was made with a valid, but inactive, API key.")
+            return False, RESPONSE_401_INACTIVE_API_KEY
+        elif result == "API_KEY_UNKNOWN":
+            logger.warning("Got unknown response when trying to determine API key status.")
+            return False, RESPONSE_401_BAD_REQUEST
+        elif result == "API_KEY_ACTIVE":
+            pass
 
     if agent_id_required:
         if 'agent_id' not in request.keys():
             logger.info("Did not find agent_id field which was required for request.")
-            return False
-
-    for field in request.keys():
-        if not db.passes_sanitize(str(request[field])):
-            logger.warning("Failed sanitization check (field name: '%s'): %s" %(field,request[field]))
-            return False
+            return False, RESPONSE_401_BAD_REQUEST
 
     return True
 

@@ -404,6 +404,34 @@ def is_api_key_superuser(api_key):
     else:
       return False
 
+def get_api_key_status(api_key):
+  ret = []
+
+  cnx = __connect_to_db__()
+  cursor = cnx.cursor(buffered=True)
+
+  try:
+    cursor.callproc('get_api_key_status', (api_key,))
+
+    for result in cursor.stored_results():
+        row = result.fetchall()
+        ret = row[0][0]
+
+  except Error as e:
+    __logger__().error(e)
+
+  finally:
+    __teardown__(cursor,cnx)
+    if ret == -1:
+      return "API_KEY_DOES_NOT_EXIST"
+    elif ret == 0:
+      return "API_KEY_INACTIVE"
+    elif ret == 1:
+      return "API_KEY_ACTIVE"
+    else:
+      # This shouldn't happen
+      return "API_KEY_UNKNOWN"
+
 def add_daily_disk_usage(customer_id, disk_usage_in_gb):
   """
     Adds an entry into disk usage table for the given customer
