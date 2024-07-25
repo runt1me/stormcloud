@@ -99,7 +99,8 @@ def validate_request_generic(request, api_key_required=True, agent_id_required=T
             logger.info("Did not find agent_id field which was required for request.")
             return False, RESPONSE_401_BAD_REQUEST
 
-    return True
+    # For consistency, return 2 values if it's a valid request, but the second value will be ignored
+    return True, ""
 
 def validate_request_admin(request):
     if 'api_key' not in request.keys():
@@ -120,8 +121,9 @@ def validate_api_key():
 
     data = flask.request.get_json()
     if data:
-        if not validate_request_generic(data, api_key_required=True, agent_id_required=False):
-            return RESPONSE_401_BAD_REQUEST
+        result, response = validate_request_generic(data, api_key_required=True, agent_id_required=False)
+        if not result:
+            return response
             
         ret_code, response_data = generic_handlers.handle_validate_api_key_request(data)
         return response_data, ret_code, {'Content-Type': 'application/json'}
@@ -136,8 +138,9 @@ def hello():
 
     data = flask.request.get_json()
     if data:
-        if not validate_request_generic(data, api_key_required=False, agent_id_required=False):
-            return RESPONSE_401_BAD_REQUEST
+        result, response = validate_request_generic(data, api_key_required=False, agent_id_required=False)
+        if not result:
+            return response
             
         ret_code, response_data = generic_handlers.handle_hello_request(data)
         return response_data, ret_code, {'Content-Type': 'application/json'}
@@ -152,8 +155,9 @@ def register_new_device():
 
     data = flask.request.get_json()
     if data:
-        if not validate_request_generic(data, agent_id_required=False):
-            return RESPONSE_401_BAD_REQUEST
+        result, response = validate_request_generic(data, agent_id_required=False)
+        if not result:
+            return response
 
         ret_code, response_data = backup_handlers.handle_register_new_device_request(data)
         return response_data, ret_code, {'Content-Type': 'application/json'}
@@ -181,8 +185,9 @@ def backup_file():
         return RESPONSE_400_BAD_REQUEST
 
     if data:
-        if not validate_request_generic(data):
-            return RESPONSE_401_BAD_REQUEST
+        result, response = validate_request_generic(data):
+        if not result:
+            return response
 
         ret_code, response_data = backup_handlers.handle_backup_file_request(data, file)
         return response_data, ret_code, {'Content-Type': 'application/json'}
@@ -209,8 +214,9 @@ def backup_file_stream():
         logger.info("Parsed file from stream-based request")
 
     if data:
-        if not validate_request_generic(data):
-            return RESPONSE_401_BAD_REQUEST
+        result, response = validate_request_generic(data)
+        if not result:
+            return response
 
         ret_code, response_data = backup_handlers.handle_backup_file_request(data, file.stream)
         return response_data, ret_code, {'Content-Type': 'application/json'}
@@ -225,8 +231,9 @@ def keepalive():
 
     data = flask.request.get_json()
     if data:
-        if not validate_request_generic(data):
-            return RESPONSE_401_BAD_REQUEST
+        result, response = validate_request_generic(data)
+        if not result:
+            return response
 
         ret_code, response_data = keepalive_handlers.handle_keepalive_request(data)
         return response_data, ret_code, {'Content-Type': 'application/json'}
@@ -242,8 +249,9 @@ def queue_file_for_restore():
     data = flask.request.get_json()
 
     if data:
-        if not validate_request_generic(data):
-            return RESPONSE_401_BAD_REQUEST
+        result, response = validate_request_generic(data)
+        if not result:
+            return response
 
         ret_code, response_data = restore_handlers.handle_queue_file_for_restore_request(data)
         return response_data, ret_code, {'Content-Type': 'application/json'}
@@ -258,8 +266,9 @@ def restore_file():
 
     data = flask.request.get_json()
     if data:
-        if not validate_request_generic(data):
-            return RESPONSE_401_BAD_REQUEST
+        result, response = validate_request_generic(data)
+        if not result:
+            return response
 
         # TODO: streaming, but its difficult
         # Probably need to do multipart response or just do octet-stream and ONLY send file
@@ -276,8 +285,9 @@ def create_customer():
 
     data = flask.request.get_json()
     if data:
-        if not validate_request_generic(data, agent_id_required=False):
-            return RESPONSE_401_BAD_REQUEST
+        result, response = validate_request_generic(data, agent_id_required=False)
+        if not result:
+            return response
 
         if not validate_request_admin(data):
             return RESPONSE_401_BAD_REQUEST
