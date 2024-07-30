@@ -1,5 +1,6 @@
 #!/usr/bin/python
 import json
+import os
 
 import database_utils as db
 import logging_utils
@@ -7,6 +8,7 @@ import logging_utils
 import backup_handlers, keepalive_handlers, restore_handlers
 import generic_handlers
 import new_customer_handlers
+import stripe_handlers
 
 from werkzeug.formparser import parse_form_data
 from werkzeug.formparser import default_stream_factory
@@ -297,7 +299,22 @@ def create_customer():
     else:
         return RESPONSE_400_BAD_REQUEST
 
+@app.route('/api/stripe/create-customer', methods=['POST'])
+def create_stripe_customer():
+    logger.info(flask.request)
+    if flask.request.headers['Content-Type'] != 'application/json':
+        return RESPONSE_400_MUST_BE_JSON
 
+    data = flask.request.get_json()
+    if data:
+        result, response = validate_request_generic(data, agent_id_required=False)
+        if not result:
+            return response
+
+        ret_code, response_data = stripe_handlers.handle_create_customer_request(data)
+        return response_data, ret_code, {'Content-Type': 'application/json'}
+    else:
+        return RESPONSE_400_BAD_REQUEST
 
 if __name__ == "__main__":
     main()
