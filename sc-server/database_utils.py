@@ -488,6 +488,34 @@ def get_monthly_average_disk_usage(customer_id):
     else:
       return False
 
+def get_billing_amount(customer_id):
+  """
+    Get billing amount for the given customer
+  """
+  ret = []
+
+  cnx = __connect_to_db__()
+  cursor = cnx.cursor(buffered=True)
+
+  try:
+    cursor.callproc('calculate_total_bill', (customer_id,))
+
+    for result in cursor.stored_results():
+        row = result.fetchall()
+        print(row)
+
+        ret = row[0][0]
+
+  except Error as e:
+    __logger__().error(e)
+
+  finally:
+    __teardown__(cursor,cnx)
+    if ret:
+      return ret
+    else:
+      return False
+
 def __connect_to_db__():
   mysql_username = os.getenv('MYSQLUSER')
   mysql_password = os.getenv('MYSQLPASSWORD')

@@ -316,5 +316,43 @@ def create_stripe_customer():
     else:
         return RESPONSE_400_BAD_REQUEST
 
+# TODO: remove this functionality from API
+@app.route('/api/stripe/charge-customer', methods=['POST'])
+def charge_stripe_customer():
+    logger.info(flask.request)
+    if flask.request.headers['Content-Type'] != 'application/json':
+        return RESPONSE_400_MUST_BE_JSON
+
+    data = flask.request.get_json()
+    if data:
+        result, response = validate_request_generic(data, agent_id_required=False)
+        if not result:
+            return response
+
+        ret_code, response_data = stripe_handlers.handle_charge_customer_request(data)
+        return response_data, ret_code, {'Content-Type': 'application/json'}
+    else:
+        return RESPONSE_400_BAD_REQUEST
+
+@app.route('/api/stripe/list-customers', methods=['GET'])
+def list_stripe_customers():
+    logger.info(flask.request)
+    if flask.request.headers['Content-Type'] != 'application/json':
+        return RESPONSE_400_MUST_BE_JSON
+
+    data = flask.request.get_json()
+    if data:
+        result, response = validate_request_generic(data, agent_id_required=False)
+        if not result:
+            return response
+
+        if not validate_request_admin(data):
+            return RESPONSE_401_BAD_REQUEST
+
+        ret_code, response_data = stripe_handlers.handle_list_customers_request(data)
+        return response_data, ret_code, {'Content-Type': 'application/json'}
+    else:
+        return RESPONSE_400_BAD_REQUEST
+
 if __name__ == "__main__":
     main()
