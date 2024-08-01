@@ -15,8 +15,6 @@ def create_customer(customer_email, customer_guid):
         metadata={"CustomerGUID": customer_guid}
       )
 
-      print("Received customer: %s" % customer)
-
       return customer.id
 
     except Exception as e:

@@ -30,31 +30,23 @@ def handle_create_customer_request(request):
       if field not in request.keys():
         return RESPONSE_401_BAD_REQUEST
 
-    result = stripe_utils.create_customer(
+    stripe_id = stripe_utils.create_customer(
         request['customer_email'],
         request['customer_guid']
     )
 
-    result = json.loads(result)
-    print(type(result))
+    if stripe_id:
+        customer_id = db.get_customer_id_by_api_key(request['api_key'])
 
-    if "data" in result.keys():
-        if "id" in result["data"].keys():
-            stripe_id = result["data"]["id"]
+        # TODO: also need to set isActive to 1 here
+        update_result = db.update_customer_with_stripe_id(customer_id, stripe_id)
 
-    if result:
-        if stripe_id:
-            customer_id = db.get_customer_id_by_api_key(request['api_key'])
-
-            # TODO: also need to set isActive to 1 here
-            update_result = db.update_customer_with_stripe_id(customer_id, stripe_id)
-
-            if update_result == 1:
-                __logger__().info("Successfully registered new customer with Stripe.")
-                return 200, json.dumps({'stripe_create_customer-response': 'Successfully registered new customer [%s] with Stripe.' % request['customer_email']})
-            else:
-                __logger__().warning("Successfully registered new customer with Stripe, but failed to add to database.")
-                return 200, json.dumps({'stripe_create_customer-response': 'Successfully registered new customer with Stripe, but failed to add to database.'})
+        if update_result == 1:
+            __logger__().info("Successfully registered new customer with Stripe.")
+            return 200, json.dumps({'stripe_create_customer-response': 'Successfully registered new customer [%s] with Stripe.' % request['customer_email']})
+        else:
+            __logger__().warning("Successfully registered new customer with Stripe, but failed to add to database.")
+            return 200, json.dumps({'stripe_create_customer-response': 'Successfully registered new customer with Stripe, but failed to add to database.'})
 
     else:
         __logger__().info("Got bad return code when trying to register new Stripe customer.")
