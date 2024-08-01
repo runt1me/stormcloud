@@ -70,7 +70,7 @@ def main():
     app.run()
 
 # TODO: each call to validate_request_generic needs to adopt the new definition
-def validate_request_generic(request, api_key_required=True, agent_id_required=True):
+def validate_request_generic(request, api_key_required=True, api_key_must_be_active=True, agent_id_required=True):
     for field in request.keys():
         if not db.passes_sanitize(str(request[field])):
             logger.warning("Failed sanitization check (field name: '%s'): %s" %(field,request[field]))
@@ -81,20 +81,21 @@ def validate_request_generic(request, api_key_required=True, agent_id_required=T
             logger.info("Did not find api_key field which was required for request.")
             return False, RESPONSE_401_BAD_REQUEST
 
-        result = db.get_api_key_status(str(request["api_key"]))
-        if result == "API_KEY_DOES_NOT_EXIST":
-            # API key doesn't exist here, no need to give more information back to the client than necessary
-            logger.info("Request was made with a non-existent API key.")
-            return False, RESPONSE_401_BAD_REQUEST
-        elif result == "API_KEY_INACTIVE":
-            # Valid API key, but inactive, subscription probably expired
-            logger.info("Request was made with a valid, but inactive, API key.")
-            return False, RESPONSE_401_INACTIVE_API_KEY
-        elif result == "API_KEY_UNKNOWN":
-            logger.warning("Got unknown response when trying to determine API key status.")
-            return False, RESPONSE_401_BAD_REQUEST
-        elif result == "API_KEY_ACTIVE":
-            pass
+        if api_key_must_be_active:
+            result = db.get_api_key_status(str(request["api_key"]))
+            if result == "API_KEY_DOES_NOT_EXIST":
+                # API key doesn't exist here, no need to give more information back to the client than necessary
+                logger.info("Request was made with a non-existent API key.")
+                return False, RESPONSE_401_BAD_REQUEST
+            elif result == "API_KEY_INACTIVE":
+                # Valid API key, but inactive, subscription probably expired
+                logger.info("Request was made with a valid, but inactive, API key.")
+                return False, RESPONSE_401_INACTIVE_API_KEY
+            elif result == "API_KEY_UNKNOWN":
+                logger.warning("Got unknown response when trying to determine API key status.")
+                return False, RESPONSE_401_BAD_REQUEST
+            elif result == "API_KEY_ACTIVE":
+                pass
 
     if agent_id_required:
         if 'agent_id' not in request.keys():
@@ -307,7 +308,7 @@ def create_stripe_customer():
 
     data = flask.request.get_json()
     if data:
-        result, response = validate_request_generic(data, agent_id_required=False)
+        result, response = validate_request_generic(data, api_key_must_be_active=False, agent_id_required=False)
         if not result:
             return response
 

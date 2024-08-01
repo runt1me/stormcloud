@@ -23,6 +23,37 @@ def passes_sanitize(input_string):
 
   return True
 
+def update_customer_with_stripe_id(customer_id,stripe_id):
+  # IN customer_id INT,
+  # IN stripe_id varchar(64)
+
+  ret = []
+  cnx = __connect_to_db__()
+  cursor = cnx.cursor(buffered=True)
+  success = False
+
+  try:
+    cursor.callproc('uspSaveCustomerStripeID',
+      (customer_id,stripe_id)
+    )
+
+    for result in cursor.stored_results():
+      row = result.fetchall()
+      ret.append(row)
+
+    if ret[0][0][0] == 1:
+      success = True
+    elif ret[0][0][0] == -1:
+      success = False
+
+  except Error as e:
+    __logger__().error(e)
+
+  finally:
+    cnx.commit()
+    __teardown__(cursor,cnx)
+    return success
+
 def update_callback_for_device(device_id, callback_time, status_code):
   # IN DID INT, IN callback_time varchar(512), IN device_status INT
   ret = []

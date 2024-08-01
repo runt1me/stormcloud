@@ -1,0 +1,24 @@
+def update_customer_with_stripe_id(customer_id,stripe_id):
+  # IN customer_id INT,
+  # IN stripe_id varchar(64)
+
+  ret = []
+  cnx = __connect_to_db__()
+  cursor = cnx.cursor(buffered=True)
+
+  try:
+    cursor.callproc('uspSaveCustomerStripeID',
+      (customer_id,stripe_id)
+    )
+
+    for result in cursor.stored_results():
+      row = result.fetchall()
+      ret.append(row)
+
+  except Error as e:
+    __logger__().error(e)
+
+  finally:
+    cnx.commit()
+    __teardown__(cursor,cnx)
+    return ret

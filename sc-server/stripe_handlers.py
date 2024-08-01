@@ -16,11 +16,14 @@ def __logger__():
 
 def handle_create_customer_request(request):
     __logger__().info("Server handling create Stripe customer request.")
-    result = None
+    result    = None
+    stripe_id = None
+    success   = False
 
     required_fields = [
       'customer_email',
-      'customer_guid'
+      'customer_guid',
+      'api_key'
     ]
 
     for field in required_fields:
@@ -32,15 +35,27 @@ def handle_create_customer_request(request):
         request['customer_guid']
     )
 
+    result = json.loads(result)
+    print(type(result))
+
+    if "data" in result.keys():
+        if "id" in result["data"].keys():
+            stripe_id = result["data"]["id"]
+
     if result:
+        if stripe_id:
+            customer_id = db.get_customer_id_by_api_key(request['api_key'])
 
-        # TODO: need to save stripe customer ID into database
-        # Call uspSaveCustomerStripeID (vCustomerId, vStripeID)
-        # CustomerID is an INT
-        # StripeID is Varchar(64)
+            # TODO: also need to set isActive to 1 here
+            update_result = db.update_customer_with_stripe_id(customer_id, stripe_id)
 
-        __logger__().info("Successfully registered new customer with Stripe.")
-        return 200, json.dumps({'stripe_create_customer-response': 'Successfully registered new customer [%s] with Stripe.' % request['customer_email']})
+            if update_result == 1:
+                __logger__().info("Successfully registered new customer with Stripe.")
+                return 200, json.dumps({'stripe_create_customer-response': 'Successfully registered new customer [%s] with Stripe.' % request['customer_email']})
+            else:
+                __logger__().warning("Successfully registered new customer with Stripe, but failed to add to database.")
+                return 200, json.dumps({'stripe_create_customer-response': 'Successfully registered new customer with Stripe, but failed to add to database.'})
+
     else:
         __logger__().info("Got bad return code when trying to register new Stripe customer.")
         return 400, json.dumps({'error': 'Failed to add Stripe customer: %s' % request['customer_email']})
@@ -104,12 +119,12 @@ def handle_list_customers_request(request):
 
     customer_list = stripe_utils.list_customers(
         limit=request['limit'],
-        starting_after=request['starting_after']
+        starting_after=starting_after
     )
 
-    if result:
+    if customer_list:
         __logger__().info("Successfully retrieved Stripe customer list.")
-        return 200, json.dumps({'stripe_list_customers-response': customer_list)
+        return 200, json.dumps({'stripe_list_customers-response': customer_list})
     else:
         __logger__().info("Got bad return code when trying to list Stripe customers.")
         return 400, json.dumps({'error': 'Failed to get list of Stripe customers.'})

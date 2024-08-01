@@ -54,7 +54,9 @@ def list_customers(limit, starting_after=None):
       params['starting_after'] = starting_after
 
     try:
-      return stripe.Customer.list(**params)
+      result = stripe.Customer.list(**params)
+      print("Got list: %s" % result)
+      return result
 
     except Exception as e:
       print("Caught exception on stripe.Customer.list")
