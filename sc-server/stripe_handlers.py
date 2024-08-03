@@ -23,57 +23,68 @@ def handle_create_customer_request(request):
     required_fields = [
       'customer_email',
       'customer_guid',
-      'api_key'
+      'api_key',
+      'payment_card_info'
     ]
 
     for field in required_fields:
       if field not in request.keys():
         return RESPONSE_401_BAD_REQUEST
 
+    # Validate payment_card_info
+    card_info = request['payment_card_info']
+    required_card_fields = ['number', 'exp_month', 'exp_year', 'cvc']
+    for field in required_card_fields:
+      if field not in card_info:
+        __logger__().info("Missing required card field: %s" % field)
+        return RESPONSE_401_BAD_REQUEST
+
     stripe_id = stripe_utils.create_customer(
-        request['customer_email'],
-        request['customer_guid']
+      request['customer_email'],
+      request['customer_guid'],
+      request['payment_card_info']
     )
 
     if stripe_id:
-        customer_id = db.get_customer_id_by_api_key(request['api_key'])
+      customer_id = db.get_customer_id_by_api_key(request['api_key'])
 
-        # TODO: also need to set isActive to 1 here
-        update_result = db.update_customer_with_stripe_id(customer_id, stripe_id)
+      # Update the customer with the Stripe ID,
+      # and also mark their account as active.
+      update_result = db.update_customer_with_stripe_id(customer_id, stripe_id)
 
-        if update_result == 1:
-            __logger__().info("Successfully registered new customer with Stripe.")
-            return 200, json.dumps({'stripe_create_customer-response': 'Successfully registered new customer [%s] with Stripe.' % request['customer_email']})
-        else:
-            __logger__().warning("Successfully registered new customer with Stripe, but failed to add to database.")
-            return 200, json.dumps({'stripe_create_customer-response': 'Successfully registered new customer with Stripe, but failed to add to database.'})
+      if update_result == 1:
+        __logger__().info("Successfully registered new customer with Stripe.")
+        return 200, json.dumps({'stripe_create_customer-response': 'Successfully registered new customer [%s] with Stripe.' % request['customer_email']})
+      else:
+        __logger__().warning("Successfully registered new customer with Stripe, but failed to add to database.")
+        return 200, json.dumps({'stripe_create_customer-response': 'Successfully registered new customer with Stripe, but failed to add to database.'})
 
     else:
-        __logger__().info("Got bad return code when trying to register new Stripe customer.")
-        return 400, json.dumps({'error': 'Failed to add Stripe customer: %s' % request['customer_email']})
+      __logger__().info("Got bad return code when trying to register new Stripe customer.")
+      return 400, json.dumps({'error': 'Failed to add Stripe customer: %s' % request['customer_email']})
 
 def handle_charge_customer_request(request):
     __logger__().info("Server handling charge Stripe customer request.")
     result = None
 
     required_fields = [
+      'api_key',
       'stripe_customer_id',
-      'description',
-      'api_key'
+      'description'
     ]
 
     for field in required_fields:
       if field not in request.keys():
         return RESPONSE_401_BAD_REQUEST
 
-    # TODO: need this implemented
-    # Should return charge amount as integer in cents (int(amount * 100))
-
     # TODO: handle failure
     customer_id = db.get_customer_id_by_api_key(request['api_key'])
 
     # TODO: handle -1 return
     billing_amount = db.get_billing_amount(customer_id)
+    if billing_amount == -1:
+      __logger__().warning("Did not get valid billing amount for customer [%d], unable to charge." % customer_id)
+      return RESPONSE_401_BAD_REQUEST
 
     charge_amount = int(billing_amount*100)
     currency = "usd"
@@ -89,6 +100,13 @@ def handle_charge_customer_request(request):
     )
 
     if result:
+        transaction_recorded = stripe_utils.record_stripe_transaction(
+            customer_id,
+            request['stripe_customer_id'],
+            charge_amount,
+            request['description']
+        )
+    
         __logger__().info("Successfully charged %d cents to API key: %s." % (charge_amount, request['api_key']))
         return 200, json.dumps({'stripe_charge_customer-response': "Successfully charged %d cents to API key: %s." % (charge_amount, request['api_key'])})
     else:

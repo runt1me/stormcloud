@@ -23,6 +23,32 @@ def passes_sanitize(input_string):
 
   return True
 
+def add_stripe_transaction(CustomerID, stripe_customer_id, amount, description, transaction_date):
+    ret = []
+    cnx = __connect_to_db__()
+    cursor = cnx.cursor(buffered=True)
+
+    try:
+        cursor.callproc('add_stripe_transaction',
+            (CustomerID, stripe_customer_id, amount, description, transaction_date)
+        )
+
+        for result in cursor.stored_results():
+            row = result.fetchall()
+            ret.append(row)
+
+        affected_rows = ret[0][0][0] if ret else 0
+        success = affected_rows > 0
+
+    except Error as e:
+        __logger__().error(f"Error in add_stripe_transaction: {e}")
+        success = False
+
+    finally:
+        cnx.commit()
+        __teardown__(cursor,cnx)
+        return success
+
 def update_customer_with_stripe_id(customer_id,stripe_id):
   # IN customer_id INT,
   # IN stripe_id varchar(64)
@@ -533,8 +559,6 @@ def get_billing_amount(customer_id):
 
     for result in cursor.stored_results():
         row = result.fetchall()
-        print(row)
-
         ret = row[0][0]
 
   except Error as e:

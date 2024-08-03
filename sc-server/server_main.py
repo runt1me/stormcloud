@@ -72,6 +72,10 @@ def main():
 # TODO: each call to validate_request_generic needs to adopt the new definition
 def validate_request_generic(request, api_key_required=True, api_key_must_be_active=True, agent_id_required=True):
     for field in request.keys():
+        if 'payment_card_info' in field:
+            # TODO: separate function to validate this...?
+            continue
+
         if not db.passes_sanitize(str(request[field])):
             logger.warning("Failed sanitization check (field name: '%s'): %s" %(field,request[field]))
             return False, RESPONSE_401_UNSAFE_CHARACTERS
@@ -326,7 +330,7 @@ def charge_stripe_customer():
 
     data = flask.request.get_json()
     if data:
-        result, response = validate_request_generic(data, agent_id_required=False)
+        result, response = validate_request_generic(data, agent_id_required=False, api_key_required=False)
         if not result:
             return response
 

@@ -1,0 +1,61 @@
+@app.route('/api/stripe/create-customer', methods=['POST'])
+
+  Origin
+  -- ColdFusion application  
+
+  Inputs
+  -- customer_email
+  -- customer_guid
+  -- api_key
+  -- payment_info
+
+  Outputs
+  Stripe returns customer_id
+
+  Registers this customer with stripe
+  We update Customer with StripeID
+  We set isActive = 1 when complete
+
+  [*] Needs payment information
+  [+] Otherwise done
+
+@app.route('/api/stripe/charge-customer', methods=['POST'])
+
+  Origin
+  -- cronjob
+
+  Inputs
+  -- api_key
+  -- stripe_customer_id
+  -- description
+
+  Outputs
+  Success code
+
+  Charges default/primary payment method for stripe_customer_id
+  Record transaction in db
+
+  [*] Plumbing is kinda there, but no payment methods yet
+  [*] Needs record keeping
+
+@app.route('/api/stripe/list-customers', methods=['GET'])
+
+  Origin
+  -- from server, or on-demand
+
+  Inputs
+  -- api_key             (must be admin)
+  -- limit               (number of customers to list)
+  -- starting_after      (optional date to start from?)
+
+  Outputs
+  List of customers
+
+  Requests customer list from stripe
+
+  [+] Done
+  
+@app.route('/api/stripe/modify-customer', methods=['POST'])
+
+@app.route('/api/stripe/delete-customer', methods=['POST'])
+
