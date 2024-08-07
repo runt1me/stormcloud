@@ -438,6 +438,26 @@ def get_device_by_agent_id(agent_id):
     __teardown__(cursor,cnx)
     return ret
 
+def get_active_customers():
+  ret = []
+
+  cnx = __connect_to_db__()
+  cursor = cnx.cursor(buffered=True)
+
+  try:
+    cursor.callproc('uspGetCustomers', (1,))
+
+    for result in cursor.stored_results():
+        row = result.fetchall()
+        ret.append(row)
+
+  except Error as e:
+    __logger__().error(e)
+
+  finally:
+    __teardown__(cursor,cnx)
+    return ret
+
 def is_api_key_superuser(api_key):
   ret = []
 
