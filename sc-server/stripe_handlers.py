@@ -24,25 +24,18 @@ def handle_create_customer_request(request):
       'customer_email',
       'customer_guid',
       'api_key',
-      'payment_card_info'
+      'payment_method_id'
     ]
 
     for field in required_fields:
       if field not in request.keys():
         return RESPONSE_401_BAD_REQUEST
 
-    # Validate payment_card_info
-    card_info = request['payment_card_info']
-    required_card_fields = ['number', 'exp_month', 'exp_year', 'cvc']
-    for field in required_card_fields:
-      if field not in card_info:
-        __logger__().info("Missing required card field: %s" % field)
-        return RESPONSE_401_BAD_REQUEST
-
     stripe_id = stripe_utils.create_customer(
       request['customer_email'],
       request['customer_guid'],
-      request['payment_card_info']
+      # request['payment_card_method_id']
+      request['payment_method_id']
     )
 
     if stripe_id:
@@ -62,6 +55,40 @@ def handle_create_customer_request(request):
     else:
       __logger__().info("Got bad return code when trying to register new Stripe customer.")
       return 400, json.dumps({'error': 'Failed to add Stripe customer: %s' % request['customer_email']})
+
+def handle_remove_customer_request(request):
+    __logger__().info("Server handling remove Stripe customer request.")
+
+    required_fields = [
+        'api_key',
+        'stripe_customer_id'
+    ]
+
+    for field in required_fields:
+        if field not in request.keys():
+            return RESPONSE_401_BAD_REQUEST
+
+    stripe_customer_id = request['stripe_customer_id']
+
+    try:
+        # Delete the customer from Stripe
+        deleted_customer = stripe_utils.delete_customer(stripe_customer_id)
+
+        # If successful, update your database to reflect the removal
+        if deleted_customer:
+            # customer_id = db.get_customer_id_by_stripe_id(stripe_customer_id)
+            # if customer_id:
+                # db.remove_stripe_id_from_customer(customer_id)
+
+            __logger__().info(f"Successfully removed Stripe customer: {stripe_customer_id}")
+            return 200, json.dumps({'stripe_remove_customer-response': f'Successfully removed Stripe customer: {stripe_customer_id}'})
+        else:
+            __logger__().warning(f"Failed to remove Stripe customer: {stripe_customer_id}")
+            return 400, json.dumps({'error': f'Failed to remove Stripe customer: {stripe_customer_id}'})
+
+    except Exception as e:
+        __logger__().error(f"Error removing Stripe customer: {str(e)}")
+        return 500, json.dumps({'error': 'Internal server error while removing customer'})
 
 def handle_charge_customer_request(request):
     __logger__().info("Server handling charge Stripe customer request.")

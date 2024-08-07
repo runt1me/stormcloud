@@ -321,6 +321,31 @@ def create_stripe_customer():
     else:
         return RESPONSE_400_BAD_REQUEST
 
+@app.route('/api/stripe/remove-customer', methods=['POST'])
+def remove_stripe_customer():
+    logger.info("Received request to /api/stripe/remove-customer")
+    logger.info(f"Request method: {flask.request.method}")
+    logger.info(f"Request headers: {flask.request.headers}")
+    logger.info(f"Request data: {flask.request.get_data()}")
+
+    logger.info(flask.request)
+    if flask.request.headers['Content-Type'] != 'application/json':
+        return RESPONSE_400_MUST_BE_JSON
+
+    data = flask.request.get_json()
+    if data:
+        result, response = validate_request_generic(data, agent_id_required=False)
+        if not result:
+            return response
+
+        if not validate_request_admin(data):
+            return RESPONSE_401_BAD_REQUEST
+
+        ret_code, response_data = stripe_handlers.handle_remove_customer_request(data)
+        return response_data, ret_code, {'Content-Type': 'application/json'}
+    else:
+        return RESPONSE_400_BAD_REQUEST
+
 # TODO: remove this functionality from API
 @app.route('/api/stripe/charge-customer', methods=['POST'])
 def charge_stripe_customer():
@@ -358,6 +383,13 @@ def list_stripe_customers():
         return response_data, ret_code, {'Content-Type': 'application/json'}
     else:
         return RESPONSE_400_BAD_REQUEST
+
+@app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE'])
+def catch_all(path):
+    logger.warning(f"Unmatched route: {path}")
+    logger.warning(f"Method: {flask.request.method}")
+    logger.warning(f"Headers: {flask.request.headers}")
+    return "Not Found", 404
 
 if __name__ == "__main__":
     main()

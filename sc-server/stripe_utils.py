@@ -6,34 +6,24 @@ import crypto_utils
 
 import stripe
 
-def create_customer(customer_email, customer_guid, payment_card_info):
+def create_customer(customer_email, customer_guid, payment_method_id):
     stripe.api_key = __get_stripe_key()
 
     try:
-      payment_method = stripe.PaymentMethod.create(
-        type="card",
-        card={
-          "number": payment_card_info['number'],
-          "exp_month": payment_card_info['exp_month'],
-          "exp_year": payment_card_info['exp_year'],
-          "cvc": payment_card_info['cvc'],
-        },
-      )
-
       customer = stripe.Customer.create(
         email=customer_email,
-        payment_method=payment_method.id,
+        payment_method=payment_method_id,
         metadata={"CustomerGUID": customer_guid}
       )
 
       stripe.PaymentMethod.attach(
-        payment_method.id,
+        payment_method_id,
         customer=customer.id,
       )
 
       stripe.Customer.modify(
         customer.id,
-        invoice_settings={"default_payment_method": payment_method.id},
+        invoice_settings={"default_payment_method": payment_method_id},
       )
 
       return customer.id
@@ -42,6 +32,16 @@ def create_customer(customer_email, customer_guid, payment_card_info):
       print("Caught exception on stripe.Customer.create")
       print(traceback.format_exc())
       return False
+
+def delete_customer(stripe_customer_id):
+    stripe.api_key = __get_stripe_key()
+
+    try:
+        deleted_customer = stripe.Customer.delete(stripe_customer_id)
+        return deleted_customer
+    except Exception as e:
+        print(f"Caught exception on stripe.Customer.delete: {str(e)}")
+        return False
 
 def charge_customer(charge_amount, currency, stripe_customer_id, description):
     stripe.api_key = __get_stripe_key()
