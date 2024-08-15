@@ -456,7 +456,7 @@ def get_active_customers():
 
   finally:
     __teardown__(cursor,cnx)
-    return ret
+    return ret[0]
 
 def is_api_key_superuser(api_key):
   ret = []
@@ -585,6 +585,7 @@ def get_billing_amount(customer_id):
     __logger__().error(e)
 
   finally:
+    cnx.commit()
     __teardown__(cursor,cnx)
     if ret:
       return ret

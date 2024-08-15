@@ -165,3 +165,30 @@ def handle_list_customers_request(request):
     else:
         __logger__().info("Got bad return code when trying to list Stripe customers.")
         return 400, json.dumps({'error': 'Failed to get list of Stripe customers.'})
+
+def handle_get_payment_method_request(request):
+    __logger__().info("Server handling get payment method request.")
+
+    required_fields = [
+        'apikey'
+    ]
+
+    for field in required_fields:
+        if field not in request.keys():
+            return RESPONSE_401_BAD_REQUEST
+
+    customer_id = request['customer_id']
+
+    try:
+        payment_method = stripe_utils.get_payment_method(customer_id)
+
+        if payment_method:
+            __logger__().info(f"Successfully retrieved payment method for customer: {customer_id}")
+            return 200, json.dumps({'paymentMethod': payment_method})
+        else:
+            __logger__().warning(f"No payment method found for customer: {customer_id}")
+            return 404, json.dumps({'error': 'No payment method found for this customer'})
+
+    except Exception as e:
+        __logger__().error(f"Error retrieving payment method: {str(e)}")
+        return 500, json.dumps({'error': 'Internal server error while retrieving payment method'})

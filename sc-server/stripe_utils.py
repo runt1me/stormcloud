@@ -46,19 +46,31 @@ def delete_customer(stripe_customer_id):
 def charge_customer(charge_amount, currency, stripe_customer_id, description):
     stripe.api_key = __get_stripe_key()
 
+    # SAFETY AMOUNT -- NO CHARGES OVER 50 USD FOR NOW
+    if charge_amount > 5000:
+      print("ERROR: Tried to charge an amount that was above the safety amount, bailing!")
+      return False
+
     try:
-      charge = stripe.Charge.create(
+      customer = stripe.Customer.retrieve(
+        stripe_customer_id
+      )
+
+      intent = stripe.PaymentIntent.create(
         amount=charge_amount,
         currency=currency,
         customer=stripe_customer_id,
+        payment_method=customer.invoice_settings.default_payment_method,
+        off_session=True,
+        confirm=True,
         description=description
       )
 
-      print("Received charge: %s" % str(charge))
-      return charge
+      print("Received payment intent: %s" % str(intent))
+      return intent
 
     except Exception as e:
-      print("Caught exception on stripe.Customer.charge")
+      print("Caught exception on stripe.PaymentIntent.create")
       print(traceback.format_exc())
       return False
 
@@ -99,7 +111,7 @@ def record_stripe_transaction(CustomerID, stripe_customer_id, amount, descriptio
         logger.error(f"Error recording Stripe transaction: {str(e)}")
         return False
 
-def __get_stripe_key(key_type="test"):
+def __get_stripe_key(key_type="prod"):
   if key_type == "test":
     return os.getenv('STORMCLOUD_STRIPE_SECRET_KEY_TEST')
   elif key_type == "prod":
