@@ -111,6 +111,32 @@ def record_stripe_transaction(CustomerID, stripe_customer_id, amount, descriptio
         logger.error(f"Error recording Stripe transaction: {str(e)}")
         return False
 
+def get_customer_payment_method(stripe_customer_id):
+    # TODO: this code came from Claude, not tested yet
+    raise Exception("get_customer_payment_method not implemented yet")
+    stripe.api_key = __get_stripe_key()
+
+    try:
+        customer = stripe.Customer.retrieve(stripe_customer_id)
+        if customer.invoice_settings.default_payment_method:
+            return customer.invoice_settings.default_payment_method
+
+        # If no default payment method is set, get the first attached payment method
+        payment_methods = stripe.PaymentMethod.list(
+            customer=stripe_customer_id,
+            type="card"
+        )
+
+        if payment_methods and payment_methods.data:
+            return payment_methods.data[0].id
+
+        return None
+
+    except Exception as e:
+        print(f"Caught exception on get_customer_payment_method for customer {stripe_customer_id}")
+        print(traceback.format_exc())
+        return None
+
 def __get_stripe_key(key_type="prod"):
   if key_type == "test":
     return os.getenv('STORMCLOUD_STRIPE_SECRET_KEY_TEST')
