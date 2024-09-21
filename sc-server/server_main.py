@@ -13,7 +13,7 @@ import stripe_handlers
 from werkzeug.formparser import parse_form_data
 from werkzeug.formparser import default_stream_factory
 
-from flask import Flask, jsonify
+from flask import request, Flask, jsonify
 from flask_cors import CORS
 import flask   # used for flask.request to prevent namespace conflicts with other variables named request
 app = Flask(__name__)
@@ -304,6 +304,68 @@ def create_customer():
     else:
         return RESPONSE_400_BAD_REQUEST
 
+@app.route('/api/fetch-backup-folders', methods=['POST'])
+def fetch_backup_folders():
+    data = request.json
+    api_key = data.get('api_key')
+    agent_id = data.get('agent_id')
+    
+    if not api_key or not agent_id:
+        return jsonify({"SUCCESS": False, "message": "Missing api_key or agent_id"}), 400
+    
+    # Validate the API key
+    customer_id = db.get_customer_id_by_api_key(api_key)
+    if not customer_id:
+        return jsonify({"SUCCESS": False, "message": "Invalid API key"}), 401
+    
+    # Validate the agent ID
+    device = db.get_device_by_agent_id(agent_id)
+    if not device:
+        return jsonify({"SUCCESS": False, "message": "Invalid agent ID"}), 401
+    
+    # Assuming we have a function to fetch folders from the database
+    folders = db.get_backup_folders(customer_id, device[0])  # device[0] should be the device_id
+    
+    if folders:
+        return jsonify({
+            "SUCCESS": True,
+            "DATA": {
+                "COLUMNS": ["FOLDER_PATH", "IS_RECURSIVE"],
+                "DATA": folders
+            }
+        })
+    else:
+        return jsonify({"SUCCESS": False, "message": "No folders found"}), 404
+
+@app.route('/api/register-backup-folders', methods=['POST'])
+def register_backup_folders():
+    data = request.json
+    api_key = data.get('api_key')
+    agent_id = data.get('agent_id')
+    folders = data.get('folders')
+    
+    if not api_key or not agent_id or not folders:
+        return jsonify({"SUCCESS": False, "message": "Invalid data provided."}), 400
+    
+    # Validate the API key and agent ID using the existing stored procedure
+    validation_result = db.validate_api_key_and_agent_id(api_key, agent_id)
+    if not validation_result['success']:
+        return jsonify({"SUCCESS": False, "message": validation_result['message']}), 401
+    
+    customer_id = validation_result['customer_id']
+    device_id = validation_result['device_id']
+    
+    # Register the folders
+    success = db.register_backup_folders(customer_id, device_id, folders)
+    
+    if success:
+        return jsonify({
+            "SUCCESS": True,
+            "message": "Backup folders registered successfully"
+        })
+    else:
+        return jsonify({"SUCCESS": False, "message": "Failed to register backup folders"}), 500
+
 @app.route('/api/stripe/create-customer', methods=['POST'])
 def create_stripe_customer():
     logger.info(flask.request)
@@ -346,24 +408,6 @@ def remove_stripe_customer():
     else:
         return RESPONSE_400_BAD_REQUEST
 
-# TODO: remove this functionality from API
-@app.route('/api/stripe/charge-customer', methods=['POST'])
-def charge_stripe_customer():
-    logger.info(flask.request)
-    if flask.request.headers['Content-Type'] != 'application/json':
-        return RESPONSE_400_MUST_BE_JSON
-
-    data = flask.request.get_json()
-    if data:
-        result, response = validate_request_generic(data, agent_id_required=False, api_key_required=False)
-        if not result:
-            return response
-
-        ret_code, response_data = stripe_handlers.handle_charge_customer_request(data)
-        return response_data, ret_code, {'Content-Type': 'application/json'}
-    else:
-        return RESPONSE_400_BAD_REQUEST
-
 @app.route('/api/stripe/list-customers', methods=['GET'])
 def list_stripe_customers():
     logger.info(flask.request)
@@ -380,23 +424,6 @@ def list_stripe_customers():
             return RESPONSE_401_BAD_REQUEST
 
         ret_code, response_data = stripe_handlers.handle_list_customers_request(data)
-        return response_data, ret_code, {'Content-Type': 'application/json'}
-    else:
-        return RESPONSE_400_BAD_REQUEST
-
-@app.route('/api/stripe/get-payment-method', methods=['POST'])
-def get_payment_method():
-    logger.info(flask.request)
-    if flask.request.headers['Content-Type'] != 'application/json':
-        return RESPONSE_400_MUST_BE_JSON
-
-    data = flask.request.get_json()
-    if data:
-        result, response = validate_request_generic(data, api_key_must_be_active=True, agent_id_required=False)
-        if not result:
-            return response
-
-        ret_code, response_data = stripe_handlers.handle_get_payment_method_request(data)
         return response_data, ret_code, {'Content-Type': 'application/json'}
     else:
         return RESPONSE_400_BAD_REQUEST

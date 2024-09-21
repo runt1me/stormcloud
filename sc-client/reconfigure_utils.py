@@ -13,7 +13,7 @@ from time import sleep
 
 def fetch_and_update_backup_paths(settings_file_path, api_key, agent_id, interval=30):
     while True:
-        url = "https://apps.darkage.io/darkage/api/fetch_backup_folders.cfm"
+        url = "https://www2.darkage.io:8443/api/fetch-backup-folders"
         headers = {"Content-Type": "application/json"}
         data = {"api_key": api_key, "agent_id": agent_id}
 
@@ -26,7 +26,6 @@ def fetch_and_update_backup_paths(settings_file_path, api_key, agent_id, interva
                     columns_list = result['DATA']['COLUMNS']
                     data = result['DATA']['DATA']
 
-                    # pdb.set_trace()
                     backup_paths = [row[columns_list.index("FOLDER_PATH")] for row in data if row[columns_list.index("IS_RECURSIVE")] == 0]
                     recursive_backup_paths = [row[columns_list.index("FOLDER_PATH")] for row in data if row[columns_list.index("IS_RECURSIVE")] == 1]
 
@@ -36,7 +35,6 @@ def fetch_and_update_backup_paths(settings_file_path, api_key, agent_id, interva
 
                     with open(settings_file_path, 'w') as settings_file:
                         yaml.dump(settings, settings_file)
-
                 else:
                     print(f"Error: {result.get('message')}")
             else:

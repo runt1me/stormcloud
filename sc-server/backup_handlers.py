@@ -102,12 +102,15 @@ def handle_backup_file_request(request, file):
         directory_on_device = p.parents[0]
         directory_on_device_posix = str(directory_on_device)
 
+    #backup_id = request['backup_id']
+    
     file_name = backup_utils.get_file_name(path_on_server)
     file_path = backup_utils.get_file_path_without_name(path_on_server)
     file_type = backup_utils.get_file_type(path_on_server)
 
     _ = db.add_or_update_file_for_device(
         device_id,
+        #backup_id,
         file_name,
         file_path,
         path_on_device,
