@@ -513,4 +513,4 @@ if __name__ == "__main__":
     window = Installer()
     window.show()
 
-    sys.exit(app.exec_())
+    sys.exit(app.exec_()) # this line starts the application's event loop. It keeps the application running, waiting for events (like button clicks, key presses, etc.) until the application is closed. It also closes it after it wants to close. 
