@@ -15,7 +15,7 @@ def __logger__():
 def passes_sanitize(input_string):
   # Function for validating input to the database.
   # 
-  SANITIZE_LIST = ["'", '"', ";", "\\", "--", "*", "%"]
+  SANITIZE_LIST = ["'", '"', ";", "\\", "--", "*"]
   for expr in SANITIZE_LIST:
     if expr in input_string:
       __logger__().warning("")
@@ -591,6 +591,72 @@ def get_billing_amount(customer_id):
       return ret
     else:
       return False
+
+def get_backup_folders(customer_id, agent_id):
+    ret = []
+    cnx = __connect_to_db__()
+    cursor = cnx.cursor(buffered=True)
+
+    try:
+        cursor.callproc('get_backup_folders_for_device', (customer_id, agent_id))
+
+        for result in cursor.stored_results():
+            rows = result.fetchall()
+            for row in rows:
+                ret.append([row[0], row[1]])  # Assuming row[0] is FOLDER_PATH and row[1] is IS_RECURSIVE
+
+    except Error as e:
+        __logger__().error(f"Error in get_backup_folders: {e}")
+
+    finally:
+        __teardown__(cursor, cnx)
+        return ret
+
+def validate_api_key_and_agent_id(api_key, agent_id):
+    ret = {'success': False, 'message': '', 'customer_id': None, 'device_id': None}
+    cnx = __connect_to_db__()
+    cursor = cnx.cursor(buffered=True)
+
+    try:
+        cursor.callproc('validate_api_key_and_agent_id', (api_key, agent_id))
+        
+        for result in cursor.stored_results():
+            row = result.fetchone()
+            if row:
+                ret['success'] = bool(row[0])
+                ret['message'] = row[1]
+                ret['customer_id'] = row[2]
+                ret['device_id'] = row[3]
+
+    except Error as e:
+        __logger__().error(f"Error in validate_api_key_and_agent_id: {e}")
+        ret['message'] = "An error occurred during validation"
+
+    finally:
+        __teardown__(cursor, cnx)
+        return ret
+
+def register_backup_folders(customer_id, device_id, folders):
+    ret = False
+    cnx = __connect_to_db__()
+    cursor = cnx.cursor(buffered=True)
+
+    try:
+        for folder in folders:
+            cursor.callproc('register_backup_folder', 
+                (customer_id, device_id, folder['path'], folder['is_recursive'])
+            )
+        
+        cnx.commit()
+        ret = True
+
+    except Error as e:
+        __logger__().error(f"Error in register_backup_folders: {e}")
+        cnx.rollback()
+
+    finally:
+        __teardown__(cursor, cnx)
+        return ret
 
 def __connect_to_db__():
   mysql_username = os.getenv('MYSQLUSER')

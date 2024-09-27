@@ -78,7 +78,8 @@ def action_loop_and_sleep(settings, settings_file_path, dbconn, ignore_hash, sys
                 active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id,secret_key)
 
         backup_start_time = time.time()
-        backup_utils.perform_backup(backup_paths,recursive_backup_paths,api_key,agent_id,secret_key,dbconn,ignore_hash,systray)
+        backup_id = datetime.now().strftime("%Y%m%d%H%M%S")
+        backup_utils.perform_backup(backup_paths,recursive_backup_paths,backup_id,api_key,agent_id,secret_key,dbconn,ignore_hash,systray)
         logging.log(logging.INFO, "Backup took {} seconds.".format(time.time() - backup_start_time))
 
         sleep(ACTION_TIMER)
