@@ -40,7 +40,6 @@ class Installer(QWizard):
         self.backup_paths = None
         self.backup_paths_recursive = None
         self.existing_installation = None
-        self.corrupted_installation = False
 
         self.addPage(WelcomePage())
         self.addPage(ExistingInstallationPage())
@@ -49,15 +48,6 @@ class Installer(QWizard):
         self.addPage(BackupPage())
         self.addPage(InstallPage())
         self.addPage(FinishPage())
-
-    def initialize_logging():
-        logging.basicConfig(
-            filename='install.log',
-            filemode='a',
-            format='%(asctime)s %(levelname)-8s %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S',
-            level=logging.DEBUG
-        )
 
     def check_existing_installation(self):
         appdata_path = os.getenv('APPDATA')
@@ -69,62 +59,49 @@ class Installer(QWizard):
         with open(stable_settings_path, 'r') as f:
             settings = json.load(f)
 
-        if 'install_path' not in settings or not os.path.exists(settings['install_path']):
-            self.corrupted_installation = True
-            return settings
-
-        install_path = settings['install_path']
-        settings_cfg_path = os.path.join(install_path, 'settings.cfg')
-        stormcloud_exe_path = os.path.join(install_path, 'stormcloud.exe')
-
-        if not os.path.exists(settings_cfg_path) or not os.path.exists(stormcloud_exe_path):
-            self.corrupted_installation = True
-            return settings
-
-        with open(settings_cfg_path, 'r') as f:
-            settings_cfg = yaml.safe_load(f)
-
-        required_params = ['AGENT_ID', 'API_KEY', 'BACKUP_PATHS', 'BACKUP_TIME', 'KEEPALIVE_FREQ', 'RECURSIVE_BACKUP_PATHS', 'SECRET_KEY', 'SEND_LOGS']
-        for param in required_params:
-            if param not in settings_cfg:
-                self.corrupted_installation = True
-                break
-
         return settings
 
-    def repair_installation(self):
-        # Implementation of repair logic goes here
-        # For now, we'll just delete corrupted files
-        if self.existing_installation:
-            install_path = self.existing_installation['install_path']
-            settings_cfg_path = os.path.join(install_path, 'settings.cfg')
-            stormcloud_exe_path = os.path.join(install_path, 'stormcloud.exe')
-
-            if os.path.exists(settings_cfg_path):
-                os.remove(settings_cfg_path)
-            if os.path.exists(stormcloud_exe_path):
-                os.remove(stormcloud_exe_path)
-
-        self.corrupted_installation = False
-
     def uninstall_existing_version(self):
-        # Implementation of uninstallation logic goes here
-        # For now, we'll just delete the installation directory
-        if self.existing_installation:
-            install_path = self.existing_installation['install_path']
-            if os.path.exists(install_path):
-                shutil.rmtree(install_path)
+        # Successfully tested this version:
+        # !python C:/Users/Tyler/Documents/Dark_Age/uninstaller.py
 
-        # Also remove the stable_settings.cfg file
-        appdata_path = os.getenv('APPDATA')
-        stable_settings_path = os.path.join(appdata_path, 'Stormcloud', 'stable_settings.cfg')
-        if os.path.exists(stable_settings_path):
-            os.remove(stable_settings_path)
+        # TODO: Test code below once uninstall.exe compiled
+        if not self.existing_installation:
+            logging.error("No existing installation found to uninstall.")
+            return False
+
+        install_path = self.existing_installation.get('install_path')
+        if not install_path:
+            logging.error("Invalid installation path in existing installation settings.")
+            return False
+
+        uninstaller_path = os.path.join(install_path, "uninstall.exe")
+        if not os.path.exists(uninstaller_path):
+            logging.error(f"Uninstaller not found at {uninstaller_path}")
+            return False
+
+        try:
+            # Run the uninstaller and wait for it to complete
+            subprocess.run([uninstaller_path], check=True)
+            logging.info("Uninstallation completed successfully.")
+            return True
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Uninstallation failed with error code {e.returncode}")
+            return False
+        except Exception as e:
+            logging.error(f"An error occurred during uninstallation: {str(e)}")
+            return False
 
     def initializePage(self, id):
         super().initializePage(id)
         if id == 0:  # WelcomePage
             self.existing_installation = self.check_existing_installation()
+
+    def nextId(self):
+        current_id = self.currentId()
+        if current_id == 0:  # WelcomePage
+            return 1 if self.existing_installation else 2  # Skip ExistingInstallationPage if no existing installation
+        return super().nextId()
 
 class ExistingInstallationPage(QWizardPage):
     def __init__(self):
@@ -135,49 +112,43 @@ class ExistingInstallationPage(QWizardPage):
         self.message_label = QLabel()
         self.layout.addWidget(self.message_label)
         
-        self.repair_button = QPushButton("Repair Installation")
-        self.repair_button.clicked.connect(self.repair_installation)
-        self.layout.addWidget(self.repair_button)
+        self.uninstall_button = QPushButton("Uninstall and Reinstall")
+        self.uninstall_button.clicked.connect(self.uninstall_and_reinstall)
+        self.layout.addWidget(self.uninstall_button)
         
-        self.reinstall_button = QPushButton("Reinstall from Scratch")
-        self.reinstall_button.clicked.connect(self.reinstall_from_scratch)
-        self.layout.addWidget(self.reinstall_button)
-        
-        self.replace_button = QPushButton("Replace Existing Version")
-        self.replace_button.clicked.connect(self.replace_existing_version)
-        self.layout.addWidget(self.replace_button)
+        self.cancel_button = QPushButton("Cancel Installation")
+        self.cancel_button.clicked.connect(self.cancel_installation)
+        self.layout.addWidget(self.cancel_button)
         
         self.setLayout(self.layout)
 
     def initializePage(self):
         wizard = self.wizard()
-        if wizard.existing_installation is None:
-            self.message_label.setText("No existing installation detected.")
-            self.repair_button.hide()
-            self.reinstall_button.hide()
-            self.replace_button.hide()
-        elif wizard.corrupted_installation:
-            self.message_label.setText("Corrupted installation detected. Please choose an option:")
-            self.repair_button.show()
-            self.reinstall_button.show()
-            self.replace_button.hide()
+        if wizard.existing_installation:
+            self.message_label.setText("Existing installation detected. Please choose an option:")
+            self.uninstall_button.show()
+            self.cancel_button.show()
         else:
-            self.message_label.setText("Existing installation detected. Do you want to replace it?")
-            self.repair_button.hide()
-            self.reinstall_button.hide()
-            self.replace_button.show()
+            self.message_label.setText("No existing installation detected.")
+            self.uninstall_button.hide()
+            self.cancel_button.hide()
+            QTimer.singleShot(0, self.wizard().next)  # Automatically move to the next page
 
-    def repair_installation(self):
-        self.wizard().repair_installation()
-        self.wizard().next()
-
-    def reinstall_from_scratch(self):
+    def uninstall_and_reinstall(self):
         self.wizard().uninstall_existing_version()
         self.wizard().next()
 
-    def replace_existing_version(self):
-        self.wizard().uninstall_existing_version()
-        self.wizard().next()
+    def cancel_installation(self):
+        self.wizard().reject()
+
+    def initializePage(self):
+        wizard = self.wizard()
+        if wizard.existing_installation is None:
+            self.wizard().next()
+        else:
+            self.message_label.setText("Existing installation detected. Please choose an option:")
+            self.uninstall_button.show()
+            self.cancel_button.show()
 
 class WelcomePage(QWizardPage):
     def __init__(self):
@@ -432,9 +403,6 @@ class InstallPage(QWizardPage):
         self.install()
 
     def install(self):
-        if self.wizard().corrupted_installation:
-            self.repair_installation()
-
         if self.register_application():
             self.progress.setValue(90)
             logging.info("Successfully registered application with Windows")
