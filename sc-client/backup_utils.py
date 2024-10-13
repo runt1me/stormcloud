@@ -11,19 +11,19 @@ import traceback
 BACKUP_STATUS_NO_CHANGE = 0
 BACKUP_STATUS_CHANGE    = 1
 
-def perform_backup(paths,paths_recursive,backup_id,api_key,agent_id,secret_key,dbconn,ignore_hash,systray):
+def perform_backup(paths,paths_recursive,api_key,agent_id,secret_key,dbconn,ignore_hash,systray):
     logging.log(logging.INFO,"Beginning backup!")
     systray.update(hover_text="Stormcloud Backup Engine - Backing up now")
     
     if ignore_hash:
         logging.log(logging.INFO,"Ignoring the hash database and attempting to force backup of files.")
 
-    process_paths_nonrecursive(paths,backup_id,api_key,agent_id,secret_key,dbconn,ignore_hash)
-    process_paths_recursive(paths_recursive,backup_id,api_key,agent_id,secret_key,dbconn,ignore_hash)
+    process_paths_nonrecursive(paths,api_key,agent_id,secret_key,dbconn,ignore_hash)
+    process_paths_recursive(paths_recursive,api_key,agent_id,secret_key,dbconn,ignore_hash)
 
     systray.update(hover_text="Stormcloud Backup Engine")
 
-def process_paths_nonrecursive(paths,backup_id,api_key,agent_id,secret_key,dbconn,ignore_hash):
+def process_paths_nonrecursive(paths,api_key,agent_id,secret_key,dbconn,ignore_hash):
     for path in paths:
         try:
             logging.log(logging.INFO,"==   %s   ==" % path)
@@ -40,7 +40,7 @@ def process_paths_nonrecursive(paths,backup_id,api_key,agent_id,secret_key,dbcon
             logging.log(logging.WARN, "%s" % traceback.format_exc())
             logging.log(logging.WARN, "Caught exception when trying to process path %s: %s" % (path,e))
 
-def process_paths_recursive(paths,backup_id,api_key,agent_id,secret_key,dbconn,ignore_hash):
+def process_paths_recursive(paths,api_key,agent_id,secret_key,dbconn,ignore_hash):
     if not(paths):
         return
         
