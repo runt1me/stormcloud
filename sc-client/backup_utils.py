@@ -30,11 +30,11 @@ def process_paths_nonrecursive(paths,backup_id,api_key,agent_id,secret_key,dbcon
             path_obj = pathlib.Path(path)
 
             if path_obj.is_file():
-                process_file(path_obj,backup_id,api_key,agent_id,secret_key,dbconn,ignore_hash)
+                process_file(path_obj,api_key,agent_id,secret_key,dbconn,ignore_hash)
 
             elif path_obj.is_dir():
                 for file_obj in [p for p in path_obj.iterdir() if p.is_file()]:
-                    process_file(file_obj,backup_id,api_key,agent_id,secret_key,dbconn,ignore_hash)
+                    process_file(file_obj,api_key,agent_id,secret_key,dbconn,ignore_hash)
 
         except Exception as e:
             logging.log(logging.WARN, "%s" % traceback.format_exc())
@@ -49,7 +49,7 @@ def process_paths_recursive(paths,backup_id,api_key,agent_id,secret_key,dbconn,i
             logging.log(logging.INFO, "==   %s (-R)  ==" % path)
             path_obj = pathlib.Path(path)
 
-            process_one_path_recursive(path_obj,backup_id,api_key,agent_id,secret_key,dbconn,ignore_hash)
+            process_one_path_recursive(path_obj,api_key,agent_id,secret_key,dbconn,ignore_hash)
         except Exception as e:
             logging.log(logging.WARN, "Caught (higher-level) exception when trying to process recursive path %s: %s" % (path,e))
 
@@ -57,13 +57,13 @@ def process_one_path_recursive(target_path,api_key,agent_id,secret_key,dbconn,ig
     for file in target_path.iterdir():
         if file.is_dir():
             try:
-                process_one_path_recursive(file,backup_id,api_key,agent_id,secret_key,dbconn,ignore_hash)
+                process_one_path_recursive(file,api_key,agent_id,secret_key,dbconn,ignore_hash)
             except Exception as e:
                 logging.log(logging.WARN, "Caught (lower-level) exception when trying to process recursive path %s: %s" % (target_path,e))
         else:
-            process_file(file,backup_id,api_key,agent_id,secret_key,dbconn,ignore_hash)
+            process_file(file,api_key,agent_id,secret_key,dbconn,ignore_hash)
 
-def process_file(file_path_obj,backup_id,api_key,agent_id,secret_key,dbconn,ignore_hash):
+def process_file(file_path_obj,api_key,agent_id,secret_key,dbconn,ignore_hash):
     if not ignore_hash:
         status = check_hash_db(file_path_obj,dbconn)
     else:
@@ -75,7 +75,7 @@ def process_file(file_path_obj,backup_id,api_key,agent_id,secret_key,dbconn,igno
     elif status == BACKUP_STATUS_CHANGE:
         logging.log(logging.INFO,"Backing up file: %s" %file_path_obj.name)
 
-        ret = network_utils.ship_file_to_server(api_key,backup_id,agent_id,secret_key,file_path_obj.resolve())
+        ret = network_utils.ship_file_to_server(api_key,agent_id,secret_key,file_path_obj.resolve())
         if ret == 200:
             update_hash_db(file_path_obj, dbconn)
         else:

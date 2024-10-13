@@ -1,5 +1,3 @@
-import requests
-import json
 import time
 from time import sleep
 from datetime import datetime
@@ -18,7 +16,6 @@ import keepalive_utils
 import backup_utils
 import logging_utils
 import reconfigure_utils
-import network_utils
 
 from infi.systray import SysTrayIcon   # pip install infi.systray
 
@@ -55,12 +52,7 @@ def action_loop_and_sleep(settings, settings_file_path, dbconn, ignore_hash, sys
 
     while True:
         # Ingest settings file again in case settings have changed via reconfigure_utils thread
-        new_settings = read_yaml_settings_file(settings_file_path)
-
-        if (new_settings['BACKUP_PATHS'] != settings['BACKUP_PATHS'] or new_settings['RECURSIVE_BACKUP_PATHS'] != settings['RECURSIVE_BACKUP_PATHS']:
-            network_utils.sync_backup_folders(new_settings)
-
-        settings = new_settings
+        settings = read_yaml_settings_file(settings_file_path)
 
         cur_keepalive_freq = int(settings['KEEPALIVE_FREQ'])
         backup_paths           = settings['BACKUP_PATHS']
