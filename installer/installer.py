@@ -6,10 +6,14 @@ import platform
 import psutil      # pip install psutil
 import requests    # pip install requests
 import socket
-import sys
-import winshell    # pip install winshell
 import subprocess
+import sys
+import winreg
+import winshell    # pip install winshell
 import yaml        # pip install pyyaml
+
+from pathlib import Path
+from requests.exceptions import SSLError
 from win32com.client import Dispatch    # pip install pywin32
 
 # pip install pyqt5
@@ -17,42 +21,134 @@ from PyQt5.QtWidgets import QApplication, QVBoxLayout, QLabel, QPushButton, QPro
 from PyQt5.QtWidgets import QWizard, QWizardPage, QLineEdit, QTextEdit, QMessageBox, QFormLayout
 from PyQt5.QtWidgets import QCheckBox, QFileDialog, QScrollArea, QWidget, QHBoxLayout, QGridLayout
 from PyQt5.QtCore import Qt
-from requests.exceptions import SSLError
 
-from pathlib import Path
+def setup_logging():
+    log_path = os.path.join(os.getenv('TEMP'), 'stormcloud_install.log')
+    logging.basicConfig(filename=log_path, level=logging.INFO, 
+                        format='%(asctime)s - %(levelname)s - %(message)s')
 
 class Installer(QWizard):
     def __init__(self):
         super().__init__()
-        # TODO: logging - best practices for how to incorporate this?
-
         self.setWindowTitle("Stormcloud Installer")
         self.setFixedSize(640, 480)
 
-        # Scoping these variables to the installer so that I can use them later
-        self.system_info            = None
-        self.api_key                = None
-        self.target_folder          = None
-        self.install_directory      = None
-        self.backup_paths           = None
+        self.system_info = None
+        self.api_key = None
+        self.target_folder = None
+        self.install_directory = None
+        self.backup_paths = None
         self.backup_paths_recursive = None
+        self.existing_installation = None
 
         self.addPage(WelcomePage())
+        self.addPage(ExistingInstallationPage())
         self.addPage(APIKeyPage())
         self.addPage(SystemInfoPage())
         self.addPage(BackupPage())
         self.addPage(InstallPage())
         self.addPage(FinishPage())
 
-    def initialize_logging():
-        logging.basicConfig(
-            filename='install.log',
-            filemode='a',
-            format='%(asctime)s %(levelname)-8s %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S',
-            level=logging.DEBUG
-        )
+    def check_existing_installation(self):
+        appdata_path = os.getenv('APPDATA')
+        stable_settings_path = os.path.join(appdata_path, 'Stormcloud', 'stable_settings.cfg')
 
+        if not os.path.exists(stable_settings_path):
+            return None
+
+        with open(stable_settings_path, 'r') as f:
+            settings = json.load(f)
+
+        return settings
+
+    def uninstall_existing_version(self):
+        # Successfully tested this version:
+        # !python C:/Users/Tyler/Documents/Dark_Age/uninstaller.py
+
+        # TODO: Test code below once uninstall.exe compiled
+        if not self.existing_installation:
+            logging.error("No existing installation found to uninstall.")
+            return False
+
+        install_path = self.existing_installation.get('install_path')
+        if not install_path:
+            logging.error("Invalid installation path in existing installation settings.")
+            return False
+
+        uninstaller_path = os.path.join(install_path, "uninstall.exe")
+        if not os.path.exists(uninstaller_path):
+            logging.error(f"Uninstaller not found at {uninstaller_path}")
+            return False
+
+        try:
+            # Run the uninstaller and wait for it to complete
+            subprocess.run([uninstaller_path], check=True)
+            logging.info("Uninstallation completed successfully.")
+            return True
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Uninstallation failed with error code {e.returncode}")
+            return False
+        except Exception as e:
+            logging.error(f"An error occurred during uninstallation: {str(e)}")
+            return False
+
+    def initializePage(self, id):
+        super().initializePage(id)
+        if id == 0:  # WelcomePage
+            self.existing_installation = self.check_existing_installation()
+
+    def nextId(self):
+        current_id = self.currentId()
+        if current_id == 0:  # WelcomePage
+            return 1 if self.existing_installation else 2  # Skip ExistingInstallationPage if no existing installation
+        return super().nextId()
+
+class ExistingInstallationPage(QWizardPage):
+    def __init__(self):
+        super().__init__()
+        self.setTitle("Existing Installation")
+        
+        self.layout = QVBoxLayout()
+        self.message_label = QLabel()
+        self.layout.addWidget(self.message_label)
+        
+        self.uninstall_button = QPushButton("Uninstall and Reinstall")
+        self.uninstall_button.clicked.connect(self.uninstall_and_reinstall)
+        self.layout.addWidget(self.uninstall_button)
+        
+        self.cancel_button = QPushButton("Cancel Installation")
+        self.cancel_button.clicked.connect(self.cancel_installation)
+        self.layout.addWidget(self.cancel_button)
+        
+        self.setLayout(self.layout)
+
+    def initializePage(self):
+        wizard = self.wizard()
+        if wizard.existing_installation:
+            self.message_label.setText("Existing installation detected. Please choose an option:")
+            self.uninstall_button.show()
+            self.cancel_button.show()
+        else:
+            self.message_label.setText("No existing installation detected.")
+            self.uninstall_button.hide()
+            self.cancel_button.hide()
+            QTimer.singleShot(0, self.wizard().next)  # Automatically move to the next page
+
+    def uninstall_and_reinstall(self):
+        self.wizard().uninstall_existing_version()
+        self.wizard().next()
+
+    def cancel_installation(self):
+        self.wizard().reject()
+
+    def initializePage(self):
+        wizard = self.wizard()
+        if wizard.existing_installation is None:
+            self.wizard().next()
+        else:
+            self.message_label.setText("Existing installation detected. Please choose an option:")
+            self.uninstall_button.show()
+            self.cancel_button.show()
 
 class WelcomePage(QWizardPage):
     def __init__(self):
@@ -279,17 +375,17 @@ class InstallPage(QWizardPage):
     def __init__(self):
         super().__init__()
 
-        self.SERVER_NAME="www2.darkage.io"
-        self.SERVER_PORT_API=8443
-        self.SERVER_PORT_DOWNLOAD=443
-        self.STORMCLOUD_VERSION="1.0.0"
+        self.SERVER_NAME = "www2.darkage.io"
+        self.SERVER_PORT_API = 8443
+        self.SERVER_PORT_DOWNLOAD = 443
+        self.STORMCLOUD_VERSION = "1.0.0"
 
-        self.stormcloud_client_url   = "https://%s:%s/sc-dist/windows-x86_64-stormcloud-client-%s.exe" % (
+        self.stormcloud_client_url = "https://%s:%s/sc-dist/windows-x86_64-stormcloud-client-%s.exe" % (
             self.SERVER_NAME,
             self.SERVER_PORT_DOWNLOAD,
             self.STORMCLOUD_VERSION
         )
-        self.register_new_device_url   = "https://%s:%s/api/register-new-device" % (
+        self.register_new_device_url = "https://%s:%s/api/register-new-device" % (
             self.SERVER_NAME,
             self.SERVER_PORT_API
         )
@@ -303,16 +399,19 @@ class InstallPage(QWizardPage):
         self.setLayout(layout)
 
     def initializePage(self):
-        # TODO: need to find the right place to call self.install()
-        # Need to make the progress bar move appropriately as functions complete
-        # Need to figure out how to display text on the screen while bar moves
-        # i.e. "registering device", "configuring settings", "downloading stormcloud client", "configuring startup process"
         self.progress.setValue(0)
         self.install()
 
     def install(self):
+        if self.register_application():
+            self.progress.setValue(90)
+            logging.info("Successfully registered application with Windows")
+        else:
+            QMessageBox.warning(self, "Warning", "Failed to register application with Windows. Some features may not work correctly.")
+            logging.error("Failed to register application with Windows")
+
+        
         def get_result(result, result_type):
-            # Input checks
             valid_result_types = ('register', 'download', 'configure', 'persist')
             if result_type not in valid_result_types:
                 QMessageBox.warning(self, "Error", 'Invalid result_type provided. Valid result types include: `{}`'.format("`, `".join(valid_result_types)))
@@ -368,8 +467,77 @@ class InstallPage(QWizardPage):
         if not get_result(persist_result, result_type='persist'):
             QMessageBox.warning(self, "Error", "Failed to add stormcloud to startup process. Please try again.")
 
+        # Create stable_settings.cfg
+        if not self.create_stable_settings():
+            QMessageBox.warning(self, "Error", "Failed to create stable settings file. Please try again.")
+
+        self.register_application()
+        
         self.progress.setValue(100)
 
+    def repair_installation(self):
+        # Delete corrupted files before creating new ones
+        if os.path.exists(self.wizard().install_directory):
+            for file in os.listdir(self.wizard().install_directory):
+                file_path = os.path.join(self.wizard().install_directory, file)
+                try:
+                    if os.path.isfile(file_path):
+                        os.unlink(file_path)
+                except Exception as e:
+                    print(f"Failed to delete {file_path}. Reason: {e}")
+
+    def register_application(self):
+        try:
+            # Ensure the install directory ends with 'Stormcloud'
+            # if not self.wizard().install_directory.endswith('Stormcloud'):
+            #     self.wizard().install_directory = os.path.join(self.wizard().install_directory, 'Stormcloud')
+
+            key_path = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Stormcloud"
+            try:
+                uninstall_key = winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_ALL_ACCESS)
+            except WindowsError as create_error:
+                logging.error(f"Failed to create registry key: {str(create_error)}")
+                return False
+
+            try:
+                winreg.SetValueEx(uninstall_key, "DisplayName", 0, winreg.REG_SZ, "Stormcloud Backup")
+                winreg.SetValueEx(uninstall_key, "UninstallString", 0, winreg.REG_SZ, os.path.join(self.wizard().install_directory, "uninstall.exe"))
+                winreg.SetValueEx(uninstall_key, "DisplayVersion", 0, winreg.REG_SZ, self.STORMCLOUD_VERSION)
+                winreg.SetValueEx(uninstall_key, "Publisher", 0, winreg.REG_SZ, "Your Company Name")
+                winreg.SetValueEx(uninstall_key, "DisplayIcon", 0, winreg.REG_SZ, os.path.join(self.wizard().install_directory, "stormcloud.exe"))
+                winreg.SetValueEx(uninstall_key, "InstallLocation", 0, winreg.REG_SZ, self.wizard().install_directory)
+            except WindowsError as set_error:
+                logging.error(f"Failed to set registry values: {str(set_error)}")
+                return False
+            finally:
+                winreg.CloseKey(uninstall_key)
+
+            logging.info("Successfully registered application in Windows registry")
+            return True
+        except Exception as e:
+            logging.error(f"Unexpected error in register_application: {str(e)}")
+            return False
+    
+    def create_stable_settings(self):
+        try:
+            appdata_path = os.getenv('APPDATA')
+            stormcloud_folder = os.path.join(appdata_path, 'Stormcloud')
+            os.makedirs(stormcloud_folder, exist_ok=True)
+
+            stable_settings_path = os.path.join(stormcloud_folder, 'stable_settings.cfg')
+            
+            settings = {
+                'install_path': self.wizard().install_directory
+            }
+
+            with open(stable_settings_path, 'w') as f:
+                json.dump(settings, f, indent=4)
+
+            return True
+        except Exception as e:
+            logging.error(f"Failed to create stable settings file: {e}")
+            return False
+    
     def register_new_device(self):
         headers = {"Content-Type": "application/json"}
 
@@ -437,25 +605,55 @@ class InstallPage(QWizardPage):
         # Fail case
         return (0, None)
 
-    def configure_persistence(self, os_info, sc_client_installed_path):
-        # TODO: need exception handling for if there is already a link there, this will break
-        # Ideally need to check for artifacts to determine if its already installed
-        sc_client_installed_path_obj = Path(sc_client_installed_path)
-        try:
-            shortcut_path = os.getenv('APPDATA') + "\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\Stormcloud Backup Engine.lnk"
-            target_path   = str(sc_client_installed_path_obj)
-            working_dir   = str(sc_client_installed_path_obj.parent)
+    def download_and_install_uninstaller(self):
+        # Download uninstaller
+        uninstaller_url = "https://%s:%s/sc-dist/windows-x86_64-stormcloud-uninstaller.exe" % (
+            self.SERVER_NAME,
+            self.SERVER_PORT_DOWNLOAD
+        )
+        uninstaller_path = os.path.join(self.wizard().install_directory, "uninstall.exe")
+        
+        download_result, _ = self.download_to_folder(uninstaller_url, self.wizard().install_directory, "uninstall.exe")
+        if not download_result:
+            logging.error("Failed to download uninstaller")
+            return False
 
-            shell = Dispatch('Wscript.Shell')
+        return True
+
+    def configure_persistence(self, os_info, sc_client_installed_path):
+        try:
+            sc_client_installed_path_obj = Path(sc_client_installed_path)
+            
+            # Create Stormcloud folder in Start Menu
+            start_menu_programs = os.path.join(os.environ['APPDATA'], 'Microsoft', 'Windows', 'Start Menu', 'Programs')
+            stormcloud_folder = os.path.join(start_menu_programs, 'Stormcloud')
+            os.makedirs(stormcloud_folder, exist_ok=True)
+
+            shortcut_path = os.path.join(stormcloud_folder, 'Stormcloud Backup Engine.lnk')
+            target_path = str(sc_client_installed_path_obj)
+            working_dir = str(sc_client_installed_path_obj.parent)
+
+            shell = Dispatch('WScript.Shell')
             shortcut = shell.CreateShortCut(shortcut_path)
             shortcut.Targetpath = target_path
             shortcut.WorkingDirectory = working_dir
             shortcut.save()
 
-            return (1, shortcut_path)
+            # Add to Windows startup using registry
+            key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+            try:
+                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_ALL_ACCESS)
+                winreg.SetValueEx(key, "Stormcloud Backup Engine", 0, winreg.REG_SZ, target_path)
+                winreg.CloseKey(key)
+            except WindowsError as e:
+                logging.error(f"Failed to add Stormcloud to startup: {str(e)}")
+                return False
+
+            logging.info(f"Successfully created shortcut and added to startup: {shortcut_path}")
+            return True
         except Exception as e:
-            logging.log(logging.ERROR, "Failed to create shortcut: %s" % e)
-            return (0, None)
+            logging.error(f"Failed to configure persistence: {str(e)}")
+            return False
 
     def register_initial_backup_folders(self, api_key, agent_id, folders):
         url = "https://apps.darkage.io/darkage/api/register_backup_folders.cfm"
