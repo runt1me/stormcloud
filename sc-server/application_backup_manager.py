@@ -4,14 +4,23 @@ import psutil
 import subprocess
 import logging
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                             QLabel, QPushButton, QListWidget, QListWidgetItem, QMessageBox, QFileDialog, 
-                             QGridLayout, QFormLayout, QSizePolicy, QCheckBox, QComboBox, QFrame)
-from PyQt5.QtCore import Qt, QUrl, QPoint
-from PyQt5.QtGui import QDesktopServices, QFont, QIcon, QColor, QPalette
+                             QLabel, QPushButton, QListWidget, QListWidgetItem,
+                             QMessageBox, QFileDialog, QGridLayout, QFormLayout,
+                             QScrollArea, QSizePolicy, QCheckBox, QComboBox, QFrame,
+                             QCalendarWidget, QTimeEdit, QStackedWidget, QGroupBox)
+from PyQt5.QtCore import Qt, QUrl, QPoint, QDate, QTime, pyqtSignal
+from PyQt5.QtGui import QDesktopServices, QFont, QIcon, QColor, QPalette, QPainter, QTextCharFormat
 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', 
                     filename='stormcloud_app.log', filemode='a')
+
+def ordinal(n):
+    if 10 <= n % 100 <= 20:
+        suffix = 'th'
+    else:
+        suffix = {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
+    return f"{n}{suffix}"
 
 class StormcloudMessageBox(QMessageBox):
     def __init__(self, parent=None):
@@ -60,21 +69,25 @@ class StormcloudApp(QMainWindow):
         super().__init__()
         self.setWindowTitle('Stormcloud Backup Manager')
         self.setGeometry(100, 100, 800, 600)
+        self.backup_schedule = {'weekly': {}, 'monthly': {}}
         self.init_ui()
         self.load_settings()
         self.update_status()
         self.load_backup_paths()
         self.load_properties()
+        self.apply_backup_mode()
 
     def init_ui(self):
         central_widget = QWidget(self)
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
 
-        # Header
+        # Header with centered Start Backup Engine button
         header_widget = QWidget()
         header_layout = QHBoxLayout(header_widget)
+        header_layout.addStretch()
         self.start_button = QPushButton('Start Backup Engine')
+        self.start_button.setFixedSize(200, 40)  # Make the button larger
         self.start_button.clicked.connect(self.toggle_backup_engine)
         header_layout.addWidget(self.start_button)
         header_layout.addStretch()
@@ -115,21 +128,44 @@ class StormcloudApp(QMainWindow):
                 padding-left: 10px;
             }
             QPushButton {
-                background-color: #333;
+                background-color: #4285F4;
                 border: none;
+                font-size: 16px;
                 padding: 5px 10px;
                 border-radius: 5px;
             }
             QPushButton:hover {
-                background-color: #444;
+                background-color: #5294FF;
+            }
+            QPushButton#start_button {
+                background-color: #4285F4;
+                color: white;
+                font-size: 16px;
+                font-weight: bold;
+            }
+            QPushButton#start_button:hover {
+                background-color: #5294FF;
+            }
+            QPushButton#start_button:pressed {
+                background-color: #3275E4;
+            }
+            QPushButton#FolderBackupButton {
+                font-size: 14px;
             }
             QLabel {
                 font-size: 14px;
             }
             QListWidget {
                 background-color: #333;
-                border: none;
+                border: 1px solid #666;
                 border-radius: 5px;
+            }
+            QListWidget::item {
+                padding: 5px;
+            }
+            QListWidget::item:selected {
+                background-color: #7baaf7;
+                color: #202124;
             }
             #PanelWidget {
                 background-color: #333;
@@ -191,6 +227,27 @@ class StormcloudApp(QMainWindow):
                 width: 1px;
                 height: 1px;
             }
+            QWidget:disabled {
+                color: #888;
+            }
+            QComboBox:disabled, QTimeEdit:disabled {
+                background-color: #555;
+                color: #888;
+            }
+            QPushButton:disabled {
+                background-color: #555;
+                color: #888;
+            }
+            QCheckBox {
+                spacing: 5px;
+            }
+            #FootnoteLabel {
+                color: #999;
+                font-size: 14px;
+                font-style: italic;
+                padding-top: 5px;
+                padding-bottom: 5px;
+            }
         """
 
     def setup_grid_layout(self):
@@ -235,13 +292,63 @@ class StormcloudApp(QMainWindow):
 
     def create_backup_schedule_panel(self):
         content = QWidget()
-        content.setObjectName("ContentWidget")
+        content.setObjectName("BackupSchedulePanel")
         layout = QVBoxLayout(content)
-        
-        # You can add content here in the future
-        layout.addStretch(1)  # This will push any future content to the top
 
-        return self.create_panel('Backup Schedule', content, '#3498DB')  # You can change the color as needed
+        schedule_calendar = BackupScheduleCalendar()
+        schedule_calendar.schedule_updated.connect(self.update_backup_schedule)
+        layout.addWidget(schedule_calendar)
+
+        return self.create_panel('Backup Schedule', content, '#3498DB')
+
+    def save_backup_settings(self):
+        if not hasattr(self, 'settings_cfg_path') or not os.path.exists(self.settings_cfg_path):
+            StormcloudMessageBox.critical(self, 'Error', 'Settings file not found.')
+            return
+
+        try:
+            with open(self.settings_cfg_path, 'r') as f:
+                settings = f.read().splitlines()
+
+            # Update or add BACKUP_MODE
+            backup_mode_line = f"BACKUP_MODE: {self.backup_mode}"
+            mode_index = next((i for i, line in enumerate(settings) if line.startswith("BACKUP_MODE:")), -1)
+            if mode_index >= 0:
+                settings[mode_index] = backup_mode_line
+            else:
+                settings.append(backup_mode_line)
+
+            # Update or add BACKUP_SCHEDULE
+            schedule_start = next((i for i, line in enumerate(settings) if line.startswith("BACKUP_SCHEDULE:")), -1)
+            if schedule_start >= 0:
+                # Remove old schedule
+                while schedule_start + 1 < len(settings) and settings[schedule_start + 1].startswith("-"):
+                    settings.pop(schedule_start + 1)
+            else:
+                schedule_start = len(settings)
+                settings.append("BACKUP_SCHEDULE:")
+
+            # Always write the schedule, regardless of the current mode
+            for schedule_type in ['weekly', 'monthly']:
+                if self.backup_schedule[schedule_type]:
+                    settings.insert(schedule_start + 1, f"- {schedule_type}:")
+                    for day, times in self.backup_schedule[schedule_type].items():
+                        time_strings = [time.toString('HH:mm') for time in times]
+                        settings.insert(schedule_start + 2, f"  - {day}: {', '.join(time_strings)}")
+                    schedule_start += 2
+
+            # Write updated settings back to file
+            with open(self.settings_cfg_path, 'w') as f:
+                f.write("\n".join(settings))
+
+            logging.info('Backup mode and schedule settings updated successfully.')
+        except Exception as e:
+            logging.error('Failed to update backup mode and schedule settings: %s', e)
+            StormcloudMessageBox.critical(self, 'Error', f'Failed to update backup mode and schedule settings: {e}')
+
+    def update_backup_schedule(self, schedule):
+        self.backup_schedule = schedule
+        self.save_backup_settings()
 
     def create_configuration_dashboard(self):
         content = QWidget()
@@ -289,13 +396,13 @@ class StormcloudApp(QMainWindow):
             status_layout.addWidget(self.status_value_text)
             layout.addLayout(status_layout)
 
-            self.component2_dropdown = QComboBox()
-            self.component2_dropdown.addItems(['Option 1', 'Option 2', 'Option 3'])
-            self.component2_dropdown.currentIndexChanged.connect(self.on_component2_changed)
-            component2_layout = QHBoxLayout()
-            component2_layout.addWidget(QLabel('Component 2:'))
-            component2_layout.addWidget(self.component2_dropdown)
-            layout.addLayout(component2_layout)
+            self.backup_mode_dropdown = QComboBox()
+            self.backup_mode_dropdown.addItems(['Realtime', 'Scheduled'])
+            self.backup_mode_dropdown.currentIndexChanged.connect(self.on_backup_mode_changed)
+            backup_mode_layout = QHBoxLayout()
+            backup_mode_layout.addWidget(QLabel('Backup Mode:'))
+            backup_mode_layout.addWidget(self.backup_mode_dropdown)
+            layout.addLayout(backup_mode_layout)
 
         elif title == "Properties":
             properties_layout = QFormLayout()
@@ -304,37 +411,74 @@ class StormcloudApp(QMainWindow):
             properties_layout.addRow('AGENT_ID:', self.agent_id_value)
             properties_layout.addRow('API_KEY:', self.api_key_value)
             layout.addLayout(properties_layout)
-        
-            # agent_id_layout = QFormLayout()
-            # agent_id_layout.addWidget(QLabel('AGENT_ID:'))
-            # self.agent_id_value = QLabel('Unknown')
-            # agent_id_layout.addRow('AGENT_ID:', self.agent_id_value)
-            # layout.addLayout(agent_id_layout)
-
-            # api_key_layout = QFormLayout()
-            # api_key_layout.addWidget(QLabel('API_KEY:'))
-            # self.api_key_value = QLabel('Unknown')
-            # api_key_layout.addRow('API_KEY:', self.api_key_value)
-            # layout.addLayout(api_key_layout)
 
         layout.addStretch(1)  # Add stretch to push content to the top
         return subpanel
 
-    def on_component2_changed(self, index):
-        selected_option = self.component2_dropdown.currentText()
-        logging.info(f"Component 2 option changed to: {selected_option}")
+    def save_backup_mode(self):
+        if not hasattr(self, 'settings_cfg_path') or not os.path.exists(self.settings_cfg_path):
+            StormcloudMessageBox.critical(self, 'Error', 'Settings file not found.')
+            return
 
-    # def create_properties_panel(self):
-        # content = QWidget()
-        # content.setObjectName("ContentWidget")
-        # layout = QFormLayout(content)
-        
-        # self.agent_id_value = QLabel('Unknown')
-        # self.api_key_value = QLabel('Unknown')
-        # layout.addRow('AGENT_ID:', self.agent_id_value)
-        # layout.addRow('API_KEY:', self.api_key_value)
+        try:
+            with open(self.settings_cfg_path, 'r') as f:
+                settings = f.read().splitlines()
 
-        # return self.create_panel('Properties', content, '#9B59B6')
+            # Update or add BACKUP_MODE
+            backup_mode_line = f"BACKUP_MODE: {self.backup_mode}"
+            mode_index = next((i for i, line in enumerate(settings) if line.startswith("BACKUP_MODE:")), -1)
+            if mode_index >= 0:
+                settings[mode_index] = backup_mode_line
+            else:
+                settings.append(backup_mode_line)
+
+            # Update or add BACKUP_SCHEDULE if mode is Scheduled
+            schedule_start = next((i for i, line in enumerate(settings) if line.startswith("BACKUP_SCHEDULE:")), -1)
+            if schedule_start >= 0:
+                # Remove old schedule
+                while schedule_start + 1 < len(settings) and settings[schedule_start + 1].startswith("-"):
+                    settings.pop(schedule_start + 1)
+            else:
+                schedule_start = len(settings)
+                settings.append("BACKUP_SCHEDULE:")
+
+            if self.backup_mode == 'Scheduled':
+                for schedule_type in ['weekly', 'monthly']:
+                    if self.backup_schedule[schedule_type]:
+                        settings.insert(schedule_start + 1, f"- {schedule_type}:")
+                        for day, times in self.backup_schedule[schedule_type].items():
+                            time_strings = [time.toString('HH:mm') for time in times]
+                            settings.insert(schedule_start + 2, f"  - {day}: {', '.join(time_strings)}")
+                        schedule_start += 2
+
+            # Write updated settings back to file
+            with open(self.settings_cfg_path, 'w') as f:
+                f.write("\n".join(settings))
+
+            logging.info('Backup mode and schedule settings updated successfully.')
+        except Exception as e:
+            logging.error('Failed to update backup mode and schedule settings: %s', e)
+            StormcloudMessageBox.critical(self, 'Error', f'Failed to update backup mode and schedule settings: {e}')
+
+    def on_backup_mode_changed(self, index):
+        mode = self.backup_mode_dropdown.currentText()
+        self.backup_mode = mode
+        self.toggle_backup_schedule_panel(mode == 'Scheduled')
+        if mode == 'Scheduled':
+            self.update_backup_schedule_widget()
+        self.save_backup_settings()
+        logging.info(f"Backup mode changed to: {mode}")
+
+    def toggle_backup_schedule_panel(self, enabled):
+        # Find the Backup Schedule panel and enable/disable it
+        for i in range(self.grid_layout.count()):
+            widget = self.grid_layout.itemAt(i).widget()
+            if isinstance(widget, QWidget) and widget.findChild(QLabel, "HeaderLabel").text() == 'Backup Schedule':
+                content_widget = widget.findChild(QWidget, "ContentWidget")
+                if content_widget:
+                    content_widget.setEnabled(enabled)
+                    content_widget.setStyleSheet(f"QWidget {{ background-color: {'#333' if enabled else '#555'}; }}")
+                break
 
     def create_web_links_panel(self):
         content = QWidget()
@@ -349,18 +493,47 @@ class StormcloudApp(QMainWindow):
         
         return self.create_panel('Stormcloud Web', content, '#3498DB')
 
+    def remove_backup_folder(self):
+        current_item = self.backup_paths_list.currentItem()
+        if current_item:
+            folder = current_item.data(Qt.UserRole)
+            row = self.backup_paths_list.row(current_item)
+            self.backup_paths_list.takeItem(row)
+            
+            if folder in self.backup_paths:
+                self.backup_paths.remove(folder)
+            if folder in self.recursive_backup_paths:
+                self.recursive_backup_paths.remove(folder)
+            
+            self.update_settings_file()
+
     def create_backed_up_folders_panel(self):
         content = QWidget()
         content.setObjectName("ContentWidget")
         layout = QVBoxLayout(content)
 
         self.backup_paths_list = QListWidget()
-        self.backup_paths_list.setSelectionMode(QListWidget.NoSelection)
+        self.backup_paths_list.setSelectionMode(QListWidget.SingleSelection)
         layout.addWidget(self.backup_paths_list)
 
-        add_folder_button = QPushButton("Add Folder to Backup")
+        footnote = QLabel("Check the box to include subfolders in the backup.")
+        footnote.setObjectName("FootnoteLabel")
+        footnote.setWordWrap(True)
+        layout.addWidget(footnote)
+
+        buttons_layout = QHBoxLayout()
+        
+        add_folder_button = QPushButton("Add Folder")
+        add_folder_button.setObjectName("FolderBackupButton")
         add_folder_button.clicked.connect(self.add_backup_folder)
-        layout.addWidget(add_folder_button)
+        buttons_layout.addWidget(add_folder_button)
+
+        remove_folder_button = QPushButton("Remove Selected")
+        remove_folder_button.setObjectName("FolderBackupButton")
+        remove_folder_button.clicked.connect(self.remove_backup_folder)
+        buttons_layout.addWidget(remove_folder_button)
+
+        layout.addLayout(buttons_layout)
 
         return self.create_panel('Backed Up Folders', content, '#F1C40F')
 
@@ -369,14 +542,42 @@ class StormcloudApp(QMainWindow):
         if folder:
             self.add_folder_to_backup(folder)
             
+    def create_folder_item_widget(self, folder, recursive):
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(5, 2, 5, 2)
+
+        checkbox = QCheckBox()
+        checkbox.setChecked(recursive)
+        checkbox.stateChanged.connect(lambda state, f=folder: self.toggle_recursive(f, state == Qt.Checked))
+
+        label = QLabel(folder)
+        label.setWordWrap(True)
+
+        layout.addWidget(checkbox)
+        layout.addWidget(label, stretch=1)
+        layout.setAlignment(Qt.AlignLeft)
+
+        return widget
+            
     def add_folder_to_backup(self, folder, recursive=False):
-        if recursive:
+        # Check if the folder is already in the list
+        for i in range(self.backup_paths_list.count()):
+            item = self.backup_paths_list.item(i)
+            if item.data(Qt.UserRole) == folder:
+                return  # Folder already exists, don't add it again
+
+        item = QListWidgetItem(self.backup_paths_list)
+        widget = self.create_folder_item_widget(folder, recursive)
+        item.setSizeHint(widget.sizeHint())
+        item.setData(Qt.UserRole, folder)
+        self.backup_paths_list.setItemWidget(item, widget)
+
+        # Only add to the lists if not already present
+        if recursive and folder not in self.recursive_backup_paths:
             self.recursive_backup_paths.append(folder)
-        else:
+        elif not recursive and folder not in self.backup_paths:
             self.backup_paths.append(folder)
-        
-        self.update_backup_paths()
-        self.update_settings_file()
 
     def update_settings_file(self):
         if not hasattr(self, 'settings_cfg_path') or not os.path.exists(self.settings_cfg_path):
@@ -398,7 +599,6 @@ class StormcloudApp(QMainWindow):
                 f.write("\n".join(settings))
 
             logging.info('Settings file updated successfully.')
-            self.update_backup_paths()  # Refresh the UI
         except Exception as e:
             logging.error('Failed to update settings file: %s', e)
             StormcloudMessageBox.critical(self, 'Error', f'Failed to update settings file: {e}')
@@ -426,6 +626,55 @@ class StormcloudApp(QMainWindow):
         link_button.setProperty('clickable', 'true')
         layout.addWidget(link_button)
 
+    def update_backup_schedule_widget(self):
+        backup_schedule_panel = self.findChild(QWidget, "BackupSchedulePanel")
+        if backup_schedule_panel:
+            backup_calendar = backup_schedule_panel.findChild(BackupScheduleCalendar)
+            if backup_calendar:
+                backup_calendar.set_schedule(self.backup_schedule)
+
+    def load_backup_mode(self):
+        with open(self.settings_cfg_path, 'r') as f:
+            settings = f.read().splitlines()
+
+        self.backup_mode = 'Realtime'  # Default value
+        for line in settings:
+            if line.startswith("BACKUP_MODE:"):
+                self.backup_mode = line.split(":")[1].strip()
+                break
+        else:
+            # If BACKUP_MODE is not found, add it with default value
+            with open(self.settings_cfg_path, 'a') as f:
+                f.write("\nBACKUP_MODE: Realtime")
+
+    def apply_backup_mode(self):
+        index = self.backup_mode_dropdown.findText(self.backup_mode)
+        if index >= 0:
+            self.backup_mode_dropdown.setCurrentIndex(index)
+        
+        is_scheduled = self.backup_mode == 'Scheduled'
+        self.toggle_backup_schedule_panel(is_scheduled)
+        
+        if is_scheduled:
+            self.update_backup_schedule_widget()
+
+    def load_backup_schedule(self):
+        with open(self.settings_cfg_path, 'r') as f:
+            settings = f.read().splitlines()
+
+        self.backup_schedule = {'weekly': {}, 'monthly': {}}
+        current_schedule = None
+        for line in settings:
+            if line.startswith("BACKUP_SCHEDULE:"):
+                continue
+            elif line.startswith("- weekly:"):
+                current_schedule = self.backup_schedule['weekly']
+            elif line.startswith("- monthly:"):
+                current_schedule = self.backup_schedule['monthly']
+            elif line.startswith("  - ") and current_schedule is not None:
+                day, times = line[4:].split(": ")
+                current_schedule[day] = [QTime.fromString(t.strip(), "HH:mm") for t in times.split(',')]
+
     def load_settings(self):
         appdata_path = os.getenv('APPDATA')
         settings_path = os.path.join(appdata_path, 'Stormcloud', 'stable_settings.cfg')
@@ -444,6 +693,10 @@ class StormcloudApp(QMainWindow):
         if not os.path.exists(self.settings_cfg_path):
             logging.error('Configuration file not found at %s', self.settings_cfg_path)
             StormcloudMessageBox.critical(self, 'Error', 'Configuration file not found in the installation directory.')
+            return
+
+        self.load_backup_mode()
+        self.load_backup_schedule()
 
     def load_backup_paths(self):
         if not hasattr(self, 'settings_cfg_path') or not os.path.exists(self.settings_cfg_path):
@@ -484,38 +737,29 @@ class StormcloudApp(QMainWindow):
             elif line.startswith("API_KEY:"):
                 self.api_key_value.setText(line.split(":")[1].strip())
 
-    def toggle_recursive(self, path, recursive):
-        if recursive and path in self.backup_paths:
-            self.backup_paths.remove(path)
-            self.recursive_backup_paths.append(path)
-        elif not recursive and path in self.recursive_backup_paths:
-            self.recursive_backup_paths.remove(path)
-            self.backup_paths.append(path)
+    def toggle_recursive(self, folder, recursive):
+        if recursive and folder in self.backup_paths:
+            self.backup_paths.remove(folder)
+            self.recursive_backup_paths.append(folder)
+        elif not recursive and folder in self.recursive_backup_paths:
+            self.recursive_backup_paths.remove(folder)
+            self.backup_paths.append(folder)
         
         self.update_settings_file()
 
+    def add_folder_to_list(self, folder, recursive):
+        item = QListWidgetItem(self.backup_paths_list)
+        widget = self.create_folder_item_widget(folder, recursive)
+        item.setSizeHint(widget.sizeHint())
+        item.setData(Qt.UserRole, folder)
+        self.backup_paths_list.setItemWidget(item, widget)
+
     def update_backup_paths(self):
         self.backup_paths_list.clear()
-        for path in self.backup_paths + self.recursive_backup_paths:
-            item = QListWidgetItem(self.backup_paths_list)
-            widget = QWidget()
-            layout = QHBoxLayout(widget)
-            
-            checkbox = QCheckBox()
-            checkbox.setChecked(path in self.recursive_backup_paths)
-            checkbox.stateChanged.connect(lambda state, p=path: self.toggle_recursive(p, state == Qt.Checked))
-            
-            label = QLabel(path)
-            label.setWordWrap(True)
-            
-            layout.addWidget(checkbox)
-            layout.addWidget(label, stretch=1)
-            layout.setContentsMargins(5, 2, 5, 2)
-            layout.setAlignment(Qt.AlignLeft)
-            widget.setLayout(layout)
-            
-            item.setSizeHint(widget.sizeHint())
-            self.backup_paths_list.setItemWidget(item, widget)
+        for path in self.backup_paths:
+            self.add_folder_to_list(path, False)
+        for path in self.recursive_backup_paths:
+            self.add_folder_to_list(path, True)
 
     def update_status(self):
         running = self.is_backup_engine_running()
@@ -568,6 +812,425 @@ class StormcloudApp(QMainWindow):
             StormcloudMessageBox.critical(self, 'Error', f'Failed to stop backup engine: {e}')
         finally:
             self.update_status()
+
+# Calendar Widget
+# ---------------
+
+class TimeSlot(QPushButton):
+    clicked_with_time = pyqtSignal(QTime)
+
+    def __init__(self, time):
+        super().__init__()
+        self.time = time
+        self.setFixedSize(80, 30)
+        self.setText(time.toString("hh:mm"))
+        self.setCheckable(True)
+        self.clicked.connect(self.emit_clicked_with_time)
+
+    def emit_clicked_with_time(self):
+        self.clicked_with_time.emit(self.time)
+    schedule_updated = pyqtSignal(dict)
+
+    def __init__(self):
+        super().__init__()
+        self.initUI()
+        self.schedule = {day: [] for day in range(7)}
+
+    def initUI(self):
+        layout = QVBoxLayout(self)
+
+        # Days of the week
+        days_layout = QHBoxLayout()
+        days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        for day in days:
+            label = QLabel(day)
+            label.setAlignment(Qt.AlignCenter)
+            days_layout.addWidget(label)
+        layout.addLayout(days_layout)
+
+        # Time slots
+        time_layout = QGridLayout()
+        for col, day in enumerate(range(7)):
+            for row, hour in enumerate(range(24)):
+                for minute in [0, 30]:
+                    time = QTime(hour, minute)
+                    slot = TimeSlot(time)
+                    slot.clicked_with_time.connect(lambda t, d=day: self.toggle_time_slot(d, t))
+                    time_layout.addWidget(slot, row*2 + (minute//30), col)
+
+        # Make the time layout scrollable
+        scroll_area = QScrollArea()
+        scroll_widget = QWidget()
+        scroll_widget.setLayout(time_layout)
+        scroll_area.setWidget(scroll_widget)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        layout.addWidget(scroll_area)
+
+    def toggle_time_slot(self, day, time):
+        if time in self.schedule[day]:
+            self.schedule[day].remove(time)
+        else:
+            self.schedule[day].append(time)
+        self.schedule_updated.emit(self.schedule)
+
+    def set_schedule(self, schedule):
+        self.schedule = schedule
+
+class BackupScheduleCalendar(QWidget):
+    schedule_updated = pyqtSignal(dict)
+
+    def __init__(self):
+        super().__init__()
+        self.schedule = {'weekly': {}, 'monthly': {}}
+        self.initUI()
+        self.apply_styles()
+
+    def initUI(self):
+        main_layout = QHBoxLayout(self)
+
+        # Left side: Schedule setup
+        schedule_setup = QWidget()
+        schedule_layout = QVBoxLayout(schedule_setup)
+
+        # Horizontal layout for Weekly and Monthly sections
+        backup_types_layout = QHBoxLayout()
+
+        # Weekly scheduling
+        weekly_group = QGroupBox("Weekly Backup")
+        weekly_layout = QVBoxLayout(weekly_group)
+
+        self.day_combo = QComboBox()
+        self.day_combo.addItems(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'])
+        weekly_layout.addWidget(self.day_combo)
+
+        self.weekly_time_edit = QTimeEdit()
+        self.weekly_time_edit.setDisplayFormat("hh:mm AP")
+        weekly_layout.addWidget(self.weekly_time_edit)
+
+        self.add_weekly_button = QPushButton("Add Weekly Backup")
+        self.add_weekly_button.clicked.connect(self.add_weekly_backup)
+        weekly_layout.addWidget(self.add_weekly_button)
+
+        backup_types_layout.addWidget(weekly_group)
+
+        # Monthly scheduling
+        monthly_group = QGroupBox("Monthly Backup")
+        monthly_layout = QVBoxLayout(monthly_group)
+
+        self.day_of_month_combo = QComboBox()
+        monthly_days = [ordinal(i) for i in range(1, 32)] + ["Last day"]
+        self.day_of_month_combo.addItems(monthly_days)
+        monthly_layout.addWidget(self.day_of_month_combo)
+
+        self.monthly_time_edit = QTimeEdit()
+        self.monthly_time_edit.setDisplayFormat("hh:mm AP")
+        monthly_layout.addWidget(self.monthly_time_edit)
+
+        self.add_monthly_button = QPushButton("Add Monthly Backup")
+        self.add_monthly_button.clicked.connect(self.add_monthly_backup)
+        monthly_layout.addWidget(self.add_monthly_button)
+
+        backup_types_layout.addWidget(monthly_group)
+
+        schedule_layout.addLayout(backup_types_layout)
+
+        # Combined schedule list
+        self.schedule_list = QListWidget()
+        schedule_layout.addWidget(self.schedule_list, 1)  # Give it more vertical space
+
+        self.remove_button = QPushButton("Remove Selected")
+        self.remove_button.clicked.connect(self.remove_backup)
+        schedule_layout.addWidget(self.remove_button)
+
+        main_layout.addWidget(schedule_setup)
+
+        # Right side: Calendar view
+        calendar_widget = QWidget()
+        calendar_layout = QVBoxLayout(calendar_widget)
+        self.calendar_view = StyledCalendarWidget()
+        self.calendar_view.setSelectionMode(QCalendarWidget.NoSelection)
+        calendar_layout.addWidget(self.calendar_view)
+        main_layout.addWidget(calendar_widget)
+
+    def create_weekly_widget(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+
+        day_layout = QHBoxLayout()
+        self.day_combo = QComboBox()
+        self.day_combo.addItems(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'])
+        day_layout.addWidget(QLabel("Day of Week:"))
+        day_layout.addWidget(self.day_combo)
+        layout.addLayout(day_layout)
+
+        time_layout = QHBoxLayout()
+        self.time_edit = QTimeEdit()
+        self.time_edit.setDisplayFormat("hh:mm AP")
+        time_layout.addWidget(QLabel("Time:"))
+        time_layout.addWidget(self.time_edit)
+        layout.addLayout(time_layout)
+
+        self.add_button = QPushButton("Add Weekly Backup")
+        self.add_button.clicked.connect(self.add_weekly_backup)
+        layout.addWidget(self.add_button)
+
+        self.schedule_list = QListWidget()
+        layout.addWidget(self.schedule_list)
+
+        self.remove_button = QPushButton("Remove Selected")
+        self.remove_button.clicked.connect(self.remove_backup)
+        layout.addWidget(self.remove_button)
+
+        return widget
+
+    def create_monthly_widget(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+
+        day_layout = QHBoxLayout()
+        self.day_of_month_combo = QComboBox()
+        monthly_days = [ordinal(i) for i in range(1, 32)] + ["Last day"]
+        self.day_of_month_combo.addItems(monthly_days)
+        day_layout.addWidget(QLabel("Day of Month:"))
+        day_layout.addWidget(self.day_of_month_combo)
+        layout.addLayout(day_layout)
+
+        time_layout = QHBoxLayout()
+        self.monthly_time_edit = QTimeEdit()
+        self.monthly_time_edit.setDisplayFormat("hh:mm AP")
+        time_layout.addWidget(QLabel("Time:"))
+        time_layout.addWidget(self.monthly_time_edit)
+        layout.addLayout(time_layout)
+
+        self.add_monthly_button = QPushButton("Add Monthly Backup")
+        self.add_monthly_button.clicked.connect(self.add_monthly_backup)
+        layout.addWidget(self.add_monthly_button)
+
+        self.monthly_schedule_list = QListWidget()
+        layout.addWidget(self.monthly_schedule_list)
+
+        self.remove_monthly_button = QPushButton("Remove Selected")
+        self.remove_monthly_button.clicked.connect(self.remove_backup)
+        layout.addWidget(self.remove_monthly_button)
+
+        return widget
+
+    def add_weekly_backup(self):
+        day = self.day_combo.currentText()
+        time = self.weekly_time_edit.time()
+        if day not in self.schedule['weekly']:
+            self.schedule['weekly'][day] = []
+        if time not in self.schedule['weekly'][day]:
+            self.schedule['weekly'][day].append(time)
+            self.update_schedule_list()
+            self.update_calendar_view()
+            self.schedule_updated.emit(self.schedule)
+
+    def add_monthly_backup(self):
+        day = self.day_of_month_combo.currentText()
+        time = self.monthly_time_edit.time()
+        if day not in self.schedule['monthly']:
+            self.schedule['monthly'][day] = []
+        if time not in self.schedule['monthly'][day]:
+            self.schedule['monthly'][day].append(time)
+            self.update_schedule_list()
+            self.update_calendar_view()
+            self.schedule_updated.emit(self.schedule)
+
+    def remove_backup(self):
+        current_item = self.schedule_list.currentItem()
+        if current_item:
+            text = current_item.text()
+            schedule_type, day, time_str = text.split(" - ")
+            time = QTime.fromString(time_str, "hh:mm AP")
+            self.schedule[schedule_type.lower()][day].remove(time)
+            if not self.schedule[schedule_type.lower()][day]:
+                del self.schedule[schedule_type.lower()][day]
+            self.update_schedule_list()
+            self.update_calendar_view()
+            self.schedule_updated.emit(self.schedule)
+
+    def update_schedule_list(self):
+        self.schedule_list.clear()
+        for schedule_type in ['weekly', 'monthly']:
+            for day, times in self.schedule[schedule_type].items():
+                for time in sorted(times):
+                    item_text = f"{schedule_type.capitalize()} - {day} - {time.toString('hh:mm AP')}"
+                    self.schedule_list.addItem(item_text)
+
+    def update_calendar_view(self):
+        self.calendar_view.update_schedule(self.schedule)
+
+    def paintCell(self, painter, rect, date):
+        super().paintCell(painter, rect, date)
+        if self.is_backup_scheduled(date):
+            painter.save()
+            painter.setBrush(QColor(66, 133, 244, 100))  # Google Blue with transparency
+            painter.setPen(Qt.NoPen)
+            painter.drawRect(rect)
+            painter.restore()
+
+    def is_backup_scheduled(self, date):
+        # Check weekly schedule
+        day_name = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][date.dayOfWeek() - 1]
+        if day_name in self.schedule['weekly'] and self.schedule['weekly'][day_name]:
+            return True
+
+        # Check monthly schedule
+        day_of_month = ordinal(date.day())
+        if day_of_month in self.schedule['monthly'] and self.schedule['monthly'][day_of_month]:
+            return True
+
+        # Check for last day of month
+        if date.day() == date.daysInMonth() and "Last day" in self.schedule['monthly'] and self.schedule['monthly']["Last day"]:
+            return True
+
+        return False
+
+    def set_schedule(self, schedule):
+        self.schedule = schedule
+        self.update_schedule_list()
+        self.update_calendar_view()
+
+    def apply_styles(self):
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #202124;
+                color: #e8eaed;
+                font-family: Arial, sans-serif;
+            }
+            QGroupBox {
+                font-size: 14px;
+                font-weight: bold;
+                border: 1px solid #666;
+                border-radius: 5px;
+                margin-top: 10px;
+                padding-top: 10px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 3px 0 3px;
+            }
+            QComboBox, QTimeEdit {
+                background-color: #333;
+                border: 1px solid #666;
+                border-radius: 5px;
+                padding: 5px;
+                min-width: 8em;
+            }
+            QPushButton {
+                background-color: #4285F4;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 5px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #5294FF;
+            }
+            QPushButton:pressed {
+                background-color: #3275E4;
+            }
+            QListWidget {
+                background-color: #333;
+                border: 1px solid #666;
+                border-radius: 5px;
+            }
+            QListWidget::item {
+                padding: 5px;
+            }
+            QListWidget::item:selected {
+                background-color: #7baaf7;
+                color: #202124;
+            }
+            QWidget:disabled {
+                color: #888;
+            }
+            QComboBox:disabled, QTimeEdit:disabled {
+                background-color: #555;
+                color: #888;
+            }
+            QPushButton:disabled {
+                background-color: #555;
+                color: #888;
+            }
+            QListWidget:disabled {
+                background-color: #555;
+                color: #888;
+            }
+        """)
+
+class StyledCalendarWidget(QCalendarWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.schedule = {'weekly': {}, 'monthly': {}}
+        self.setStyleSheet("""
+            QCalendarWidget {
+                background-color: #333;
+                color: #e8eaed;
+            }
+            QCalendarWidget QTableView {
+                alternate-background-color: #3a3a3a;
+                background-color: #333;
+            }
+            QCalendarWidget QAbstractItemView:enabled {
+                color: #e8eaed;
+            }
+            QCalendarWidget QAbstractItemView:disabled {
+                color: #666;
+            }
+            QCalendarWidget QMenu {
+                background-color: #333;
+                color: #e8eaed;
+            }
+            QCalendarWidget QSpinBox {
+                background-color: #333;
+                color: #e8eaed;
+                selection-background-color: #4285F4;
+                selection-color: #e8eaed;
+            }
+            QCalendarWidget QToolButton {
+                color: #e8eaed;
+                background-color: transparent;
+            }
+            QCalendarWidget QToolButton:hover {
+                background-color: #4285F4;
+            }
+        """)
+
+    def paintCell(self, painter, rect, date):
+        super().paintCell(painter, rect, date)
+        if self.is_backup_scheduled(date):
+            painter.save()
+            painter.setBrush(QColor(66, 133, 244, 100))  # Google Blue with transparency
+            painter.setPen(Qt.NoPen)
+            painter.drawRect(rect)
+            painter.restore()
+
+    def is_backup_scheduled(self, date):
+        # Check weekly schedule
+        day_name = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][date.dayOfWeek() - 1]
+        if day_name in self.schedule['weekly'] and self.schedule['weekly'][day_name]:
+            return True
+
+        # Check monthly schedule
+        day_of_month = ordinal(date.day())
+        if day_of_month in self.schedule['monthly'] and self.schedule['monthly'][day_of_month]:
+            return True
+
+        # Check for last day of month
+        if date.day() == date.daysInMonth() and "Last day" in self.schedule['monthly'] and self.schedule['monthly']["Last day"]:
+            return True
+
+        return False
+
+    def update_schedule(self, schedule):
+        self.schedule = schedule
+        self.updateCells()
+# ---------------
 
 if __name__ == '__main__':
     app = QApplication([])
