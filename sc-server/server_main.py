@@ -1,6 +1,7 @@
 #!/usr/bin/python
 import json
 import os
+import traceback
 
 import database_utils as db
 import logging_utils
@@ -339,32 +340,40 @@ def fetch_backup_folders():
 
 @app.route('/api/register-backup-folders', methods=['POST'])
 def register_backup_folders():
-    data = request.json
-    api_key = data.get('api_key')
-    agent_id = data.get('agent_id')
-    folders = data.get('folders')
-    
-    if not api_key or not agent_id or not folders:
-        return jsonify({"SUCCESS": False, "message": "Invalid data provided."}), 400
-    
-    # Validate the API key and agent ID using the existing stored procedure
-    validation_result = db.validate_api_key_and_agent_id(api_key, agent_id)
-    if not validation_result['success']:
-        return jsonify({"SUCCESS": False, "message": validation_result['message']}), 401
-    
-    customer_id = validation_result['customer_id']
-    device_id = validation_result['device_id']
-    
-    # Register the folders
-    success = db.register_backup_folders(customer_id, device_id, folders)
-    
-    if success:
-        return jsonify({
-            "SUCCESS": True,
-            "message": "Backup folders registered successfully"
-        })
-    else:
-        return jsonify({"SUCCESS": False, "message": "Failed to register backup folders"}), 500
+    try:
+        data = request.json
+        api_key = data.get('api_key')
+        agent_id = data.get('agent_id')
+        folders = data.get('folders')
+        
+        if not api_key or not agent_id or not folders:
+            return jsonify({"SUCCESS": False, "message": "Invalid data provided."}), 400
+        
+        # Validate the API key and agent ID using the existing stored procedure
+        validation_result = db.validate_api_key_and_agent_id(api_key, agent_id)
+        
+        # Check if the validation was successful
+        if not validation_result or not validation_result.get('success'):
+            return jsonify({"SUCCESS": False, "message": "Invalid data provided."}), 401
+        
+        # Get customer_id
+        customer_id = db.get_customer_id_by_api_key(api_key)
+        
+        if not customer_id or not agent_id:
+            return jsonify({"SUCCESS": False, "message": "Failed to retrieve customer or device information."}), 500
+        
+        # Register the folders
+        success = db.register_backup_folders(customer_id, agent_id, folders)
+        
+        if success:
+            return jsonify({
+                "SUCCESS": True,
+                "message": "Backup folders registered successfully"
+            })
+        else:
+            return jsonify({"SUCCESS": False, "message": f"Failed to register backup folders. No changes made. Values: {customer_id}, {agent_id}, {folders}"}), 500
+    except Exception as e:
+        return jsonify({"SUCCESS": False, "message": f"Failed to register backup folders. {e}"}), 500
 
 @app.route('/api/stripe/create-customer', methods=['POST'])
 def create_stripe_customer():

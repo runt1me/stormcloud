@@ -21,7 +21,7 @@ ONE_MB = 1024*1024
 THRESHOLD_MB = 200
 CHUNK_SIZE = ONE_MB
 
-def ship_file_to_server(api_key,backup_id,agent_id,secret_key,path):
+def ship_file_to_server(api_key,agent_id,secret_key,path):
     #unencrypted_path_to_encrypted_file, size_of_encrypted_content    = crypto_utils.encrypt_file(path,secret_key)
     #encrypted_path, _ = crypto_utils.encrypt_content(path,secret_key)
 
@@ -34,7 +34,6 @@ def ship_file_to_server(api_key,backup_id,agent_id,secret_key,path):
 
         ret = stream_upload_file(
             api_key,
-            backup_id,
             agent_id,
             path
         )
@@ -42,7 +41,6 @@ def ship_file_to_server(api_key,backup_id,agent_id,secret_key,path):
     else:
         ret = upload_file(
             api_key,
-            backup_id,
             agent_id,
             path
         )
@@ -50,13 +48,12 @@ def ship_file_to_server(api_key,backup_id,agent_id,secret_key,path):
     #crypto_utils.remove_temp_file(unencrypted_path_to_encrypted_file)
     return ret
 
-def stream_upload_file(api_key,backup_id,agent_id,local_file_path):
+def stream_upload_file(api_key,agent_id,local_file_path):
     url = API_ENDPOINT_BACKUP_FILE_STREAM
     response = None
 
     fields_dict = {
         'request_type': "backup_file",
-        'backup_id': backup_id,
         'api_key': api_key,
         'agent_id': agent_id,
 
@@ -76,13 +73,12 @@ def stream_upload_file(api_key,backup_id,agent_id,local_file_path):
     finally:
         return response.status_code if response else 500
 
-def upload_file(api_key,backup_id,agent_id,local_file_path):
+def upload_file(api_key,agent_id,local_file_path):
     url = API_ENDPOINT_BACKUP_FILE
     response = None
 
     json_data = json.dumps({
         'request_type': "backup_file",
-        'backup_id': backup_id,
         'api_key': api_key,
         'agent_id': agent_id,
 

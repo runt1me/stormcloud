@@ -16,6 +16,7 @@ import keepalive_utils
 import backup_utils
 import logging_utils
 import reconfigure_utils
+import network_utils
 
 from infi.systray import SysTrayIcon   # pip install infi.systray
 
@@ -51,8 +52,13 @@ def action_loop_and_sleep(settings, settings_file_path, dbconn, ignore_hash, sys
     update_thread = None
 
     while True:
-        # Ingest settings file again in case settings have changed via reconfigure_utils thread
         settings = read_yaml_settings_file(settings_file_path)
+    
+        # if (new_settings['BACKUP_PATHS'] != settings['BACKUP_PATHS']) or (new_settings['RECURSIVE_BACKUP_PATHS'] != settings['RECURSIVE_BACKUP_PATHS']):
+        network_utils.sync_backup_folders(settings)
+    
+        # Ingest settings file again in case settings have changed via reconfigure_utils thread
+        # settings = new_settings
 
         cur_keepalive_freq = int(settings['KEEPALIVE_FREQ'])
         backup_paths           = settings['BACKUP_PATHS']
@@ -65,9 +71,9 @@ def action_loop_and_sleep(settings, settings_file_path, dbconn, ignore_hash, sys
             % ([(s, settings[s]) for s in settings.keys() if s != 'SECRET_KEY'])
         )
 
-        if update_thread is None or not update_thread.is_alive():
-            update_thread = threading.Thread(target=reconfigure_utils.fetch_and_update_backup_paths, args=(settings_file_path, settings['API_KEY'], settings['AGENT_ID']))
-            update_thread.start()
+        # if update_thread is None or not update_thread.is_alive():
+            # update_thread = threading.Thread(target=reconfigure_utils.fetch_and_update_backup_paths, args=(settings_file_path, settings['API_KEY'], settings['AGENT_ID']))
+            # update_thread.start()
 
         if active_thread is None:
             active_thread = start_keepalive_thread(cur_keepalive_freq,api_key,agent_id,secret_key)

@@ -643,7 +643,7 @@ def register_backup_folders(customer_id, device_id, folders):
 
     try:
         for folder in folders:
-            cursor.callproc('register_backup_folder', 
+            cursor.callproc('register_backup_folders', 
                 (customer_id, device_id, folder['path'], folder['is_recursive'])
             )
         
