@@ -3,13 +3,21 @@ import json
 import psutil
 import subprocess
 import logging
+
+import win32api
+import win32gui
+import win32con
+
+
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                             QLabel, QPushButton, QListWidget, QListWidgetItem,
+                             QLabel, QPushButton, QToolButton, QListWidget, QListWidgetItem,
                              QMessageBox, QFileDialog, QGridLayout, QFormLayout,
                              QScrollArea, QSizePolicy, QCheckBox, QComboBox, QFrame,
                              QCalendarWidget, QTimeEdit, QStackedWidget, QGroupBox)
-from PyQt5.QtCore import Qt, QUrl, QPoint, QDate, QTime, pyqtSignal
-from PyQt5.QtGui import QDesktopServices, QFont, QIcon, QColor, QPalette, QPainter, QTextCharFormat
+from PyQt5.QtCore import Qt, QUrl, QPoint, QDate, QTime, pyqtSignal, QRect, QSize
+from PyQt5.QtGui import (QDesktopServices, QFont, QIcon, QColor,
+                         QPalette, QPainter, QPixmap, QTextCharFormat)
+from PyQt5.QtWinExtras import QtWin
 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', 
@@ -70,12 +78,53 @@ class StormcloudApp(QMainWindow):
         self.setWindowTitle('Stormcloud Backup Manager')
         self.setGeometry(100, 100, 800, 600)
         self.backup_schedule = {'weekly': {}, 'monthly': {}}
+        self.set_app_icon()
         self.init_ui()
         self.load_settings()
         self.update_status()
         self.load_backup_paths()
         self.load_properties()
         self.apply_backup_mode()
+
+    def set_app_icon(self):
+        appdata_path = os.getenv('APPDATA')
+        stable_settings_path = os.path.join(appdata_path, 'Stormcloud', 'stable_settings.cfg')
+        
+        if os.path.exists(stable_settings_path):
+            with open(stable_settings_path, 'r') as f:
+                stable_settings = json.load(f)
+            
+            install_path = stable_settings.get('install_path', '')
+            exe_path = os.path.join(install_path, 'stormcloud.exe')
+            
+            if os.path.exists(exe_path):
+                try:
+                    # Extract icon
+                    large, small = win32gui.ExtractIconEx(exe_path, 0)
+                    if large:
+                        win32gui.DestroyIcon(small[0])
+                        
+                        # Convert icon to HICON
+                        hicon = large[0]
+                        
+                        # Use QtWin to convert HICON to QPixmap
+                        pixmap = QtWin.fromHICON(hicon)
+                        
+                        # Create QIcon and set it
+                        app_icon = QIcon(pixmap)
+                        self.setWindowIcon(app_icon)
+                        QApplication.setWindowIcon(app_icon)
+                        
+                        # Clean up
+                        win32gui.DestroyIcon(hicon)
+                    else:
+                        print("No icon found in the executable.")
+                except Exception as e:
+                    print(f"Failed to set icon: {e}")
+            else:
+                print(f"Executable not found at {exe_path}")
+        else:
+            print(f"Settings file not found at {stable_settings_path}")
 
     def init_ui(self):
         central_widget = QWidget(self)
@@ -295,11 +344,26 @@ class StormcloudApp(QMainWindow):
         content.setObjectName("BackupSchedulePanel")
         layout = QVBoxLayout(content)
 
-        schedule_calendar = BackupScheduleCalendar()
-        schedule_calendar.schedule_updated.connect(self.update_backup_schedule)
-        layout.addWidget(schedule_calendar)
+        self.schedule_calendar = BackupScheduleCalendar()
+        self.schedule_calendar.schedule_updated.connect(self.update_backup_schedule)
+        layout.addWidget(self.schedule_calendar)
 
         return self.create_panel('Backup Schedule', content, '#3498DB')
+
+    def format_backup_schedule(self):
+        schedule_dict = {
+            'weekly': {},
+            'monthly': {}
+        }
+        
+        for schedule_type in ['weekly', 'monthly']:
+            for day, times in self.backup_schedule[schedule_type].items():
+                schedule_dict[schedule_type][day] = [time.toString('HH:mm') for time in times]
+        
+        schedule_json = json.dumps(schedule_dict, indent=2)
+        schedule_lines = ['BACKUP_SCHEDULE:'] + schedule_json.split('\n')
+        
+        return schedule_lines
 
     def save_backup_settings(self):
         if not hasattr(self, 'settings_cfg_path') or not os.path.exists(self.settings_cfg_path):
@@ -318,28 +382,19 @@ class StormcloudApp(QMainWindow):
             else:
                 settings.append(backup_mode_line)
 
-            # Update or add BACKUP_SCHEDULE
+            # Update BACKUP_SCHEDULE
+            schedule_lines = self.format_backup_schedule()
             schedule_start = next((i for i, line in enumerate(settings) if line.startswith("BACKUP_SCHEDULE:")), -1)
             if schedule_start >= 0:
                 # Remove old schedule
-                while schedule_start + 1 < len(settings) and settings[schedule_start + 1].startswith("-"):
-                    settings.pop(schedule_start + 1)
+                schedule_end = next((i for i in range(schedule_start + 1, len(settings)) if not settings[i].strip()), len(settings))
+                settings[schedule_start:schedule_end] = schedule_lines
             else:
-                schedule_start = len(settings)
-                settings.append("BACKUP_SCHEDULE:")
-
-            # Always write the schedule, regardless of the current mode
-            for schedule_type in ['weekly', 'monthly']:
-                if self.backup_schedule[schedule_type]:
-                    settings.insert(schedule_start + 1, f"- {schedule_type}:")
-                    for day, times in self.backup_schedule[schedule_type].items():
-                        time_strings = [time.toString('HH:mm') for time in times]
-                        settings.insert(schedule_start + 2, f"  - {day}: {', '.join(time_strings)}")
-                    schedule_start += 2
+                settings.extend(schedule_lines)
 
             # Write updated settings back to file
             with open(self.settings_cfg_path, 'w') as f:
-                f.write("\n".join(settings))
+                f.write('\n'.join(settings))
 
             logging.info('Backup mode and schedule settings updated successfully.')
         except Exception as e:
@@ -626,12 +681,18 @@ class StormcloudApp(QMainWindow):
         link_button.setProperty('clickable', 'true')
         layout.addWidget(link_button)
 
+    def update_schedule_list(self):
+        if hasattr(self, 'schedule_list'):
+            self.schedule_list.clear()
+            for schedule_type in ['weekly', 'monthly']:
+                for day, times in self.backup_schedule[schedule_type].items():
+                    for time in times:
+                        item_text = f"{schedule_type.capitalize()} - {day} - {time.toString('HH:mm')}"
+                        self.schedule_list.addItem(item_text)
+
     def update_backup_schedule_widget(self):
-        backup_schedule_panel = self.findChild(QWidget, "BackupSchedulePanel")
-        if backup_schedule_panel:
-            backup_calendar = backup_schedule_panel.findChild(BackupScheduleCalendar)
-            if backup_calendar:
-                backup_calendar.set_schedule(self.backup_schedule)
+        if hasattr(self, 'schedule_calendar'):
+            self.schedule_calendar.set_schedule(self.backup_schedule)
 
     def load_backup_mode(self):
         with open(self.settings_cfg_path, 'r') as f:
@@ -660,20 +721,35 @@ class StormcloudApp(QMainWindow):
 
     def load_backup_schedule(self):
         with open(self.settings_cfg_path, 'r') as f:
-            settings = f.read().splitlines()
+            settings = f.read()
 
         self.backup_schedule = {'weekly': {}, 'monthly': {}}
-        current_schedule = None
-        for line in settings:
-            if line.startswith("BACKUP_SCHEDULE:"):
-                continue
-            elif line.startswith("- weekly:"):
-                current_schedule = self.backup_schedule['weekly']
-            elif line.startswith("- monthly:"):
-                current_schedule = self.backup_schedule['monthly']
-            elif line.startswith("  - ") and current_schedule is not None:
-                day, times = line[4:].split(": ")
-                current_schedule[day] = [QTime.fromString(t.strip(), "HH:mm") for t in times.split(',')]
+        
+        # Find the BACKUP_SCHEDULE section
+        start_index = settings.find("BACKUP_SCHEDULE:")
+        if start_index == -1:
+            return  # No backup schedule found
+        
+        # Extract the JSON string
+        json_start = settings.find("{", start_index)
+        json_end = settings.rfind("}") + 1
+        if json_start == -1 or json_end == -1:
+            return  # Invalid format
+        
+        schedule_str = settings[json_start:json_end]
+        
+        # Parse the schedule
+        try:
+            schedule_dict = json.loads(schedule_str)
+            for schedule_type in ['weekly', 'monthly']:
+                if schedule_type in schedule_dict:
+                    for day, times in schedule_dict[schedule_type].items():
+                        self.backup_schedule[schedule_type][day] = [QTime.fromString(t, "HH:mm") for t in times]
+            logging.info(f"Loaded backup schedule: {self.backup_schedule}")
+        except json.JSONDecodeError:
+            logging.error("Failed to parse backup schedule")
+        
+        self.update_backup_schedule_widget()
 
     def load_settings(self):
         appdata_path = os.getenv('APPDATA')
@@ -948,7 +1024,7 @@ class BackupScheduleCalendar(QWidget):
         # Right side: Calendar view
         calendar_widget = QWidget()
         calendar_layout = QVBoxLayout(calendar_widget)
-        self.calendar_view = StyledCalendarWidget()
+        self.calendar_view = CustomCalendarWidget()
         self.calendar_view.setSelectionMode(QCalendarWidget.NoSelection)
         calendar_layout.addWidget(self.calendar_view)
         main_layout.addWidget(calendar_widget)
@@ -1088,9 +1164,19 @@ class BackupScheduleCalendar(QWidget):
 
         return False
 
+    def update_ui_from_schedule(self):
+        self.schedule_list.clear()
+        for schedule_type in ['weekly', 'monthly']:
+            for day, times in self.schedule[schedule_type].items():
+                for time in times:
+                    item_text = f"{schedule_type.capitalize()} - {day} - {time.toString('hh:mm AP')}"
+                    self.schedule_list.addItem(item_text)
+        logging.info(f"Updated UI from schedule: {self.schedule}")
+
     def set_schedule(self, schedule):
         self.schedule = schedule
-        self.update_schedule_list()
+        logging.info(f"Setting schedule in BackupScheduleCalendar: {self.schedule}")
+        self.update_ui_from_schedule()
         self.update_calendar_view()
 
     def apply_styles(self):
@@ -1163,10 +1249,48 @@ class BackupScheduleCalendar(QWidget):
             }
         """)
 
-class StyledCalendarWidget(QCalendarWidget):
+class CustomCalendarWidget(QCalendarWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.schedule = {'weekly': {}, 'monthly': {}}
+        self.initUI()
+
+    def initUI(self):
+        # Set the color for weekends to be the same as weekdays
+        weekday_color = QColor('#e8eaed')
+        weekend_format = QTextCharFormat()
+        weekend_format.setForeground(weekday_color)
+        self.setWeekdayTextFormat(Qt.Saturday, weekend_format)
+        self.setWeekdayTextFormat(Qt.Sunday, weekend_format)
+
+        # Create custom navigation bar
+        navigation_bar = QWidget(self)
+        nav_layout = QHBoxLayout(navigation_bar)
+
+        self.prev_button = CustomArrowButton('left')
+        self.next_button = CustomArrowButton('right')
+        self.month_year_label = QLabel()
+
+        nav_layout.addWidget(self.prev_button)
+        nav_layout.addStretch()
+        nav_layout.addWidget(self.month_year_label)
+        nav_layout.addStretch()
+        nav_layout.addWidget(self.next_button)
+
+        # Replace the default navigation bar
+        old_nav_bar = self.findChild(QWidget, "qt_calendar_navigationbar")
+        if old_nav_bar:
+            layout = self.layout()
+            layout.replaceWidget(old_nav_bar, navigation_bar)
+
+        # Connect signals
+        self.prev_button.clicked.connect(self.showPreviousMonth)
+        self.next_button.clicked.connect(self.showNextMonth)
+
+        # Update month/year label
+        self.updateMonthYearLabel()
+
+        # Set stylesheet
         self.setStyleSheet("""
             QCalendarWidget {
                 background-color: #333;
@@ -1182,24 +1306,23 @@ class StyledCalendarWidget(QCalendarWidget):
             QCalendarWidget QAbstractItemView:disabled {
                 color: #666;
             }
-            QCalendarWidget QMenu {
-                background-color: #333;
+            QLabel {
                 color: #e8eaed;
-            }
-            QCalendarWidget QSpinBox {
-                background-color: #333;
-                color: #e8eaed;
-                selection-background-color: #4285F4;
-                selection-color: #e8eaed;
-            }
-            QCalendarWidget QToolButton {
-                color: #e8eaed;
-                background-color: transparent;
-            }
-            QCalendarWidget QToolButton:hover {
-                background-color: #4285F4;
+                font-size: 14px;
             }
         """)
+
+    def updateMonthYearLabel(self):
+        date = self.selectedDate()
+        self.month_year_label.setText(date.toString("MMMM yyyy"))
+
+    def showPreviousMonth(self):
+        self.setSelectedDate(self.selectedDate().addMonths(-1))
+        self.updateMonthYearLabel()
+
+    def showNextMonth(self):
+        self.setSelectedDate(self.selectedDate().addMonths(1))
+        self.updateMonthYearLabel()
 
     def paintCell(self, painter, rect, date):
         super().paintCell(painter, rect, date)
@@ -1230,6 +1353,30 @@ class StyledCalendarWidget(QCalendarWidget):
     def update_schedule(self, schedule):
         self.schedule = schedule
         self.updateCells()
+
+class CustomArrowButton(QToolButton):
+    def __init__(self, direction, parent=None):
+        super().__init__(parent)
+        self.direction = direction
+        self.setFixedSize(24, 24)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # Draw blue circle
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor('#4285F4'))
+        painter.drawEllipse(QRect(2, 2, 20, 20))
+
+        # Draw white arrow
+        painter.setPen(Qt.white)
+        painter.setBrush(Qt.white)
+        if self.direction == 'left':
+            points = [QPoint(14, 6), QPoint(14, 18), QPoint(8, 12)]
+        else:
+            points = [QPoint(10, 6), QPoint(10, 18), QPoint(16, 12)]
+        painter.drawPolygon(*points)
 # ---------------
 
 if __name__ == '__main__':
