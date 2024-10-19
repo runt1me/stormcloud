@@ -1,3 +1,4 @@
+import csv
 import os
 import json
 import psutil
@@ -8,15 +9,19 @@ import win32api
 import win32gui
 import win32con
 
+from datetime import datetime
 
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QLabel, QPushButton, QToolButton, QListWidget, QListWidgetItem,
                              QMessageBox, QFileDialog, QGridLayout, QFormLayout,
                              QScrollArea, QSizePolicy, QCheckBox, QComboBox, QFrame,
-                             QCalendarWidget, QTimeEdit, QStackedWidget, QGroupBox)
-from PyQt5.QtCore import Qt, QUrl, QPoint, QDate, QTime, pyqtSignal, QRect, QSize
+                             QCalendarWidget, QTimeEdit, QStackedWidget, QGroupBox, QSpinBox,
+                             QTreeView, QHeaderView, QStyle, QStyledItemDelegate, QLineEdit,
+                             QAbstractItemView, QSplitter, QTreeWidget, QTreeWidgetItem, QDialog, QTextEdit)
+from PyQt5.QtCore import Qt, QUrl, QPoint, QDate, QTime, pyqtSignal, QRect, QSize, QModelIndex, QObject
 from PyQt5.QtGui import (QDesktopServices, QFont, QIcon, QColor,
-                         QPalette, QPainter, QPixmap, QTextCharFormat)
+                         QPalette, QPainter, QPixmap, QTextCharFormat,
+                         QStandardItemModel, QStandardItem)
 from PyQt5.QtWinExtras import QtWin
 
 
@@ -79,6 +84,7 @@ class StormcloudApp(QMainWindow):
         self.setGeometry(100, 100, 800, 600)
         self.backup_schedule = {'weekly': {}, 'monthly': {}}
         self.set_app_icon()
+        self.create_spinbox_arrow_icons()
         self.init_ui()
         self.load_settings()
         self.update_status()
@@ -126,6 +132,27 @@ class StormcloudApp(QMainWindow):
         else:
             print(f"Settings file not found at {stable_settings_path}")
 
+    def create_spinbox_arrow_icons(self):
+        # Create up arrow icon
+        up_arrow = QPixmap(8, 8)
+        up_arrow.fill(Qt.transparent)
+        painter = QPainter(up_arrow)
+        painter.setBrush(QColor('#e8eaed'))
+        painter.setPen(Qt.NoPen)
+        painter.drawPolygon(QPoint(0, 6), QPoint(4, 2), QPoint(8, 6))
+        painter.end()
+        up_arrow.save('up-arrow.png')
+
+        # Create down arrow icon
+        down_arrow = QPixmap(8, 8)
+        down_arrow.fill(Qt.transparent)
+        painter = QPainter(down_arrow)
+        painter.setBrush(QColor('#e8eaed'))
+        painter.setPen(Qt.NoPen)
+        painter.drawPolygon(QPoint(0, 2), QPoint(4, 6), QPoint(8, 2))
+        painter.end()
+        down_arrow.save('down-arrow.png')
+
     def init_ui(self):
         central_widget = QWidget(self)
         self.setCentralWidget(central_widget)
@@ -136,8 +163,9 @@ class StormcloudApp(QMainWindow):
         header_layout = QHBoxLayout(header_widget)
         header_layout.addStretch()
         self.start_button = QPushButton('Start Backup Engine')
-        self.start_button.setFixedSize(200, 40)  # Make the button larger
+        self.start_button.setFixedSize(200, 40)
         self.start_button.clicked.connect(self.toggle_backup_engine)
+        self.start_button.setCursor(Qt.PointingHandCursor)
         header_layout.addWidget(self.start_button)
         header_layout.addStretch()
         main_layout.addWidget(header_widget)
@@ -149,6 +177,9 @@ class StormcloudApp(QMainWindow):
         main_layout.addWidget(grid_widget)
 
         self.setStyleSheet(self.get_stylesheet())
+
+    def on_backup_versions_changed(self, value):
+        print(f"Number of backup versions changed to: {value}")
 
     def get_stylesheet(self):
         return """
@@ -204,17 +235,45 @@ class StormcloudApp(QMainWindow):
             QLabel {
                 font-size: 14px;
             }
-            QListWidget {
+            
+            /* Updated styles for QListWidget and QTreeWidget */
+            QListWidget, QTreeWidget {
                 background-color: #333;
-                border: 1px solid #666;
+                border: none;
                 border-radius: 5px;
+                outline: 0;
+                padding: 1px;
             }
-            QListWidget::item {
+
+            QListWidget::item, QTreeWidget::item {
                 padding: 5px;
             }
-            QListWidget::item:selected {
-                background-color: #7baaf7;
-                color: #202124;
+
+            QListWidget::item:hover, QTreeWidget::item:hover {
+                background-color: #3c4043;
+            }
+
+            QListWidget::item:selected, QTreeWidget::item:selected {
+                background-color: #444;
+                color: #8ab4f8;
+            }
+            
+            /* Pseudo-element for rounded border */
+            QListWidget::after, QTreeWidget::after {
+                content: '';
+                position: absolute;
+                top: 0;
+                right: 0;
+                bottom: 0;
+                left: 0;
+                border: 1px solid #666;
+                border-radius: 5px;
+                pointer-events: none;
+            }
+            
+            QListWidget::item:focus {
+                border: none;
+                outline: none;
             }
             #PanelWidget {
                 background-color: #333;
@@ -246,29 +305,40 @@ class StormcloudApp(QMainWindow):
             }
             QComboBox {
                 background-color: #333;
+                color: #e8eaed;
                 border: 1px solid #666;
                 border-radius: 5px;
                 padding: 5px;
                 min-width: 6em;
             }
             QComboBox:hover {
-                border: 1px solid #8ab4f8;
+                border-color: #8ab4f8;
             }
             QComboBox::drop-down {
                 subcontrol-origin: padding;
-                subcontrol-position: top right;
-                width: 15px;
-                border-left-width: 1px;
-                border-left-color: #666;
-                border-left-style: solid;
-            }
-            QComboBox::down-arrow {
-                image: url(down_arrow.png);
+                subcontrol-position: center right;
+                width: 20px;
+                border-left: none;
+                background: transparent;
             }
             QComboBox QAbstractItemView {
                 border: 1px solid #666;
                 background-color: #333;
-                selection-background-color: #444;
+                selection-background-color: #4285F4;
+            }
+            QPushButton {
+                background-color: #4285F4;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 5px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #5294FF;
+            }
+            QPushButton:pressed {
+                background-color: #3275E4;
             }
             QFrame[frameShape="4"],  /* HLine */
             QFrame[frameShape="5"] {  /* VLine */
@@ -297,27 +367,136 @@ class StormcloudApp(QMainWindow):
                 padding-top: 5px;
                 padding-bottom: 5px;
             }
+            QScrollBar:vertical {
+                border: none;
+                background: #2a2a2a;
+                width: 10px;
+                margin: 0px;
+            }
+
+            QScrollBar::handle:vertical {
+                background: #5a5a5a;
+                min-height: 30px;
+                border-radius: 5px;
+            }
+
+            QScrollBar::handle:vertical:hover {
+                background: #6a6a6a;
+            }
+
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
+
+            QScrollBar:horizontal {
+                border: none;
+                background: #2a2a2a;
+                height: 10px;
+                margin: 0px;
+            }
+
+            QScrollBar::handle:horizontal {
+                background: #5a5a5a;
+                min-width: 30px;
+                border-radius: 5px;
+            }
+
+            QScrollBar::handle:horizontal:hover {
+                background: #6a6a6a;
+            }
+
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                width: 0px;
+            }
+
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+                background: none;
+            }
         """
 
     def setup_grid_layout(self):
-        panels = [
-            self.create_configuration_dashboard(),
-            self.create_backup_schedule_panel(),
-            self.create_web_links_panel(),
-            self.create_backed_up_folders_panel()
-        ]
+        # Top-left panel (Configuration Dashboard)
+        config_dashboard = self.create_configuration_dashboard()
+        self.grid_layout.addWidget(config_dashboard, 0, 0)
 
-        for i, panel in enumerate(panels):
-            row = i // 2
-            col = i % 2
-            self.grid_layout.addWidget(panel, row, col)
-            panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        # Top-right panel (Backup Schedule)
+        backup_schedule = self.create_backup_schedule_panel()
+        self.grid_layout.addWidget(backup_schedule, 0, 1)
+
+        # Bottom-left panel (Blank for now)
+        blank_panel = self.create_blank_panel()
+        self.grid_layout.addWidget(blank_panel, 1, 0)
+
+        # Bottom-right panel (Stormcloud Web and Backed Up Folders)
+        bottom_right_panel = self.create_bottom_right_panel()
+        self.grid_layout.addWidget(bottom_right_panel, 1, 1)
 
         # Set equal column and row stretches
         self.grid_layout.setColumnStretch(0, 1)
         self.grid_layout.setColumnStretch(1, 1)
         self.grid_layout.setRowStretch(0, 1)
         self.grid_layout.setRowStretch(1, 1)
+
+    def create_web_links_subpanel(self):
+        subpanel = QWidget()
+        layout = QVBoxLayout(subpanel)
+
+        # Subpanel header
+        header = QLabel("Stormcloud Web")
+        header.setStyleSheet("font-weight: bold; padding-bottom: 5px;")
+        layout.addWidget(header)
+
+        # Horizontal divider
+        horizontal_line = QFrame()
+        horizontal_line.setFrameShape(QFrame.HLine)
+        horizontal_line.setStyleSheet("color: #666;")
+        layout.addWidget(horizontal_line)
+
+        # Web links
+        self.add_web_link(layout, "https://apps.darkage.io", "Stormcloud Apps")
+        self.add_web_link(layout, "https://darkage.io", "Darkage Homepage")
+        self.add_web_link(layout, "https://darkage.io/support", "Support")
+
+        layout.addStretch(1)
+        return subpanel
+
+    def create_bottom_right_panel(self):
+        content = QWidget()
+        content.setObjectName("ContentWidget")
+        main_layout = QVBoxLayout(content)
+
+        # Create two subpanels
+        subpanel_layout = QHBoxLayout()
+        left_subpanel = self.create_web_links_subpanel()
+        right_subpanel = self.create_backed_up_folders_subpanel()
+
+        # Add vertical divider
+        vertical_line = QFrame()
+        vertical_line.setFrameShape(QFrame.VLine)
+        vertical_line.setStyleSheet("color: #666;")
+
+        # Set width proportions
+        subpanel_layout.addWidget(left_subpanel, 50)
+        subpanel_layout.addWidget(vertical_line)
+        subpanel_layout.addWidget(right_subpanel, 50)
+
+        main_layout.addLayout(subpanel_layout)
+
+        return self.create_panel('Web & Folders', content, '#3498DB')
+
+    def create_blank_panel(self):
+        appdata_path = os.getenv('APPDATA')
+        json_directory = os.path.join(appdata_path, 'Stormcloud')
+        
+        if not os.path.exists(json_directory):
+            os.makedirs(json_directory)
+        
+        file_explorer = FileExplorerPanel(json_directory)
+        return self.create_panel('File Explorer', file_explorer, '#3498DB')
 
     def create_panel(self, title, content_widget, header_color):
             panel = QWidget()
@@ -454,10 +633,35 @@ class StormcloudApp(QMainWindow):
             self.backup_mode_dropdown = QComboBox()
             self.backup_mode_dropdown.addItems(['Realtime', 'Scheduled'])
             self.backup_mode_dropdown.currentIndexChanged.connect(self.on_backup_mode_changed)
+            self.backup_mode_dropdown.setCursor(Qt.PointingHandCursor)
             backup_mode_layout = QHBoxLayout()
             backup_mode_layout.addWidget(QLabel('Backup Mode:'))
             backup_mode_layout.addWidget(self.backup_mode_dropdown)
             layout.addLayout(backup_mode_layout)
+
+            # Updated Number of Backup Versions setting
+            self.backup_versions_spinbox = QSpinBox()
+            self.backup_versions_spinbox.setMinimum(1)
+            self.backup_versions_spinbox.setMaximum(100)
+            self.backup_versions_spinbox.setValue(5)  # Default value
+            self.backup_versions_spinbox.valueChanged.connect(self.on_backup_versions_changed)
+            self.backup_versions_spinbox.setStyleSheet("""
+                QSpinBox {
+                    background-color: #333;
+                    color: #e8eaed;
+                    border: 1px solid #666;
+                    border-radius: 5px;
+                    padding: 5px;
+                    min-width: 6em;
+                }
+                QSpinBox:hover {
+                    border-color: #8ab4f8;
+                }
+            """)
+            backup_versions_layout = QHBoxLayout()
+            backup_versions_layout.addWidget(QLabel('Number of Backup Versions:'))
+            backup_versions_layout.addWidget(self.backup_versions_spinbox)
+            layout.addLayout(backup_versions_layout)
 
         elif title == "Properties":
             properties_layout = QFormLayout()
@@ -537,7 +741,6 @@ class StormcloudApp(QMainWindow):
 
     def create_web_links_panel(self):
         content = QWidget()
-        content.setObjectName("ContentWidget")
         layout = QVBoxLayout(content)
         
         self.add_web_link(layout, "https://apps.darkage.io", "Stormcloud Apps")
@@ -562,11 +765,22 @@ class StormcloudApp(QMainWindow):
             
             self.update_settings_file()
 
-    def create_backed_up_folders_panel(self):
-        content = QWidget()
-        content.setObjectName("ContentWidget")
-        layout = QVBoxLayout(content)
+    def create_backed_up_folders_subpanel(self):
+        subpanel = QWidget()
+        layout = QVBoxLayout(subpanel)
 
+        # Subpanel header
+        header = QLabel("Backed Up Folders")
+        header.setStyleSheet("font-weight: bold; padding-bottom: 5px;")
+        layout.addWidget(header)
+
+        # Horizontal divider
+        horizontal_line = QFrame()
+        horizontal_line.setFrameShape(QFrame.HLine)
+        horizontal_line.setStyleSheet("color: #666;")
+        layout.addWidget(horizontal_line)
+
+        # Backed up folders content
         self.backup_paths_list = QListWidget()
         self.backup_paths_list.setSelectionMode(QListWidget.SingleSelection)
         layout.addWidget(self.backup_paths_list)
@@ -577,20 +791,21 @@ class StormcloudApp(QMainWindow):
         layout.addWidget(footnote)
 
         buttons_layout = QHBoxLayout()
-        
         add_folder_button = QPushButton("Add Folder")
         add_folder_button.setObjectName("FolderBackupButton")
         add_folder_button.clicked.connect(self.add_backup_folder)
+        add_folder_button.setCursor(Qt.PointingHandCursor)
         buttons_layout.addWidget(add_folder_button)
 
         remove_folder_button = QPushButton("Remove Selected")
         remove_folder_button.setObjectName("FolderBackupButton")
         remove_folder_button.clicked.connect(self.remove_backup_folder)
+        remove_folder_button.setCursor(Qt.PointingHandCursor)
         buttons_layout.addWidget(remove_folder_button)
 
         layout.addLayout(buttons_layout)
 
-        return self.create_panel('Backed Up Folders', content, '#F1C40F')
+        return subpanel
 
     def add_backup_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Folder to Backup")
@@ -978,14 +1193,17 @@ class BackupScheduleCalendar(QWidget):
 
         self.day_combo = QComboBox()
         self.day_combo.addItems(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'])
+        self.day_combo.setCursor(Qt.PointingHandCursor)
         weekly_layout.addWidget(self.day_combo)
 
         self.weekly_time_edit = QTimeEdit()
         self.weekly_time_edit.setDisplayFormat("hh:mm AP")
+        self.weekly_time_edit.setCursor(Qt.PointingHandCursor)
         weekly_layout.addWidget(self.weekly_time_edit)
 
         self.add_weekly_button = QPushButton("Add Weekly Backup")
         self.add_weekly_button.clicked.connect(self.add_weekly_backup)
+        self.add_weekly_button.setCursor(Qt.PointingHandCursor)
         weekly_layout.addWidget(self.add_weekly_button)
 
         backup_types_layout.addWidget(weekly_group)
@@ -997,14 +1215,17 @@ class BackupScheduleCalendar(QWidget):
         self.day_of_month_combo = QComboBox()
         monthly_days = [ordinal(i) for i in range(1, 32)] + ["Last day"]
         self.day_of_month_combo.addItems(monthly_days)
+        self.day_of_month_combo.setCursor(Qt.PointingHandCursor)
         monthly_layout.addWidget(self.day_of_month_combo)
 
         self.monthly_time_edit = QTimeEdit()
         self.monthly_time_edit.setDisplayFormat("hh:mm AP")
+        self.monthly_time_edit.setCursor(Qt.PointingHandCursor)
         monthly_layout.addWidget(self.monthly_time_edit)
 
         self.add_monthly_button = QPushButton("Add Monthly Backup")
         self.add_monthly_button.clicked.connect(self.add_monthly_backup)
+        self.add_monthly_button.setCursor(Qt.PointingHandCursor)
         monthly_layout.addWidget(self.add_monthly_button)
 
         backup_types_layout.addWidget(monthly_group)
@@ -1017,6 +1238,7 @@ class BackupScheduleCalendar(QWidget):
 
         self.remove_button = QPushButton("Remove Selected")
         self.remove_button.clicked.connect(self.remove_backup)
+        self.remove_button.setCursor(Qt.PointingHandCursor)
         schedule_layout.addWidget(self.remove_button)
 
         main_layout.addWidget(schedule_setup)
@@ -1214,6 +1436,37 @@ class BackupScheduleCalendar(QWidget):
                 border-radius: 5px;
                 font-size: 14px;
             }
+            QComboBox {
+                background-color: #333;
+                color: #e8eaed;
+                border: 1px solid #666;
+                border-radius: 5px;
+                padding: 5px;
+                min-width: 8em;
+            }
+            QComboBox:hover {
+                border-color: #8ab4f8;
+            }
+            QComboBox::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: center right;
+                width: 20px;
+                border-left: none;
+                background: transparent;
+            }
+            QComboBox QAbstractItemView {
+                border: 1px solid #666;
+                background-color: #333;
+                selection-background-color: #4285F4;
+            }
+            QPushButton {
+                background-color: #4285F4;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 5px;
+                font-size: 14px;
+            }
             QPushButton:hover {
                 background-color: #5294FF;
             }
@@ -1224,13 +1477,22 @@ class BackupScheduleCalendar(QWidget):
                 background-color: #333;
                 border: 1px solid #666;
                 border-radius: 5px;
+                outline: 0;
             }
             QListWidget::item {
                 padding: 5px;
             }
+            QListWidget::item:hover {
+                background-color: #3c4043;
+            }
             QListWidget::item:selected {
-                background-color: #7baaf7;
-                color: #202124;
+                background-color: #444;
+                color: #8ab4f8;
+                border: none;
+            }
+            QListWidget::item:focus {
+                border: none;
+                outline: none;
             }
             QWidget:disabled {
                 color: #888;
@@ -1246,6 +1508,9 @@ class BackupScheduleCalendar(QWidget):
             QListWidget:disabled {
                 background-color: #555;
                 color: #888;
+            }
+            QTimeEdit:hover {
+                border-color: #8ab4f8;
             }
         """)
 
@@ -1359,14 +1624,28 @@ class CustomArrowButton(QToolButton):
         super().__init__(parent)
         self.direction = direction
         self.setFixedSize(24, 24)
+        self.normal_color = QColor('#4285F4')  # Google Blue
+        self.hover_color = QColor('#5294FF')   # Lighter Blue for hover
+        self.current_color = self.normal_color
+        self.setCursor(Qt.PointingHandCursor)
+
+    def enterEvent(self, event):
+        self.current_color = self.hover_color
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.current_color = self.normal_color
+        self.update()
+        super().leaveEvent(event)
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        # Draw blue circle
+        # Draw circle with current color
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor('#4285F4'))
+        painter.setBrush(self.current_color)
         painter.drawEllipse(QRect(2, 2, 20, 20))
 
         # Draw white arrow
@@ -1378,6 +1657,917 @@ class CustomArrowButton(QToolButton):
             points = [QPoint(10, 6), QPoint(10, 18), QPoint(16, 12)]
         painter.drawPolygon(*points)
 # ---------------
+
+class FileItemDelegate(QStyledItemDelegate):
+    def paint(self, painter, option, index):
+        if option.state & QStyle.State_Selected:
+            option.palette.setColor(QPalette.Highlight, QColor("#4285F4"))
+            option.palette.setColor(QPalette.HighlightedText, QColor("#e8eaed"))
+        super().paint(painter, option, index)
+
+class FileExplorerPanel(QWidget):
+    def __init__(self, json_directory):
+        super().__init__()
+        self.json_directory = json_directory
+        self.create_arrow_icons()
+        self.search_history = []
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)  # Add some spacing between widgets
+
+        # Add search box
+        self.search_box = QLineEdit()
+        self.search_box.setPlaceholderText("Search for file or folder...")
+        self.search_box.returnPressed.connect(self.search_item)
+        layout.addWidget(self.search_box)
+
+        # Main splitter
+        self.main_splitter = QSplitter(Qt.Vertical)
+        layout.addWidget(self.main_splitter)
+
+        # Tree view
+        self.tree_view = QTreeView()
+        self.main_splitter.addWidget(self.tree_view)
+
+        # Results panel
+        self.results_panel = QTreeWidget()
+        self.results_panel.setHeaderHidden(True)
+        self.results_panel.itemClicked.connect(self.navigate_to_result)
+        self.results_panel.setVisible(False)
+        self.main_splitter.addWidget(self.results_panel)
+
+        self.model = FileSystemModel()
+        self.tree_view.setModel(self.model)
+
+        # Hide all columns except the file/directory names
+        for i in range(1, self.model.columnCount()):
+            self.tree_view.hideColumn(i)
+
+        self.tree_view.header().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.tree_view.setAnimated(True)
+        self.tree_view.setIndentation(20)
+        self.tree_view.setSortingEnabled(True)
+
+        # Set custom item delegate
+        self.tree_view.setItemDelegate(FileItemDelegate())
+
+        # Update TreeView to be read-only
+        self.tree_view.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.tree_view.doubleClicked.connect(self.show_metadata)
+
+        self.set_styles()
+
+        self.load_data()
+
+    def set_styles(self):
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #333;  /* Match the background color of other panels */
+                color: #e8eaed;
+                font-family: 'Segoe UI', Arial, sans-serif;
+            }
+            QLineEdit {
+                background-color: #303134;
+                border: 1px solid #5f6368;
+                border-radius: 4px;
+                padding: 8px;
+                font-size: 14px;
+                color: #e8eaed;
+            }
+            QLineEdit:focus {
+                border-color: #8ab4f8;
+            }
+            QTreeView, QTreeWidget {
+                background-color: #333;  /* Match the background color */
+                border: none;
+                font-size: 13px;
+                outline: 0;
+            }
+            QTreeView::item, QTreeWidget::item {
+                padding: 6px 0;
+            }
+            QTreeView::item:hover, QTreeWidget::item:hover {
+                background-color: #3c4043;
+            }
+            QTreeView::item:selected, QTreeWidget::item:selected {
+                background-color: #444;  /* Slightly lighter gray for highlighted items */
+                color: #8ab4f8;
+            }
+            QTreeView::item:selected:active, QTreeWidget::item:selected:active,
+            QTreeView::item:selected:!active, QTreeWidget::item:selected:!active {
+                background-color: #444;  /* Consistent highlight color */
+                color: #8ab4f8;
+            }
+            QTreeView::branch:has-siblings:!adjoins-item {
+                border-image: url(vline.png) 0;
+            }
+            QTreeView::branch:has-siblings:adjoins-item {
+                border-image: url(branch-more.png) 0;
+            }
+            QTreeView::branch:!has-children:!has-siblings:adjoins-item {
+                border-image: url(branch-end.png) 0;
+            }
+            QTreeView::branch:has-children:!has-siblings:closed,
+            QTreeView::branch:closed:has-children:has-siblings {
+                border-image: none;
+                image: url(branch-closed.png);
+            }
+            QTreeView::branch:open:has-children:!has-siblings,
+            QTreeView::branch:open:has-children:has-siblings {
+                border-image: none;
+                image: url(branch-open.png);
+            }
+            QHeaderView::section {
+                background-color: #303134;
+                color: #e8eaed;
+                padding: 8px;
+                border: none;
+                font-weight: bold;
+            }
+            QScrollBar:vertical {
+                border: none;
+                background: #202124;
+                width: 10px;
+                margin: 0px 0px 0px 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #5f6368;
+                min-height: 20px;
+                border-radius: 5px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+            QScrollBar:horizontal {
+                border: none;
+                background: #202124;
+                height: 10px;
+                margin: 0px 0px 0px 0px;
+            }
+            QScrollBar::handle:horizontal {
+                background: #5f6368;
+                min-width: 20px;
+                border-radius: 5px;
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                width: 0px;
+            }
+            QSplitter::handle {
+                background-color: #666;
+            }
+            QFrame[frameShape="4"] {  /* HLine */
+                color: #666;
+                height: 1px;
+            }
+            QSplitter::handle {
+                background-color: #666;
+                height: 1px;
+            }
+        """)
+
+        # Additional style to remove focus border and add panel border
+        self.setStyleSheet(self.styleSheet() + """
+            FileExplorerPanel {
+                border: 1px solid #666;
+                border-radius: 5px;
+            }
+            QTreeView::item:focus, QTreeWidget::item:focus {
+                border: none;
+                outline: none;
+            }
+        """)
+
+    def show_metadata(self, index):
+        item = self.model.itemFromIndex(index)
+        metadata = item.data(Qt.UserRole)
+        if metadata:
+            dialog = MetadataDialog(metadata, self)
+            dialog.exec_()
+
+    def search_item(self):
+        search_text = self.search_box.text()
+        if not search_text:
+            return
+
+        # Attempt exact match first
+        exact_match = self.find_exact_match(search_text)
+        if exact_match.isValid():
+            self.navigate_to_index(exact_match)
+            self.add_to_search_history(search_text, [self.get_full_path(self.model.itemFromIndex(exact_match))], 1, 1)
+            return
+
+        # If no exact match, perform partial match
+        partial_matches = self.find_partial_matches(search_text)
+        if partial_matches:
+            self.show_partial_matches(search_text, partial_matches)
+        else:
+            self.add_to_search_history(search_text, [], 0, 0)
+            self.results_panel.clear()
+            self.results_panel.addTopLevelItem(QTreeWidgetItem(["No matching items found."]))
+            self.results_panel.setVisible(True)
+
+    def find_exact_match(self, search_text):
+        def search_recursive(parent):
+            for row in range(parent.rowCount()):
+                item = parent.child(row)
+                full_path = self.get_full_path(item)
+                if full_path.lower() == search_text.lower():
+                    return self.model.indexFromItem(item)
+                if item.hasChildren():
+                    result = search_recursive(item)
+                    if result.isValid():
+                        return result
+            return QModelIndex()
+
+        return search_recursive(self.model.invisibleRootItem())
+
+    def find_partial_matches(self, search_text):
+        matches = []
+        folders_searched = set()
+        files_searched = 0
+
+        def search_recursive(parent):
+            nonlocal files_searched
+            for row in range(parent.rowCount()):
+                item = parent.child(row)
+                full_path = self.get_full_path(item)
+                if item.hasChildren():
+                    folders_searched.add(full_path)
+                else:
+                    files_searched += 1
+                if search_text.lower() in full_path.lower():
+                    matches.append((full_path, self.model.indexFromItem(item)))
+                if item.hasChildren():
+                    search_recursive(item)
+
+        search_recursive(self.model.invisibleRootItem())
+        return matches, len(folders_searched), files_searched
+
+    def get_full_path(self, item):
+        path = []
+        while item:
+            path.insert(0, item.text())
+            item = item.parent()
+        return '/'.join(path)
+
+    def show_partial_matches(self, search_text, match_data):
+        matches, folders_searched, files_searched = match_data
+        self.add_to_search_history(search_text, [m[0] for m in matches], folders_searched, files_searched)
+        self.update_results_panel()
+
+    def add_to_search_history(self, search_text, matches, folders_searched, files_searched):
+        result = {
+            'search_text': search_text,
+            'matches': matches,
+            'folders_searched': folders_searched,
+            'files_searched': files_searched,
+            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        self.search_history.insert(0, result)  # Add new result to the beginning of the list
+
+    def update_results_panel(self):
+        self.results_panel.clear()
+        for result in self.search_history:
+            summary = f"Showing {len(result['matches'])} results found in {result['folders_searched']} folders searched ({result['files_searched']} files)"
+            root_item = QTreeWidgetItem([f"{result['search_text']} - {summary}"])
+            root_item.setData(0, Qt.UserRole, result)
+            root_item.setForeground(0, QColor('#8ab4f8'))  # Highlight color for search summaries
+            for match in result['matches']:
+                child_item = QTreeWidgetItem([match])
+                root_item.addChild(child_item)
+            self.results_panel.addTopLevelItem(root_item)
+        self.results_panel.setVisible(True)
+
+    def navigate_to_result(self, item, column):
+        if item.parent() is None:  # This is a root item (search summary)
+            item.setExpanded(not item.isExpanded())
+        else:  # This is a child item (actual result)
+            full_path = item.text(0)
+            for _, index in self.find_partial_matches(full_path)[0]:
+                if self.get_full_path(self.model.itemFromIndex(index)) == full_path:
+                    self.navigate_to_index(index)
+                    break
+
+    def navigate_to_index(self, index):
+        self.tree_view.setCurrentIndex(index)
+        self.tree_view.scrollTo(index, QAbstractItemView.PositionAtCenter)
+        self.expand_to_index(index)
+
+    def expand_to_index(self, index):
+        parent = index.parent()
+        if parent.isValid():
+            self.expand_to_index(parent)
+        self.tree_view.expand(index)
+
+    def create_arrow_icons(self):
+        # Create branch-closed icon
+        branch_closed = QPixmap(16, 16)
+        branch_closed.fill(Qt.transparent)
+        painter = QPainter(branch_closed)
+        painter.setBrush(QColor('#e8eaed'))
+        painter.setPen(Qt.NoPen)
+        painter.drawPolygon(QPoint(4, 4), QPoint(12, 8), QPoint(4, 12))
+        painter.end()
+        branch_closed.save('branch-closed.png')
+
+        # Create branch-open icon
+        branch_open = QPixmap(16, 16)
+        branch_open.fill(Qt.transparent)
+        painter = QPainter(branch_open)
+        painter.setBrush(QColor('#e8eaed'))
+        painter.setPen(Qt.NoPen)
+        painter.drawPolygon(QPoint(4, 4), QPoint(12, 4), QPoint(8, 12))
+        painter.end()
+        branch_open.save('branch-open.png')
+
+        # Create vline icon
+        vline = QPixmap(16, 16)
+        vline.fill(Qt.transparent)
+        painter = QPainter(vline)
+        painter.setPen(QColor('#5f6368'))
+        painter.drawLine(8, 0, 8, 16)
+        painter.end()
+        vline.save('vline.png')
+
+        # Create branch-more icon
+        branch_more = QPixmap(16, 16)
+        branch_more.fill(Qt.transparent)
+        painter = QPainter(branch_more)
+        painter.setPen(QColor('#5f6368'))
+        painter.drawLine(8, 0, 8, 8)
+        painter.drawLine(8, 8, 16, 8)
+        painter.end()
+        branch_more.save('branch-more.png')
+
+        # Create branch-end icon
+        branch_end = QPixmap(16, 16)
+        branch_end.fill(Qt.transparent)
+        painter = QPainter(branch_end)
+        painter.setPen(QColor('#5f6368'))
+        painter.drawLine(8, 0, 8, 8)
+        painter.drawLine(8, 8, 16, 8)
+        painter.end()
+        branch_end.save('branch-end.png')
+
+    def add_file(self, path, metadata):
+        parts = path.strip('/').split('/')
+        parent = self.model.invisibleRootItem()
+
+        for i, part in enumerate(parts):
+            if i == len(parts) - 1:  # This is a file
+                item = QStandardItem(part)
+                item.setData(metadata, Qt.UserRole)
+                item.setIcon(self.get_file_icon(part))
+                parent.appendRow(item)
+            else:  # This is a directory
+                found = False
+                for row in range(parent.rowCount()):
+                    if parent.child(row).text() == part:
+                        parent = parent.child(row)
+                        found = True
+                        break
+                if not found:
+                    new_dir = QStandardItem(part)
+                    new_dir.setIcon(self.get_folder_icon())
+                    parent.appendRow(new_dir)
+                    parent = new_dir
+
+    def load_data(self):
+        # Find the most recent JSON file
+        json_files = [f for f in os.listdir(self.json_directory) if f.startswith('file_metadata_') and f.endswith('.json')]
+        if not json_files:
+            print("No file metadata JSON files found.")
+            return
+
+        latest_file = max(json_files, key=lambda f: datetime.strptime(f, 'file_metadata_%Y%m%d_%H%M%S.json'))
+        json_path = os.path.join(self.json_directory, latest_file)
+
+        with open(json_path, 'r') as file:
+            data = json.load(file)
+            for item in data:
+                self.model.add_file(item['ClientFullNameAndPathAsPosix'], item)
+
+class FileSystemModel(QStandardItemModel):
+    def __init__(self):
+        super().__init__()
+        self.setHorizontalHeaderLabels(['Name'])
+        self.root = self.invisibleRootItem()
+
+    def add_file(self, path, metadata):
+        parts = path.strip('/').split('/')
+        parent = self.root
+
+        for i, part in enumerate(parts):
+            if i == len(parts) - 1:  # This is a file
+                item = QStandardItem(part)
+                item.setData(metadata, Qt.UserRole)
+                item.setIcon(self.get_file_icon(part))
+                parent.appendRow(item)
+            else:  # This is a directory
+                found = False
+                for row in range(parent.rowCount()):
+                    if parent.child(row).text() == part:
+                        parent = parent.child(row)
+                        found = True
+                        break
+                if not found:
+                    new_dir = QStandardItem(part)
+                    new_dir.setIcon(self.get_folder_icon())
+                    parent.appendRow(new_dir)
+                    parent = new_dir
+
+    def get_file_icon(self, filename):
+        # Implement logic to return appropriate file icon based on file type
+        # You can use QIcon.fromTheme() or create custom icons
+        return QIcon.fromTheme("text-x-generic")
+
+    def get_folder_icon(self):
+        # Return a folder icon
+        return QIcon.fromTheme("folder")
+
+class MetadataDialog(QDialog):
+    def __init__(self, metadata, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("File Metadata")
+        self.setMinimumSize(500, 400)
+        self.setup_ui(metadata)
+
+    def setup_ui(self, metadata):
+        layout = QVBoxLayout(self)
+
+        # Metadata display
+        self.text_edit = QTextEdit()
+        self.text_edit.setReadOnly(True)
+        self.text_edit.setStyleSheet("""
+            QTextEdit {
+                background-color: #303134;
+                color: #e8eaed;
+                border: 1px solid #5f6368;
+                border-radius: 4px;
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-size: 12px;
+            }
+        """)
+        formatted_json = json.dumps(metadata, indent=2)
+        self.text_edit.setText(formatted_json)
+        layout.addWidget(self.text_edit)
+
+        # Close button
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(self.accept)
+        close_button.setStyleSheet("""
+            QPushButton {
+                background-color: #4285F4;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #5294FF;
+            }
+            QPushButton:pressed {
+                background-color: #3275E4;
+            }
+        """)
+        layout.addWidget(close_button, alignment=Qt.AlignRight)
+
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #202124;
+                color: #e8eaed;
+            }
+        """)
+
+class ThemeManager(QObject):
+    theme_changed = pyqtSignal(str)
+
+    def __init__(self):
+        super().__init__()
+        self.themes = {
+            "Dark": self.dark_theme(),
+            "Light": self.light_theme(),
+            "Cyberpunk": self.cyberpunk_theme(),
+            "Forest": self.forest_theme()
+        }
+        self.current_theme = "Dark"
+
+    def get_theme(self, theme_name):
+        return self.themes.get(theme_name, self.themes["Dark"])
+
+    def set_theme(self, theme_name):
+        if theme_name in self.themes:
+            self.current_theme = theme_name
+            self.theme_changed.emit(theme_name)
+
+    def dark_theme(self):
+        return {
+            "app_background": "#202124",
+            "text_primary": "#e8eaed",
+            "text_secondary": "#9aa0a6",
+            "accent_color": "#4285F4",
+            "accent_color_hover": "#5294FF",
+            "accent_color_pressed": "#3275E4",
+            "panel_background": "#333",
+            "panel_border": "#666",
+            "input_background": "#303134",
+            "input_border": "#5f6368",
+            "input_border_focus": "#8ab4f8",
+            "button_text": "white",
+            "list_item_hover": "#3c4043",
+            "list_item_selected": "#444",
+            "scroll_background": "#202124",
+            "scroll_handle": "#5f6368",
+            "scroll_handle_hover": "#6a6a6a",
+            "header_background": "#171717",
+            "divider_color": "#666",
+            "stylesheet": """
+                QWidget {
+                    background-color: #202124;
+                    color: #e8eaed;
+                    font-family: 'Segoe UI', Arial, sans-serif;
+                }
+                QPushButton {
+                    background-color: #4285F4;
+                    color: white;
+                    border: none;
+                    padding: 8px 16px;
+                    border-radius: 5px;
+                    font-size: 14px;
+                }
+                QPushButton:hover {
+                    background-color: #5294FF;
+                }
+                QPushButton:pressed {
+                    background-color: #3275E4;
+                }
+                QLineEdit, QTextEdit, QPlainTextEdit {
+                    background-color: #303134;
+                    border: 1px solid #5f6368;
+                    border-radius: 4px;
+                    padding: 8px;
+                    color: #e8eaed;
+                }
+                QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {
+                    border-color: #8ab4f8;
+                }
+                QListWidget, QTreeWidget, QTreeView {
+                    background-color: #333;
+                    border: 1px solid #666;
+                    border-radius: 5px;
+                }
+                QListWidget::item:hover, QTreeWidget::item:hover, QTreeView::item:hover {
+                    background-color: #3c4043;
+                }
+                QListWidget::item:selected, QTreeWidget::item:selected, QTreeView::item:selected {
+                    background-color: #444;
+                    color: #8ab4f8;
+                }
+                QScrollBar:vertical {
+                    border: none;
+                    background: #202124;
+                    width: 10px;
+                    margin: 0px;
+                }
+                QScrollBar::handle:vertical {
+                    background: #5f6368;
+                    min-height: 30px;
+                    border-radius: 5px;
+                }
+                QScrollBar::handle:vertical:hover {
+                    background: #6a6a6a;
+                }
+                QComboBox {
+                    background-color: #303134;
+                    border: 1px solid #5f6368;
+                    border-radius: 4px;
+                    padding: 5px;
+                    color: #e8eaed;
+                }
+                QComboBox:hover {
+                    border-color: #8ab4f8;
+                }
+                QComboBox::drop-down {
+                    subcontrol-origin: padding;
+                    subcontrol-position: top right;
+                    width: 30px;
+                    border-left: 1px solid #5f6368;
+                    border-top-right-radius: 4px;
+                    border-bottom-right-radius: 4px;
+                }
+                QComboBox::down-arrow {
+                    image: url(down_arrow_dark.png);
+                }
+            """
+        }
+
+    def light_theme(self):
+        return {
+            "app_background": "#f8f9fa",
+            "text_primary": "#202124",
+            "text_secondary": "#5f6368",
+            "accent_color": "#1a73e8",
+            "accent_color_hover": "#1967d2",
+            "accent_color_pressed": "#185abc",
+            "panel_background": "#ffffff",
+            "panel_border": "#dadce0",
+            "input_background": "#ffffff",
+            "input_border": "#dadce0",
+            "input_border_focus": "#1a73e8",
+            "button_text": "white",
+            "list_item_hover": "#f1f3f4",
+            "list_item_selected": "#e8f0fe",
+            "scroll_background": "#f1f3f4",
+            "scroll_handle": "#dadce0",
+            "scroll_handle_hover": "#bdc1c6",
+            "header_background": "#f1f3f4",
+            "divider_color": "#dadce0",
+            "stylesheet": """
+                QWidget {
+                    background-color: #f8f9fa;
+                    color: #202124;
+                    font-family: 'Segoe UI', Arial, sans-serif;
+                }
+                QPushButton {
+                    background-color: #1a73e8;
+                    color: white;
+                    border: none;
+                    padding: 8px 16px;
+                    border-radius: 5px;
+                    font-size: 14px;
+                }
+                QPushButton:hover {
+                    background-color: #1967d2;
+                }
+                QPushButton:pressed {
+                    background-color: #185abc;
+                }
+                QLineEdit, QTextEdit, QPlainTextEdit {
+                    background-color: #ffffff;
+                    border: 1px solid #dadce0;
+                    border-radius: 4px;
+                    padding: 8px;
+                    color: #202124;
+                }
+                QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {
+                    border-color: #1a73e8;
+                }
+                QListWidget, QTreeWidget, QTreeView {
+                    background-color: #ffffff;
+                    border: 1px solid #dadce0;
+                    border-radius: 5px;
+                }
+                QListWidget::item:hover, QTreeWidget::item:hover, QTreeView::item:hover {
+                    background-color: #f1f3f4;
+                }
+                QListWidget::item:selected, QTreeWidget::item:selected, QTreeView::item:selected {
+                    background-color: #e8f0fe;
+                    color: #1a73e8;
+                }
+                QScrollBar:vertical {
+                    border: none;
+                    background: #f1f3f4;
+                    width: 10px;
+                    margin: 0px;
+                }
+                QScrollBar::handle:vertical {
+                    background: #dadce0;
+                    min-height: 30px;
+                    border-radius: 5px;
+                }
+                QScrollBar::handle:vertical:hover {
+                    background: #bdc1c6;
+                }
+                QComboBox {
+                    background-color: #ffffff;
+                    border: 1px solid #dadce0;
+                    border-radius: 4px;
+                    padding: 5px;
+                    color: #202124;
+                }
+                QComboBox:hover {
+                    border-color: #1a73e8;
+                }
+                QComboBox::drop-down {
+                    subcontrol-origin: padding;
+                    subcontrol-position: top right;
+                    width: 30px;
+                    border-left: 1px solid #dadce0;
+                    border-top-right-radius: 4px;
+                    border-bottom-right-radius: 4px;
+                }
+                QComboBox::down-arrow {
+                    image: url(down_arrow_light.png);
+                }
+            """
+        }
+
+    def cyberpunk_theme(self):
+        return {
+            "app_background": "#0a0a1e",
+            "text_primary": "#00ff00",
+            "text_secondary": "#00cccc",
+            "accent_color": "#ff00ff",
+            "accent_color_hover": "#ff33ff",
+            "accent_color_pressed": "#cc00cc",
+            "panel_background": "#1a1a3e",
+            "panel_border": "#00ffff",
+            "input_background": "#0f0f2f",
+            "input_border": "#00ffff",
+            "input_border_focus": "#ff00ff",
+            "button_text": "#0a0a1e",
+            "list_item_hover": "#2a2a5e",
+            "list_item_selected": "#3a3a7e",
+            "scroll_background": "#1a1a3e",
+            "scroll_handle": "#00ffff",
+            "scroll_handle_hover": "#ff00ff",
+            "header_background": "#2a2a5e",
+            "divider_color": "#00ffff",
+            "stylesheet": """
+                QWidget {
+                    background-color: #0a0a1e;
+                    color: #00ff00;
+                    font-family: 'Blade Runner', 'Orbitron', sans-serif;
+                }
+                QPushButton {
+                    background-color: #ff00ff;
+                    color: #0a0a1e;
+                    border: 2px solid #00ffff;
+                    padding: 8px 16px;
+                    border-radius: 0px;
+                    font-size: 14px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #ff33ff;
+                    border-color: #33ffff;
+                }
+                QPushButton:pressed {
+                    background-color: #cc00cc;
+                    border-color: #00cccc;
+                }
+                QLineEdit, QTextEdit, QPlainTextEdit {
+                    background-color: #0f0f2f;
+                    border: 2px solid #00ffff;
+                    border-radius: 0px;
+                    padding: 8px;
+                    color: #00ff00;
+                    font-family: 'Courier New', monospace;
+                }
+                QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {
+                    border-color: #ff00ff;
+                }
+                QListWidget, QTreeWidget, QTreeView {
+                    background-color: #1a1a3e;
+                    border: 2px solid #00ffff;
+                    border-radius: 0px;
+                }
+                QListWidget::item:hover, QTreeWidget::item:hover, QTreeView::item:hover {
+                    background-color: #2a2a5e;
+                }
+                QListWidget::item:selected, QTreeWidget::item:selected, QTreeView::item:selected {
+                    background-color: #3a3a7e;
+                    color: #ff00ff;
+                }
+                QScrollBar:vertical {
+                    border: none;
+                    background: #1a1a3e;
+                    width: 10px;
+                    margin: 0px;
+                }
+                QScrollBar::handle:vertical {
+                    background: #00ffff;
+                    min-height: 30px;
+                }
+                QScrollBar::handle:vertical:hover {
+                    background: #ff00ff;
+                }
+                QComboBox {
+                    background-color: #0f0f2f;
+                    border: 2px solid #00ffff;
+                    border-radius: 0px;
+                    padding: 5px;
+                    color: #00ff00;
+                }
+                QComboBox:hover {
+                    border-color: #ff00ff;
+                }
+                QComboBox::drop-down {
+                    subcontrol-origin: padding;
+                    subcontrol-position: top right;
+                    width: 30px;
+                    border-left: 2px solid #00ffff;
+                }
+                QComboBox::down-arrow {
+                    image: url(down_arrow_cyberpunk.png);
+                }
+            """
+        }
+        
+    def forest_theme(self):
+        return {
+            "app_background": "#2c4f35",
+            "text_primary": "#e0e8d5",
+            "text_secondary": "#b8c5a6",
+            "accent_color": "#8ab06a",
+            "accent_color_hover": "#9ac57a",
+            "accent_color_pressed": "#7a9f5a",
+            "panel_background": "#3a5a40",
+            "panel_border": "#6b8e4e",
+            "input_background": "#2c4f35",
+            "input_border": "#6b8e4e",
+            "input_border_focus": "#8ab06a",
+            "button_text": "#2c4f35",
+            "list_item_hover": "#4a6a50",
+            "list_item_selected": "#5a7a60",
+            "scroll_background": "#2c4f35",
+            "scroll_handle": "#6b8e4e",
+            "scroll_handle_hover": "#8ab06a",
+            "header_background": "#4a6a50",
+            "divider_color": "#6b8e4e",
+            "stylesheet": """
+                QWidget {
+                    background-color: #2c4f35;
+                    color: #e0e8d5;
+                    font-family: 'Verdana', sans-serif;
+                }
+                QPushButton {
+                    background-color: #8ab06a;
+                    color: #2c4f35;
+                    border: none;
+                    padding: 8px 16px;
+                    border-radius: 5px;
+                    font-size: 14px;
+                }
+                QPushButton:hover {
+                    background-color: #9ac57a;
+                }
+                QPushButton:pressed {
+                    background-color: #7a9f5a;
+                }
+                QLineEdit, QTextEdit, QPlainTextEdit {
+                    background-color: #2c4f35;
+                    border: 1px solid #6b8e4e;
+                    border-radius: 4px;
+                    padding: 8px;
+                    color: #e0e8d5;
+                }
+                QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {
+                    border-color: #8ab06a;
+                }
+                QListWidget, QTreeWidget, QTreeView {
+                    background-color: #3a5a40;
+                    border: 1px solid #6b8e4e;
+                    border-radius: 5px;
+                }
+                QListWidget::item:hover, QTreeWidget::item:hover, QTreeView::item:hover {
+                    background-color: #4a6a50;
+                }
+                QListWidget::item:selected, QTreeWidget::item:selected, QTreeView::item:selected {
+                    background-color: #5a7a60;
+                    color: #e0e8d5;
+                }
+                QScrollBar:vertical {
+                    border: none;
+                    background: #2c4f35;
+                    width: 10px;
+                    margin: 0px;
+                }
+                QScrollBar::handle:vertical {
+                    background: #6b8e4e;
+                    min-height: 30px;
+                    border-radius: 5px;
+                }
+                QScrollBar::handle:vertical:hover {
+                    background: #8ab06a;
+                }
+                QComboBox {
+                    background-color: #3a5a40;
+                    border: 1px solid #6b8e4e;
+                    border-radius: 4px;
+                    padding: 5px;
+                    color: #e0e8d5;
+                }
+                QComboBox:hover {
+                    border-color: #8ab06a;
+                }
+                QComboBox::drop-down {
+                    subcontrol-origin: padding;
+                    subcontrol-position: top right;
+                    width: 30px;
+                    border-left: 1px solid #6b8e4e;
+                    border-top-right-radius: 4px;
+                    border-bottom-right-radius: 4px;
+                }
+                QComboBox::down-arrow {
+                    image: url(down_arrow_forest.png);
+                }
+            """
+        }
 
 if __name__ == '__main__':
     app = QApplication([])
