@@ -658,6 +658,43 @@ def register_backup_folders(customer_id, device_id, folders):
         __teardown__(cursor, cnx)
         return ret
 
+def get_file_metadata_for_agent(agent_id):
+    ret = []
+    cnx = __connect_to_db__()
+    cursor = cnx.cursor(buffered=True)
+
+    try:
+        cursor.callproc('get_file_metadata_for_agent', (agent_id,))
+
+        for result in cursor.stored_results():
+            rows = result.fetchall()
+            for row in rows:
+                ret.append({
+                    'FileObjectID': row[0],
+                    'FileName': row[1],
+                    'FilePath': row[2],
+                    'ClientFullNameAndPath': row[3],
+                    'ClientFullNameAndPathAsPosix': row[4],
+                    'ClientDirectoryAsPosix': row[5],
+                    'FileSize': row[6],
+                    'FileType': row[7],
+                    'StormcloudFullNameAndPath': row[8],
+                    'TransDate': row[9].isoformat() if row[9] else None,
+                    'DeviceName': row[10],
+                    'DeviceType': row[11],
+                    'IPAddress': row[12],
+                    'OperatingSystem': row[13],
+                    'DeviceStatus': row[14],
+                    'LastCallback': row[15]
+                })
+
+    except Error as e:
+        __logger__().error(f"Error in get_file_metadata_for_agent: {e}")
+
+    finally:
+        __teardown__(cursor, cnx)
+        return ret
+
 def __connect_to_db__():
   mysql_username = os.getenv('MYSQLUSER')
   mysql_password = os.getenv('MYSQLPASSWORD')

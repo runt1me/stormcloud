@@ -375,6 +375,32 @@ def register_backup_folders():
     except Exception as e:
         return jsonify({"SUCCESS": False, "message": f"Failed to register backup folders. {e}"}), 500
 
+@app.route('/api/file-metadata', methods=['POST'])
+def get_file_metadata():
+    logger.info(flask.request)
+    if flask.request.headers['Content-Type'] != 'application/json':
+        return RESPONSE_400_MUST_BE_JSON
+
+    data = flask.request.get_json()
+    if data:
+        result, response = validate_request_generic(data)
+        if not result:
+            return response
+
+        agent_id = data.get('agent_id')
+        if not agent_id:
+            return json.dumps({'error': 'Missing agent_id'}), 400, {'Content-Type': 'application/json'}
+
+        file_metadata = db.get_file_metadata_for_agent(agent_id)
+        
+        return jsonify({
+            'success': True,
+            'data': file_metadata
+        }), 200
+
+    else:
+        return RESPONSE_400_BAD_REQUEST
+
 @app.route('/api/stripe/create-customer', methods=['POST'])
 def create_stripe_customer():
     logger.info(flask.request)
