@@ -244,8 +244,20 @@ class SystemInfoPage(QWizardPage):
         self.wizard().system_info["device_status"] = 1
         self.wizard().system_info["device_type"] = "Windows"
         self.wizard().system_info["device_name"] = self.device_name_edit.text()
-
+        if not self.passes_sanitize(self.wizard().system_info["device_name"]):
+            QMessageBox.warning(self, "Bad Device Name", "Your Device Name contains bad characters.")
+            return False
         return True
+        
+    def passes_sanitize(self, input_string):
+      # Function for validating input to the database.
+      # 
+      SANITIZE_LIST = ["'", '"', ";", "\\", "--", "*"]
+      for expr in SANITIZE_LIST:
+        if expr in input_string:
+          return False
+          
+      return True
 
     def createReadOnlyText(self, text):
         readOnlyText = QTextEdit()
