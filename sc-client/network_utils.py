@@ -11,16 +11,17 @@ import crypto_utils
 SERVER_NAME="www2.darkage.io"
 SERVER_PORT=8443
 
-API_ENDPOINT_BACKUP_FILE         = 'https://%s:%d/api/backup-file'           % (SERVER_NAME,SERVER_PORT)
-API_ENDPOINT_BACKUP_FILE_STREAM  = 'https://%s:%d/api/backup-file-stream'    % (SERVER_NAME,SERVER_PORT)
-API_ENDPOINT_KEEPALIVE           = 'https://%s:%d/api/keepalive'             % (SERVER_NAME,SERVER_PORT)
-API_ENDPOINT_RESTORE_FILE        = 'https://%s:%d/api/restore-file'          % (SERVER_NAME,SERVER_PORT)
+API_ENDPOINT_BACKUP_FILE             = 'https://%s:%d/api/backup-file'             % (SERVER_NAME,SERVER_PORT)
+API_ENDPOINT_BACKUP_FILE_STREAM      = 'https://%s:%d/api/backup-file-stream'      % (SERVER_NAME,SERVER_PORT)
+API_ENDPOINT_KEEPALIVE               = 'https://%s:%d/api/keepalive'               % (SERVER_NAME,SERVER_PORT)
+API_ENDPOINT_RESTORE_FILE            = 'https://%s:%d/api/restore-file'            % (SERVER_NAME,SERVER_PORT)
+API_ENDPOINT_REGISTER_BACKUP_FOLDERS = 'https://%s:%d/api/register-backup-folders' % (SERVER_NAME,SERVER_PORT)
 
 ONE_MB = 1024*1024
 THRESHOLD_MB = 200
 CHUNK_SIZE = ONE_MB
 
-def ship_file_to_server(api_key,backup_id,agent_id,secret_key,path):
+def ship_file_to_server(api_key,agent_id,secret_key,path):
     #unencrypted_path_to_encrypted_file, size_of_encrypted_content    = crypto_utils.encrypt_file(path,secret_key)
     #encrypted_path, _ = crypto_utils.encrypt_content(path,secret_key)
 
@@ -33,7 +34,6 @@ def ship_file_to_server(api_key,backup_id,agent_id,secret_key,path):
 
         ret = stream_upload_file(
             api_key,
-            backup_id,
             agent_id,
             path
         )
@@ -41,7 +41,6 @@ def ship_file_to_server(api_key,backup_id,agent_id,secret_key,path):
     else:
         ret = upload_file(
             api_key,
-            backup_id,
             agent_id,
             path
         )
@@ -49,13 +48,12 @@ def ship_file_to_server(api_key,backup_id,agent_id,secret_key,path):
     #crypto_utils.remove_temp_file(unencrypted_path_to_encrypted_file)
     return ret
 
-def stream_upload_file(api_key,backup_id,agent_id,local_file_path):
+def stream_upload_file(api_key,agent_id,local_file_path):
     url = API_ENDPOINT_BACKUP_FILE_STREAM
     response = None
 
     fields_dict = {
         'request_type': "backup_file",
-        'backup_id': backup_id,
         'api_key': api_key,
         'agent_id': agent_id,
 
@@ -75,13 +73,12 @@ def stream_upload_file(api_key,backup_id,agent_id,local_file_path):
     finally:
         return response.status_code if response else 500
 
-def upload_file(api_key,backup_id,agent_id,local_file_path):
+def upload_file(api_key,agent_id,local_file_path):
     url = API_ENDPOINT_BACKUP_FILE
     response = None
 
     json_data = json.dumps({
         'request_type': "backup_file",
-        'backup_id': backup_id,
         'api_key': api_key,
         'agent_id': agent_id,
 
@@ -161,3 +158,34 @@ def dump_file_info(path,size):
     logging.log(logging.INFO,"== SENDING FILE : ==")
     logging.log(logging.INFO,"\tPATH: %s" %path)
     logging.log(logging.INFO,"\tSIZE: %d" %size)
+    
+def sync_backup_folders(settings):
+    api_key = settings['API_KEY']
+    agent_id = settings['AGENT_ID']
+    backup_paths = settings['BACKUP_PATHS']
+    recursive_backup_paths = settings['RECURSIVE_BACKUP_PATHS']
+
+    # Prepare the folders data
+    folders = []
+    for path in backup_paths:
+        folders.append({'path': path, 'is_recursive': 0})
+    for path in recursive_backup_paths:
+        folders.append({'path': path, 'is_recursive': 1})
+
+    # Send the data to the server
+    data = {
+        'api_key': api_key,
+        'agent_id': agent_id,
+        'folders': folders
+    }
+    
+    try:
+        response = requests.post(API_ENDPOINT_REGISTER_BACKUP_FOLDERS, json=data)
+        if response.status_code == 200 and response.json()['SUCCESS']:
+            logging.info("Backup folders synchronized successfully")
+        else:
+            logging.error(f"Failed to synchronize backup folders: {response.json().get('message', 'Unknown error')}")
+        return response.status_code == 200 and response.json()['SUCCESS']
+    except Exception as e:
+        logging.error(f"Error synchronizing backup folders: {str(e)}")
+        return False
