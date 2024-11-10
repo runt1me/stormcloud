@@ -197,26 +197,51 @@ class APIKeyPage(QWizardPage):
             return False
 
 class SystemInfoPage(QWizardPage):
-    
     def __init__(self):
         super().__init__()
         self.setTitle("System Information")
         
-        layout = QFormLayout()
-        self.device_name_edit = QLineEdit()  # Add QLineEdit for device name
-        self.device_name_edit.setPlaceholderText("Enter device name")  # Optional placeholder text
-        layout.addRow("Device Name:", self.device_name_edit)  # Add QLineEdit to the form
-        self.setLayout(layout)
+        # Set margins and spacing for consistent alignment
+        self.layout = QFormLayout()
+        self.layout.setContentsMargins(20, 20, 20, 20)
+        self.layout.setSpacing(10)
+        self.layout.setLabelAlignment(Qt.AlignLeft)  # Align labels to the left
+        
+        # Create device name label with same formatting as system info labels
+        device_name_label = QLabel("Device Name:")
+        device_name_label.setMinimumWidth(120)  # Set minimum width for label alignment
+        
+        self.device_name_edit = QLineEdit()
+        self.device_name_edit.setPlaceholderText("Enter device name")
+        self.device_name_edit.setMinimumWidth(300)
+        
+        # Add device name row with explicit label widget
+        self.layout.addRow(device_name_label, self.device_name_edit)
+        
+        # Create a container for system info rows
+        self.info_container = QWidget()
+        self.info_layout = QFormLayout(self.info_container)
+        self.info_layout.setSpacing(10)
+        self.info_layout.setContentsMargins(0, 0, 0, 0)
+        self.info_layout.setLabelAlignment(Qt.AlignLeft)  # Match label alignment
+        self.layout.addRow(self.info_container)
+        
+        self.setLayout(self.layout)
 
     def initializePage(self):
         if not self.wizard().system_info:
             self.wizard().system_info = self.get_system_info()
 
-        # Clear and repopulate the layout every time the page is shown
-        self.layout().removeRow(1)  # Update the index to remove the correct row
+        # Clear existing system info rows
+        while self.info_layout.rowCount() > 0:
+            self.info_layout.removeRow(0)
+
+        # Add new system info rows with consistent label width
         for key, value in self.wizard().system_info.items():
-            if key != "device_name":  # Skip the device name as it's already in QLineEdit
-                self.layout().addRow(QLabel(key), self.createReadOnlyText(str(value)))
+            if key != "device_name":
+                label = QLabel(key)
+                label.setMinimumWidth(120)  # Match the device name label width
+                self.info_layout.addRow(label, self.createReadOnlyText(str(value)))
 
     def get_system_info(self):
         BYTES_IN_A_GB = 1073741824
@@ -244,19 +269,33 @@ class SystemInfoPage(QWizardPage):
         self.wizard().system_info["device_status"] = 1
         self.wizard().system_info["device_type"] = "Windows"
         self.wizard().system_info["device_name"] = self.device_name_edit.text()
-
+        if not self.passes_sanitize(self.wizard().system_info["device_name"]):
+            QMessageBox.warning(self, "Bad Device Name", "Your Device Name contains bad characters.")
+            return False
         return True
-
+        
+    def passes_sanitize(self, input_string):
+      # Function for validating input to the database.
+      # 
+      SANITIZE_LIST = ["'", '"', ";", "\\", "--", "*"]
+      for expr in SANITIZE_LIST:
+        if expr in input_string:
+          return False
+          
+      return True
+        
     def createReadOnlyText(self, text):
         readOnlyText = QTextEdit()
         readOnlyText.setPlainText(text)
         readOnlyText.setReadOnly(True)
         readOnlyText.setFixedHeight(25)
+        readOnlyText.setMinimumWidth(300)
         readOnlyText.setStyleSheet("""
             QTextEdit {
                 background-color: #F0F0F0;
                 color: #333;
                 border: none;
+                padding: 2px;
             }
         """)
         return readOnlyText
@@ -711,4 +750,4 @@ if __name__ == "__main__":
     window = Installer()
     window.show()
 
-    sys.exit(app.exec_())
+    sys.exit(app.exec_()) # this line starts the application's event loop. It keeps the application running, waiting for events (like button clicks, key presses, etc.) until the application is closed. It also closes it after it wants to close. 
