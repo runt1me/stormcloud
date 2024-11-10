@@ -16,6 +16,23 @@ API_ENDPOINT_BACKUP_FILE_STREAM      = 'https://%s:%d/api/backup-file-stream'   
 API_ENDPOINT_KEEPALIVE               = 'https://%s:%d/api/keepalive'               % (SERVER_NAME,SERVER_PORT)
 API_ENDPOINT_RESTORE_FILE            = 'https://%s:%d/api/restore-file'            % (SERVER_NAME,SERVER_PORT)
 API_ENDPOINT_REGISTER_BACKUP_FOLDERS = 'https://%s:%d/api/register-backup-folders' % (SERVER_NAME,SERVER_PORT)
+API_ENDPOINT_FILE_METADATA           = 'https://%s:%d/api/file-metadata'           % (SERVER_NAME,SERVER_PORT)
+
+def fetch_file_metadata(api_key, agent_id):
+    url = API_ENDPOINT_FILE_METADATA
+    headers = {'Content-Type': 'application/json'}
+    data = {
+        'api_key': api_key,
+        'agent_id': agent_id
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=data)
+        response.raise_for_status()
+        return response.json()['data']
+    except requests.RequestException as e:
+        logging.error(f"Error fetching file metadata: {e}")
+        return None
 
 ONE_MB = 1024*1024
 THRESHOLD_MB = 200
@@ -137,6 +154,9 @@ def tls_send_json_data_get(json_data_as_string, expected_response_code, show_jso
         url = API_ENDPOINT_RESTORE_FILE
 
     try:
+        logging.info("Sending headers for restore: {}".format(headers))
+        logging.info("Sending json data for restore: {}".format(json.dumps(json_data)))
+    
         response = requests.get(url, headers=headers, data=json.dumps(json_data))
 
     except Exception as e:
