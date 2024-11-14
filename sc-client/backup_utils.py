@@ -193,35 +193,6 @@ def get_md5_hash(path_to_file):
 
     return file_hash.hexdigest()
     
-def get_server_path(customer_id, device_id, decrypted_path):
-    """
-    Convert client paths to server paths, stripping drive letters and 
-    ensuring proper Linux path format
-    """
-    device_root_directory_on_server = f"/storage/{customer_id}/device/{device_id}/"
-    
-    # Convert Windows path to proper format
-    if "\\" in decrypted_path or ":" in decrypted_path:
-        # Convert to PureWindowsPath first
-        p = pathlib.PureWindowsPath(decrypted_path)
-        
-        # Get parts after drive letter
-        parts = list(p.parts)
-        if len(parts) > 0 and ':' in parts[0]:  # Has drive letter
-            parts = parts[1:]  # Remove drive letter component
-            
-        # Convert to posix and join with server path
-        path = device_root_directory_on_server + '/'.join(parts)
-    else:
-        # For non-Windows paths, just ensure proper formatting
-        path = device_root_directory_on_server + decrypted_path.lstrip('/')
-    
-    # Clean up any double slashes
-    path = path.replace("//", "/")
-    
-    logging.info(f"Converted path: {decrypted_path} -> {path}")
-    return path, device_root_directory_on_server
-
 def print_rename(old, new):
     """Enhanced rename logging"""
     logging.info("== RENAMING ==")
