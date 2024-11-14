@@ -1,0 +1,17 @@
+# GUI Framework
+PyQt5==5.15.10
+PyQt5-sip==12.13.0  # Required PyQt5 dependency found in freeze
+
+# System Utilities
+psutil==5.9.8
+pywin32==305.1  # Provides win32api, win32gui, win32con
+infi.systray==0.1.12
+
+# Date/Time Handling
+pytz==2023.3.post1
+
+# Data Serialization
+PyYAML==6.0.1  # For yaml imports
+
+# Payment Processing
+stripe==11.2.0
