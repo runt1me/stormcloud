@@ -22,8 +22,7 @@ import network_utils
 
 from infi.systray import SysTrayIcon   # pip install infi.systray
 
-from client_db_utils import (get_or_create_hash_db, hash_db_exists,
-                            create_hash_db, get_hash_db)
+from client_db_utils import get_or_create_hash_db
 
 ACTION_TIMER = 90
 
