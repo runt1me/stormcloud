@@ -5,14 +5,9 @@ from datetime import datetime
 import argparse
 import os
 import json
-
-import sqlite3
 import yaml
-
 import threading
 import logging
-
-# import sslkeylog
 
 import keepalive_utils
 import backup_utils
@@ -193,9 +188,6 @@ def should_backup(schedule, last_check_time, backup_state):
     return should_run, trigger_source
 
 def main(settings_file_path,hash_db_file_path,ignore_hash_db):
-    # Honor SSLKEYLOGFILE if set by the OS
-    # sslkeylog.set_keylog(os.environ.get('SSLKEYLOGFILE'))
-
     settings                = read_yaml_settings_file(settings_file_path)
 
     if int(settings['SEND_LOGS']):
@@ -209,7 +201,7 @@ def main(settings_file_path,hash_db_file_path,ignore_hash_db):
         (
             "Backup now",
             None,
-            lambda x: logging.log(logging.INFO, "User clicked 'Backup now', but backup is always running.")
+            lambda x: logging.log(logging.INFO, "User clicked 'Backup now'.")
         )
     ,)
     systray = SysTrayIcon("stormcloud.ico", "Stormcloud Backup Engine", systray_menu_options)

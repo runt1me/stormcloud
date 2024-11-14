@@ -117,7 +117,6 @@ def process_file(file_path_obj, api_key, agent_id, secret_key, dbconn, ignore_ha
             status = BACKUP_STATUS_CHANGE
 
         if status == BACKUP_STATUS_NO_CHANGE:
-            logging.info("No change to file, continuing")
             return True
 
         elif status == BACKUP_STATUS_CHANGE:
@@ -126,7 +125,7 @@ def process_file(file_path_obj, api_key, agent_id, secret_key, dbconn, ignore_ha
             ret = network_utils.ship_file_to_server(api_key, agent_id, secret_key, file_path_obj.resolve())
             if ret == 200:
                 if dbconn:  # Only update hash if we have a db connection
-                    update_hash_db(file_path_obj, dbconn)
+                    _update_hash_db(file_path_obj, dbconn)
                 logging.info(f"Successfully backed up file: {file_path_obj.name}")
                 return True
             else:
@@ -141,7 +140,7 @@ def check_hash_db(file_path_obj,conn):
     cursor = conn.cursor()
     file_path = str(file_path_obj)
 
-    results = is_file_in_db(file_path, cursor)
+    results = _is_file_in_db(file_path, cursor)
     
     if not results:
         logging.log(logging.INFO,"Could not find file in hash database.")
@@ -149,43 +148,38 @@ def check_hash_db(file_path_obj,conn):
 
     else:
         file_name, md5_from_db = results[0]
-        logging.log(logging.INFO,"== %s == " % file_name)
-        logging.log(logging.INFO,"Got md5 from database: %s" % md5_from_db)
-
-        current_md5 = get_md5_hash(file_path)
-        logging.log(logging.INFO,"Got md5 hash from file: %s" % current_md5)
+        current_md5 = _get_md5_hash(file_path)
 
         if md5_from_db == current_md5:
             return BACKUP_STATUS_NO_CHANGE
         else:
             return BACKUP_STATUS_CHANGE
 
-def update_hash_db(file_path_obj,conn):
-    cursor      = conn.cursor()
+def _update_hash_db(file_path_obj,conn):
     file_path   = str(file_path_obj)
-    results     = is_file_in_db(file_path, cursor)
-    md5         = get_md5_hash(file_path)
+    results     = _is_file_in_db(file_path, conn.cursor())
+    md5         = _get_md5_hash(file_path)
 
     if not results:
-        insert_into_hash_db(md5, file_path, conn, cursor)
+        _insert_into_hash_db(md5, file_path, conn, cursor)
     else:
-        update_hash_in_db(md5, file_path, conn, cursor)
+        _update_hash_in_db(md5, file_path, conn, cursor)
 
     logging.log(logging.INFO, "Updated file hash in database.")
 
-def insert_into_hash_db(md5, file_path, conn, cursor):
+def _insert_into_hash_db(md5, file_path, conn, cursor):
     cursor.execute('''INSERT INTO files (file_name, md5) VALUES (?,?)''',(file_path,md5)) 
     conn.commit()
 
-def update_hash_in_db(md5, file_path, conn, cursor):
+def _update_hash_in_db(md5, file_path, conn, cursor):
     cursor.execute('''UPDATE files SET md5 = ? WHERE file_name = ?''',(md5,file_path))
     conn.commit()
 
-def is_file_in_db(file_path, cursor):
+def _is_file_in_db(file_path, cursor):
     cursor.execute('''SELECT file_name,md5 FROM files WHERE file_name = ?;''', (file_path,))
     return cursor.fetchall()
 
-def get_md5_hash(path_to_file):
+def _get_md5_hash(path_to_file):
     with open(path_to_file, "rb") as f:
         file_hash = hashlib.md5()
         while chunk := f.read(8192):
