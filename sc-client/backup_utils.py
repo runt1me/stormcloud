@@ -192,13 +192,3 @@ def get_md5_hash(path_to_file):
             file_hash.update(chunk)
 
     return file_hash.hexdigest()
-    
-def print_rename(old, new):
-    """Enhanced rename logging"""
-    logging.info("== RENAMING ==")
-    logging.info(f"From: {old}")
-    logging.info(f"To:   {new}")
-    
-    # Verify paths look valid
-    if ':' in new or ':' in old:
-        logging.warning("WARNING: Found ':' in path which may indicate unconverted Windows path")
