@@ -3,7 +3,6 @@ import json
 import logging
 import base64
 
-import crypto_utils
 import network_utils as scnet
 
 def restore_file(file_path, api_key, agent_id, secret_key, version_id=None):

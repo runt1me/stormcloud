@@ -6,7 +6,6 @@ import yaml
 import requests
 import pdb
 
-import crypto_utils
 import network_utils as scnet
 
 from time import sleep

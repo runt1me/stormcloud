@@ -6,8 +6,6 @@ import os
 import logging
 import base64
 
-import crypto_utils
-
 SERVER_NAME="www2.darkage.io"
 SERVER_PORT=8443
 
@@ -39,9 +37,11 @@ THRESHOLD_MB = 200
 CHUNK_SIZE = ONE_MB
 
 def ship_file_to_server(api_key,agent_id,secret_key,path):
-    #unencrypted_path_to_encrypted_file, size_of_encrypted_content    = crypto_utils.encrypt_file(path,secret_key)
-    #encrypted_path, _ = crypto_utils.encrypt_content(path,secret_key)
-
+    """
+        Uploads file to server.
+        Calls either stream_upload_file or upload_file
+        based on the size of the file.
+    """
     size = os.path.getsize(path)
 
     logging.log(logging.INFO,dump_file_info(path,size))
@@ -62,7 +62,6 @@ def ship_file_to_server(api_key,agent_id,secret_key,path):
             path
         )
 
-    #crypto_utils.remove_temp_file(unencrypted_path_to_encrypted_file)
     return ret
 
 def stream_upload_file(api_key,agent_id,local_file_path):
