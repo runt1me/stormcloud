@@ -170,7 +170,7 @@ def add_or_update_file_for_device(device_id, file_name, file_path, client_full_n
     __teardown__(cursor,cnx)
     return ret
 
-def add_or_update_device_for_customer(customer_id, device_name, device_type, ip_address, operating_system, device_status, last_callback, stormcloud_path_to_secret_key, agent_id):
+def add_or_update_device_for_customer(customer_id, device_name, device_type, ip_address, operating_system, device_status, last_callback, agent_id):
   # IN CID INT,
   # IN device_name varchar(512),
   # IN device_type varchar(512),
@@ -184,6 +184,9 @@ def add_or_update_device_for_customer(customer_id, device_name, device_type, ip_
   ret = []
   cnx = __connect_to_db__()
   cursor = cnx.cursor(buffered=True)
+
+  # Placeholder for deprecated field
+  stormcloud_path_to_secret_key = "/dev/null"
 
   try:
     cursor.callproc('add_or_update_device_for_customer',
