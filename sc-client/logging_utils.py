@@ -7,11 +7,11 @@ import logging
 
 import network_utils
 
-def send_logs_to_server(api_key,agent_id,secret_key):
+def send_logs_to_server(api_key,agent_id):
     logfiles_list = get_logfiles(uuid=agent_id)
     for logfile in logfiles_list:
         filepath = pathlib.Path(logfile)
-        ret = network_utils.ship_file_to_server(api_key,agent_id,secret_key,filepath)
+        ret = network_utils.ship_file_to_server(api_key,agent_id,filepath)
 
         if ret == 200:
             os.remove(logfile)

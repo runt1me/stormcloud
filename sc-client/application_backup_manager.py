@@ -3830,7 +3830,7 @@ class FileExplorerPanel(QWidget):
                     logging.error(f'Settings did not parse to dictionary, got: {type(settings)}')
                     return None
                     
-                required_keys = ['API_KEY', 'AGENT_ID', 'SECRET_KEY']
+                required_keys = ['API_KEY', 'AGENT_ID']
                 missing_keys = [key for key in required_keys if key not in settings]
                 
                 if missing_keys:
@@ -3861,8 +3861,7 @@ class FileExplorerPanel(QWidget):
             
             if restore_utils.restore_file(file_path
                                             , settings['API_KEY']
-                                            , settings['AGENT_ID']
-                                            , settings['SECRET_KEY']):
+                                            , settings['AGENT_ID']):
                 StormcloudMessageBox.information(self, "Success", f"Successfully restored {file_path}")
             else:
                 StormcloudMessageBox.critical(self, "Error", f"Failed to restore {file_path}")
@@ -3881,7 +3880,7 @@ class FileExplorerPanel(QWidget):
             # Add version info to the request
             version_id = version_data.get('version_id')
             if restore_utils.restore_file(file_path, settings['API_KEY'], settings['AGENT_ID'], 
-                                       settings['SECRET_KEY'], version_id):
+                                       version_id):
                 StormcloudMessageBox.information(self, "Success", 
                     f"Successfully restored version from {version_data.get('timestamp')} of {file_path}")
             else:
@@ -3937,7 +3936,6 @@ class FileExplorerPanel(QWidget):
                     path_obj,
                     settings['API_KEY'],
                     settings['AGENT_ID'],
-                    settings['SECRET_KEY'],
                     dbconn,
                     True
                 )

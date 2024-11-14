@@ -3,10 +3,9 @@ import json
 import logging
 import base64
 
-import crypto_utils
 import network_utils as scnet
 
-def restore_file(file_path, api_key, agent_id, secret_key, version_id=None):
+def restore_file(file_path, api_key, agent_id, version_id=None):
     path_for_request = base64.b64encode(str(file_path).encode("utf-8")).decode('utf-8')
 
     restore_file_request_data = json.dumps({

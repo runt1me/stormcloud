@@ -12,7 +12,7 @@ import traceback
 BACKUP_STATUS_NO_CHANGE = 0
 BACKUP_STATUS_CHANGE    = 1
 
-def perform_backup(paths, paths_recursive, api_key, agent_id, secret_key, dbconn, ignore_hash, systray):
+def perform_backup(paths, paths_recursive, api_key, agent_id, dbconn, ignore_hash, systray):
     """Enhanced backup function with better error handling"""
     logging.info("Beginning backup!")
     
@@ -45,17 +45,17 @@ def perform_backup(paths, paths_recursive, api_key, agent_id, secret_key, dbconn
                 path_obj = pathlib.Path(path)
                 
                 if path_obj.is_file():
-                    process_file(path_obj, api_key, agent_id, secret_key, dbconn, ignore_hash)
+                    process_file(path_obj, api_key, agent_id, dbconn, ignore_hash)
                 elif path_obj.is_dir():
                     logging.info(f"Processing directory: {path}")
                     for file_obj in [p for p in path_obj.iterdir() if p.is_file()]:
-                        process_file(file_obj, api_key, agent_id, secret_key, dbconn, ignore_hash)
+                        process_file(file_obj, api_key, agent_id, dbconn, ignore_hash)
                         
             except Exception as e:
                 logging.error(f"Error processing path {path}: {str(e)}", exc_info=True)
                 raise  # Re-raise to be caught by outer try/except
 
-        process_paths_recursive(paths_recursive, api_key, agent_id, secret_key, dbconn, ignore_hash)
+        process_paths_recursive(paths_recursive, api_key, agent_id, dbconn, ignore_hash)
         
         systray.update(hover_text="Stormcloud Backup Engine")
         logging.info("Backup completed successfully")
@@ -66,24 +66,24 @@ def perform_backup(paths, paths_recursive, api_key, agent_id, secret_key, dbconn
         systray.update(hover_text="Stormcloud Backup Engine - Backup Failed")
         raise
 
-def process_paths_nonrecursive(paths,api_key,agent_id,secret_key,dbconn,ignore_hash):
+def process_paths_nonrecursive(paths,api_key,agent_id,dbconn,ignore_hash):
     for path in paths:
         try:
             logging.log(logging.INFO,"==   %s   ==" % path)
             path_obj = pathlib.Path(path)
 
             if path_obj.is_file():
-                process_file(path_obj,api_key,agent_id,secret_key,dbconn,ignore_hash)
+                process_file(path_obj,api_key,agent_id,dbconn,ignore_hash)
 
             elif path_obj.is_dir():
                 for file_obj in [p for p in path_obj.iterdir() if p.is_file()]:
-                    process_file(file_obj,api_key,agent_id,secret_key,dbconn,ignore_hash)
+                    process_file(file_obj,api_key,agent_id,dbconn,ignore_hash)
 
         except Exception as e:
             logging.log(logging.WARN, "%s" % traceback.format_exc())
             logging.log(logging.WARN, "Caught exception when trying to process path %s: %s" % (path,e))
 
-def process_paths_recursive(paths,api_key,agent_id,secret_key,dbconn,ignore_hash):
+def process_paths_recursive(paths,api_key,agent_id,dbconn,ignore_hash):
     if not(paths):
         return
         
@@ -92,21 +92,21 @@ def process_paths_recursive(paths,api_key,agent_id,secret_key,dbconn,ignore_hash
             logging.log(logging.INFO, "==   %s (-R)  ==" % path)
             path_obj = pathlib.Path(path)
 
-            process_one_path_recursive(path_obj,api_key,agent_id,secret_key,dbconn,ignore_hash)
+            process_one_path_recursive(path_obj,api_key,agent_id,dbconn,ignore_hash)
         except Exception as e:
             logging.log(logging.WARN, "Caught (higher-level) exception when trying to process recursive path %s: %s" % (path,e))
 
-def process_one_path_recursive(target_path,api_key,agent_id,secret_key,dbconn,ignore_hash):
+def process_one_path_recursive(target_path,api_key,agent_id,dbconn,ignore_hash):
     for file in target_path.iterdir():
         if file.is_dir():
             try:
-                process_one_path_recursive(file,api_key,agent_id,secret_key,dbconn,ignore_hash)
+                process_one_path_recursive(file,api_key,agent_id,dbconn,ignore_hash)
             except Exception as e:
                 logging.log(logging.WARN, "Caught (lower-level) exception when trying to process recursive path %s: %s" % (target_path,e))
         else:
-            process_file(file,api_key,agent_id,secret_key,dbconn,ignore_hash)
+            process_file(file,api_key,agent_id,dbconn,ignore_hash)
 
-def process_file(file_path_obj, api_key, agent_id, secret_key, dbconn, ignore_hash):
+def process_file(file_path_obj, api_key, agent_id, dbconn, ignore_hash):
     """Enhanced process_file with better error handling"""
     try:
         logging.info(f"Processing file: {file_path_obj}")
@@ -117,16 +117,15 @@ def process_file(file_path_obj, api_key, agent_id, secret_key, dbconn, ignore_ha
             status = BACKUP_STATUS_CHANGE
 
         if status == BACKUP_STATUS_NO_CHANGE:
-            logging.info("No change to file, continuing")
             return True
 
         elif status == BACKUP_STATUS_CHANGE:
             logging.info(f"Backing up file: {file_path_obj.name}")
 
-            ret = network_utils.ship_file_to_server(api_key, agent_id, secret_key, file_path_obj.resolve())
+            ret = network_utils.ship_file_to_server(api_key, agent_id, file_path_obj.resolve())
             if ret == 200:
                 if dbconn:  # Only update hash if we have a db connection
-                    update_hash_db(file_path_obj, dbconn)
+                    _update_hash_db(file_path_obj, dbconn)
                 logging.info(f"Successfully backed up file: {file_path_obj.name}")
                 return True
             else:
@@ -141,7 +140,7 @@ def check_hash_db(file_path_obj,conn):
     cursor = conn.cursor()
     file_path = str(file_path_obj)
 
-    results = is_file_in_db(file_path, cursor)
+    results = _is_file_in_db(file_path, cursor)
     
     if not results:
         logging.log(logging.INFO,"Could not find file in hash database.")
@@ -149,85 +148,41 @@ def check_hash_db(file_path_obj,conn):
 
     else:
         file_name, md5_from_db = results[0]
-        logging.log(logging.INFO,"== %s == " % file_name)
-        logging.log(logging.INFO,"Got md5 from database: %s" % md5_from_db)
-
-        current_md5 = get_md5_hash(file_path)
-        logging.log(logging.INFO,"Got md5 hash from file: %s" % current_md5)
+        current_md5 = _get_md5_hash(file_path)
 
         if md5_from_db == current_md5:
             return BACKUP_STATUS_NO_CHANGE
         else:
             return BACKUP_STATUS_CHANGE
 
-def update_hash_db(file_path_obj,conn):
-    cursor      = conn.cursor()
+def _update_hash_db(file_path_obj,conn):
     file_path   = str(file_path_obj)
-    results     = is_file_in_db(file_path, cursor)
-    md5         = get_md5_hash(file_path)
+    results     = _is_file_in_db(file_path, conn.cursor())
+    md5         = _get_md5_hash(file_path)
 
     if not results:
-        insert_into_hash_db(md5, file_path, conn, cursor)
+        _insert_into_hash_db(md5, file_path, conn, cursor)
     else:
-        update_hash_in_db(md5, file_path, conn, cursor)
+        _update_hash_in_db(md5, file_path, conn, cursor)
 
     logging.log(logging.INFO, "Updated file hash in database.")
 
-def insert_into_hash_db(md5, file_path, conn, cursor):
+def _insert_into_hash_db(md5, file_path, conn, cursor):
     cursor.execute('''INSERT INTO files (file_name, md5) VALUES (?,?)''',(file_path,md5)) 
     conn.commit()
 
-def update_hash_in_db(md5, file_path, conn, cursor):
+def _update_hash_in_db(md5, file_path, conn, cursor):
     cursor.execute('''UPDATE files SET md5 = ? WHERE file_name = ?''',(md5,file_path))
     conn.commit()
 
-def is_file_in_db(file_path, cursor):
+def _is_file_in_db(file_path, cursor):
     cursor.execute('''SELECT file_name,md5 FROM files WHERE file_name = ?;''', (file_path,))
     return cursor.fetchall()
 
-def get_md5_hash(path_to_file):
+def _get_md5_hash(path_to_file):
     with open(path_to_file, "rb") as f:
         file_hash = hashlib.md5()
         while chunk := f.read(8192):
             file_hash.update(chunk)
 
     return file_hash.hexdigest()
-    
-def get_server_path(customer_id, device_id, decrypted_path):
-    """
-    Convert client paths to server paths, stripping drive letters and 
-    ensuring proper Linux path format
-    """
-    device_root_directory_on_server = f"/storage/{customer_id}/device/{device_id}/"
-    
-    # Convert Windows path to proper format
-    if "\\" in decrypted_path or ":" in decrypted_path:
-        # Convert to PureWindowsPath first
-        p = pathlib.PureWindowsPath(decrypted_path)
-        
-        # Get parts after drive letter
-        parts = list(p.parts)
-        if len(parts) > 0 and ':' in parts[0]:  # Has drive letter
-            parts = parts[1:]  # Remove drive letter component
-            
-        # Convert to posix and join with server path
-        path = device_root_directory_on_server + '/'.join(parts)
-    else:
-        # For non-Windows paths, just ensure proper formatting
-        path = device_root_directory_on_server + decrypted_path.lstrip('/')
-    
-    # Clean up any double slashes
-    path = path.replace("//", "/")
-    
-    logging.info(f"Converted path: {decrypted_path} -> {path}")
-    return path, device_root_directory_on_server
-
-def print_rename(old, new):
-    """Enhanced rename logging"""
-    logging.info("== RENAMING ==")
-    logging.info(f"From: {old}")
-    logging.info(f"To:   {new}")
-    
-    # Verify paths look valid
-    if ':' in new or ':' in old:
-        logging.warning("WARNING: Found ':' in path which may indicate unconverted Windows path")

@@ -5,14 +5,9 @@ from datetime import datetime
 import argparse
 import os
 import json
-
-import sqlite3
 import yaml
-
 import threading
 import logging
-
-# import sslkeylog
 
 import keepalive_utils
 import backup_utils
@@ -22,8 +17,7 @@ import network_utils
 
 from infi.systray import SysTrayIcon   # pip install infi.systray
 
-from client_db_utils import (get_or_create_hash_db, hash_db_exists,
-                            create_hash_db, get_hash_db)
+from client_db_utils import get_or_create_hash_db
 
 ACTION_TIMER = 90
 
@@ -194,13 +188,8 @@ def should_backup(schedule, last_check_time, backup_state):
     return should_run, trigger_source
 
 def main(settings_file_path,hash_db_file_path,ignore_hash_db):
-    # Honor SSLKEYLOGFILE if set by the OS
-    # sslkeylog.set_keylog(os.environ.get('SSLKEYLOGFILE'))
-
-    settings                = read_yaml_settings_file(settings_file_path)
-
-    if int(settings['SEND_LOGS']):
-        logging_utils.send_logs_to_server(settings['API_KEY'],settings['AGENT_ID'],settings['SECRET_KEY'])
+    settings = read_yaml_settings_file(settings_file_path)
+    logging_utils.send_logs_to_server(settings['API_KEY'],settings['AGENT_ID'])
     
     logging_utils.initialize_logging(uuid=settings['AGENT_ID'])
 
@@ -210,7 +199,7 @@ def main(settings_file_path,hash_db_file_path,ignore_hash_db):
         (
             "Backup now",
             None,
-            lambda x: logging.log(logging.INFO, "User clicked 'Backup now', but backup is always running.")
+            lambda x: logging.log(logging.INFO, "User clicked 'Backup now'.")
         )
     ,)
     systray = SysTrayIcon("stormcloud.ico", "Stormcloud Backup Engine", systray_menu_options)
@@ -292,7 +281,7 @@ def action_loop_and_sleep(settings, settings_file_path, dbconn, ignore_hash, sys
             network_utils.sync_backup_folders(settings)
 
             logging.log(logging.INFO,"Stormcloud is running with settings: %s"
-                % ([(s, settings[s]) for s in settings.keys() if s != 'SECRET_KEY'])
+                % ([(s, settings[s]) for s in settings.keys()])
             )
 
             # Handle keepalive thread
@@ -301,8 +290,7 @@ def action_loop_and_sleep(settings, settings_file_path, dbconn, ignore_hash, sys
                 active_thread = start_keepalive_thread(
                     cur_keepalive_freq,
                     settings['API_KEY'],
-                    settings['AGENT_ID'],
-                    settings['SECRET_KEY']
+                    settings['AGENT_ID']
                 )
 
             # Check backup mode
@@ -319,7 +307,6 @@ def action_loop_and_sleep(settings, settings_file_path, dbconn, ignore_hash, sys
                             settings['RECURSIVE_BACKUP_PATHS'],
                             settings['API_KEY'],
                             settings['AGENT_ID'],
-                            settings['SECRET_KEY'],
                             dbconn,
                             ignore_hash,
                             systray
@@ -348,7 +335,6 @@ def action_loop_and_sleep(settings, settings_file_path, dbconn, ignore_hash, sys
                                 settings['RECURSIVE_BACKUP_PATHS'],
                                 settings['API_KEY'],
                                 settings['AGENT_ID'],
-                                settings['SECRET_KEY'],
                                 dbconn,
                                 ignore_hash,
                                 systray
@@ -384,10 +370,10 @@ def read_yaml_settings_file(fn):
     with open(fn, 'r') as settings_file:
         return yaml.safe_load(settings_file)
 
-def start_keepalive_thread(freq,api_key,agent_id,secret_key):
+def start_keepalive_thread(freq,api_key,agent_id):
     logging.log(logging.INFO,"starting new keepalive thread with freq %d" % freq)
 
-    t = threading.Thread(target=keepalive_utils.execute_ping_loop,args=(freq,api_key,agent_id,secret_key))
+    t = threading.Thread(target=keepalive_utils.execute_ping_loop,args=(freq,api_key,agent_id))
     t.start()
 
     logging.log(logging.INFO,"returning from start thread")
