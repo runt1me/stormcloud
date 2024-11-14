@@ -161,9 +161,9 @@ def _update_hash_db(file_path_obj,conn):
     md5         = _get_md5_hash(file_path)
 
     if not results:
-        _insert_into_hash_db(md5, file_path, conn, cursor)
+        _insert_into_hash_db(md5, file_path, conn, conn.cursor())
     else:
-        _update_hash_in_db(md5, file_path, conn, cursor)
+        _update_hash_in_db(md5, file_path, conn, conn.cursor())
 
     logging.log(logging.INFO, "Updated file hash in database.")
 
