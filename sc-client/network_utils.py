@@ -36,7 +36,7 @@ def fetch_file_metadata(api_key, agent_id):
         logging.error(f"Error fetching file metadata: {e}")
         return None
 
-def ship_file_to_server(api_key,agent_id,secret_key,path):
+def ship_file_to_server(api_key,agent_id,path):
     """
         Uploads file to server.
         Calls either _stream_upload_file or _upload_file

@@ -7,7 +7,7 @@ import restore_utils
 
 from win10toast import ToastNotifier
 
-def execute_ping_loop(interval,api_key,agent_id,secret_key):
+def execute_ping_loop(interval,api_key,agent_id):
     while True:
         logging.log(logging.INFO,"Sending keepalive to server")
         keepalive_request_data = json.dumps({
@@ -27,7 +27,7 @@ def execute_ping_loop(interval,api_key,agent_id,secret_key):
                 restore_queue = response_data['restore_queue']
                 if restore_queue:
                     for file_name in restore_queue:
-                        if restore_utils.restore_file(file_name, api_key, agent_id, secret_key):
+                        if restore_utils.restore_file(file_name, api_key, agent_id):
                             logging.log(logging.INFO, "Successfully restored file! Wrote to: %s" % file_name)
                         else:
                             logging.log(logging.WARNING, "Failed to restore file: Attempted: %s" % file_name)

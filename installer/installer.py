@@ -492,7 +492,6 @@ class InstallPage(QWizardPage):
             keepalive_freq=300,
             backup_paths=self.wizard().backup_paths,
             backup_paths_recursive=self.wizard().backup_paths_recursive,
-            secret_key=register_result['secret_key'],
             agent_id=register_result['agent_id'],
             api_key=self.wizard().system_info['api_key'],
             target_folder=self.wizard().install_directory,
@@ -594,7 +593,7 @@ class InstallPage(QWizardPage):
         except:
             return None
 
-    def configure_yaml_settings(self, send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive, secret_key, agent_id, api_key, target_folder):
+    def configure_yaml_settings(self, send_logs, backup_time, keepalive_freq, backup_paths, backup_paths_recursive, agent_id, api_key, target_folder):
         backup_time        = int(backup_time)
         keepalive_freq     = int(keepalive_freq)
 
@@ -605,7 +604,6 @@ class InstallPage(QWizardPage):
             'SEND_LOGS': int(send_logs),
             'BACKUP_TIME': backup_time,
             'KEEPALIVE_FREQ': keepalive_freq,
-            'SECRET_KEY': secret_key,
             'AGENT_ID': agent_id,
             # API key my husband is so smart
             'API_KEY': api_key,

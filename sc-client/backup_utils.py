@@ -12,7 +12,7 @@ import traceback
 BACKUP_STATUS_NO_CHANGE = 0
 BACKUP_STATUS_CHANGE    = 1
 
-def perform_backup(paths, paths_recursive, api_key, agent_id, secret_key, dbconn, ignore_hash, systray):
+def perform_backup(paths, paths_recursive, api_key, agent_id, dbconn, ignore_hash, systray):
     """Enhanced backup function with better error handling"""
     logging.info("Beginning backup!")
     
@@ -45,17 +45,17 @@ def perform_backup(paths, paths_recursive, api_key, agent_id, secret_key, dbconn
                 path_obj = pathlib.Path(path)
                 
                 if path_obj.is_file():
-                    process_file(path_obj, api_key, agent_id, secret_key, dbconn, ignore_hash)
+                    process_file(path_obj, api_key, agent_id, dbconn, ignore_hash)
                 elif path_obj.is_dir():
                     logging.info(f"Processing directory: {path}")
                     for file_obj in [p for p in path_obj.iterdir() if p.is_file()]:
-                        process_file(file_obj, api_key, agent_id, secret_key, dbconn, ignore_hash)
+                        process_file(file_obj, api_key, agent_id, dbconn, ignore_hash)
                         
             except Exception as e:
                 logging.error(f"Error processing path {path}: {str(e)}", exc_info=True)
                 raise  # Re-raise to be caught by outer try/except
 
-        process_paths_recursive(paths_recursive, api_key, agent_id, secret_key, dbconn, ignore_hash)
+        process_paths_recursive(paths_recursive, api_key, agent_id, dbconn, ignore_hash)
         
         systray.update(hover_text="Stormcloud Backup Engine")
         logging.info("Backup completed successfully")
@@ -66,24 +66,24 @@ def perform_backup(paths, paths_recursive, api_key, agent_id, secret_key, dbconn
         systray.update(hover_text="Stormcloud Backup Engine - Backup Failed")
         raise
 
-def process_paths_nonrecursive(paths,api_key,agent_id,secret_key,dbconn,ignore_hash):
+def process_paths_nonrecursive(paths,api_key,agent_id,dbconn,ignore_hash):
     for path in paths:
         try:
             logging.log(logging.INFO,"==   %s   ==" % path)
             path_obj = pathlib.Path(path)
 
             if path_obj.is_file():
-                process_file(path_obj,api_key,agent_id,secret_key,dbconn,ignore_hash)
+                process_file(path_obj,api_key,agent_id,dbconn,ignore_hash)
 
             elif path_obj.is_dir():
                 for file_obj in [p for p in path_obj.iterdir() if p.is_file()]:
-                    process_file(file_obj,api_key,agent_id,secret_key,dbconn,ignore_hash)
+                    process_file(file_obj,api_key,agent_id,dbconn,ignore_hash)
 
         except Exception as e:
             logging.log(logging.WARN, "%s" % traceback.format_exc())
             logging.log(logging.WARN, "Caught exception when trying to process path %s: %s" % (path,e))
 
-def process_paths_recursive(paths,api_key,agent_id,secret_key,dbconn,ignore_hash):
+def process_paths_recursive(paths,api_key,agent_id,dbconn,ignore_hash):
     if not(paths):
         return
         
@@ -92,21 +92,21 @@ def process_paths_recursive(paths,api_key,agent_id,secret_key,dbconn,ignore_hash
             logging.log(logging.INFO, "==   %s (-R)  ==" % path)
             path_obj = pathlib.Path(path)
 
-            process_one_path_recursive(path_obj,api_key,agent_id,secret_key,dbconn,ignore_hash)
+            process_one_path_recursive(path_obj,api_key,agent_id,dbconn,ignore_hash)
         except Exception as e:
             logging.log(logging.WARN, "Caught (higher-level) exception when trying to process recursive path %s: %s" % (path,e))
 
-def process_one_path_recursive(target_path,api_key,agent_id,secret_key,dbconn,ignore_hash):
+def process_one_path_recursive(target_path,api_key,agent_id,dbconn,ignore_hash):
     for file in target_path.iterdir():
         if file.is_dir():
             try:
-                process_one_path_recursive(file,api_key,agent_id,secret_key,dbconn,ignore_hash)
+                process_one_path_recursive(file,api_key,agent_id,dbconn,ignore_hash)
             except Exception as e:
                 logging.log(logging.WARN, "Caught (lower-level) exception when trying to process recursive path %s: %s" % (target_path,e))
         else:
-            process_file(file,api_key,agent_id,secret_key,dbconn,ignore_hash)
+            process_file(file,api_key,agent_id,dbconn,ignore_hash)
 
-def process_file(file_path_obj, api_key, agent_id, secret_key, dbconn, ignore_hash):
+def process_file(file_path_obj, api_key, agent_id, dbconn, ignore_hash):
     """Enhanced process_file with better error handling"""
     try:
         logging.info(f"Processing file: {file_path_obj}")
@@ -122,7 +122,7 @@ def process_file(file_path_obj, api_key, agent_id, secret_key, dbconn, ignore_ha
         elif status == BACKUP_STATUS_CHANGE:
             logging.info(f"Backing up file: {file_path_obj.name}")
 
-            ret = network_utils.ship_file_to_server(api_key, agent_id, secret_key, file_path_obj.resolve())
+            ret = network_utils.ship_file_to_server(api_key, agent_id, file_path_obj.resolve())
             if ret == 200:
                 if dbconn:  # Only update hash if we have a db connection
                     _update_hash_db(file_path_obj, dbconn)
