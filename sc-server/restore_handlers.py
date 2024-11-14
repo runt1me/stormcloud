@@ -6,6 +6,8 @@ import base64
 import database_utils as db
 import logging_utils, crypto_utils
 
+from urllib.parse import unquote
+
 # Unfortunately currently imposing a size limit on restore until I can figure out how to stream responses
 SIZE_LIMIT = 300*1024*1024
 
@@ -27,7 +29,18 @@ def handle_queue_file_for_restore_request(request):
     if not customer_id:
         return RESPONSE_401_BAD_REQUEST
 
-    ret = db.add_file_to_restore_queue(request['agent_id'], request['file_path'])
+    # To account for multiple clients, try to be accepting of
+    # multiple types of encoding.
+    path_as_posix = request['file_path']
+
+    # Try to detect encoding
+    if "%2F" in path_as_posix:
+      # Assume URL-encoding
+      path_as_posix = unquote(path_as_posix)
+    else:
+      __logger__().warning("Unknown encoding type for file_path, leaving as-is")
+
+    ret = db.add_file_to_restore_queue(request['agent_id'], path_as_posix)
 
     if ret:
         __logger__().info("Successfully added file to restore queue.")
