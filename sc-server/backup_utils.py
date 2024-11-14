@@ -17,20 +17,38 @@ def get_file_type(path_on_server):
     _, file_extension = os.path.splitext(path_on_server)
     return file_extension
 
-def get_server_path(customer_id,device_id,decrypted_path):
+def make_server_path(customer_id,device_id,decrypted_path):
+    """
+        Returns a server path for the given client-side file path,
+        customer id and device id.
+
+        This path does not exist as an actual file yet, and should
+        be considered "aspirational" until the file has actually
+        been written at that location.
+    """
+
     device_root_directory_on_server = "/storage/%s/device/%s/" % (customer_id,device_id)
 
-    __logger__().info("Combining %s with %s" % (device_root_directory_on_server,decrypted_path))
-    if "\\" in decrypted_path:
-        # Replace \ with /
-        p = pathlib.PureWindowsPath(r'%s'%decrypted_path)
-        path = device_root_directory_on_server + str(p.as_posix())
+    decrypted_path = normalize_path(decrypted_path)
 
-    elif "\\" not in decrypted_path:
-        path = device_root_directory_on_server + decrypted_path
+    __logger__().info("Combining %s with %s" % (device_root_directory_on_server,decrypted_path))
+    path = device_root_directory_on_server + decrypted_path
 
     path = path.replace("//","/")
     return path, device_root_directory_on_server
+
+def normalize_path(p):
+    """
+        Helper function to standardize path to posix.
+        If path is posix, will leave unchanged.
+        If path is windows, will convert to posix.
+    """
+
+    if "\\" in p:
+        p = pathlib.PureWindowsPath(r'%s' %p)
+        return str(p.as_posix())
+    else:
+        return p
 
 def stream_write_file_to_disk(path,file_handle,max_versions,chunk_size):
     if os.path.exists(path):

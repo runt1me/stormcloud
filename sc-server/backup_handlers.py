@@ -77,7 +77,7 @@ def handle_backup_file_request(request, file):
     if not path_on_device:
         return RESPONSE_401_BAD_REQUEST
 
-    path_on_server, device_root_directory_on_server = backup_utils.get_server_path(customer_id,device_id,path_on_device)
+    path_on_server, device_root_directory_on_server = backup_utils.make_server_path(customer_id,device_id,path_on_device)
 
     file_size = backup_utils.stream_write_file_to_disk(path=path_on_server,file_handle=file,max_versions=3,chunk_size=CHUNK_SIZE)
 

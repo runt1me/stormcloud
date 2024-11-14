@@ -4,7 +4,7 @@ import os
 import base64
 
 import database_utils as db
-import logging_utils, crypto_utils
+import logging_utils, crypto_utils, backup_utils
 
 from urllib.parse import unquote
 
@@ -14,6 +14,13 @@ SIZE_LIMIT = 300*1024*1024
 STRING_401_BAD_REQUEST = "Bad request."
 RESPONSE_401_BAD_REQUEST = (
   401,json.dumps({'error':STRING_401_BAD_REQUEST})
+)
+
+STRING_413_TOO_LARGE = "Error: File too large to restore via API. \
+Please reach out to the Dark Age team for more information."
+
+RESPONSE_413_TOO_LARGE = (
+  413, json.dumps({'error': STRING_413_TOO_LARGE})
 )
 
 def __logger__():
@@ -31,14 +38,14 @@ def handle_queue_file_for_restore_request(request):
 
     # To account for multiple clients, try to be accepting of
     # multiple types of encoding.
-    path_as_posix = request['file_path']
+    path_as_posix = backup_utils.normalize_path(request['file_path'])
 
     # Try to detect encoding
     if "%2F" in path_as_posix:
-      # Assume URL-encoding
-      path_as_posix = unquote(path_as_posix)
+        # Assume URL-encoding
+        path_as_posix = unquote(path_as_posix)
     else:
-      __logger__().warning("Unknown encoding type for file_path, leaving as-is")
+        __logger__().warning("Unknown encoding type for file_path, leaving as-is")
 
     ret = db.add_file_to_restore_queue(request['agent_id'], path_as_posix)
 
@@ -66,9 +73,10 @@ def handle_restore_file_request(request):
     if not path_on_device:
         return RESPONSE_401_BAD_REQUEST
 
+    path_on_device = backup_utils.normalize_path(path_on_device)
     path_on_server = db.get_server_path_for_file(
-            device_id,
-            path_on_device
+        device_id,
+        path_on_device
     )
 
     __logger__().info("Got path: %s" % path_on_server)
@@ -76,11 +84,7 @@ def handle_restore_file_request(request):
 
     if file_size > SIZE_LIMIT:
         __logger__().error("File too large to restore via API.")
-        response_data = {
-            'restore_file-response': 'Error: File too large to restore via API. Please reach out to the Dark Age team for more information.'
-        }
-
-        return 413, json.dumps(response_data)
+        return RESPONSE_413_TOO_LARGE
 
     else:
         __logger__().info("Reading file into memory for response")
@@ -96,8 +100,8 @@ def handle_restore_file_request(request):
         }
 
         _ = db.mark_file_as_restored(
-                device_id,
-                path_on_device
+            device_id,
+            path_on_device
         )
 
         # TODO: update database to indicate restore date and mark the file as restored
