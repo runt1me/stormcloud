@@ -5,19 +5,24 @@ import os
 import pathlib
 import psutil
 import pytz
+import signal
 import smtplib
 import stripe
 import subprocess
+import time
 import win32api
 import win32gui
 import win32con
 import yaml
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from enum import Enum
 from infi.systray import SysTrayIcon
+from multiprocessing import Process, Queue, Manager
+from queue import Empty
 from typing import Optional, List, Dict
 
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QMenu,
@@ -28,11 +33,11 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QTreeView, QHeaderView, QStyle, QStyledItemDelegate, QLineEdit,
                              QAbstractItemView, QSplitter, QTreeWidget, QTreeWidgetItem, QDialog,
                              QTextEdit, QProxyStyle, QTabWidget, QTableWidget, QTableWidgetItem, QToolBar,
-                             QDialogButtonBox)
-from PyQt5.QtCore import Qt, QUrl, QPoint, QDate, QTime, pyqtSignal, QRect, QSize, QModelIndex, QObject
+                             QDialogButtonBox, QProgressBar)
+from PyQt5.QtCore import Qt, QUrl, QPoint, QDate, QTime, pyqtSignal, QRect, QSize, QModelIndex, QObject, QTimer
 from PyQt5.QtGui import (QDesktopServices, QFont, QIcon, QColor,
                          QPalette, QPainter, QPixmap, QTextCharFormat,
-                         QStandardItemModel, QStandardItem, QPen)
+                         QStandardItemModel, QStandardItem, QPen, QPolygon)
 from PyQt5.QtWinExtras import QtWin
 
 # Stormcloud imports
@@ -56,6 +61,1254 @@ def ordinal(n):
     else:
         suffix = {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
     return f"{n}{suffix}"
+
+class InitiationSource(Enum):
+    REALTIME = "Realtime"
+    SCHEDULED = "Scheduled"
+    USER = "User-Initiated"
+
+class OperationStatus(Enum):
+    SUCCESS = "Success"
+    FAILED = "Failed"
+    IN_PROGRESS = "In Progress"
+
+@dataclass
+class FileOperationRecord:
+    filepath: str
+    timestamp: datetime
+    status: OperationStatus
+    error_message: Optional[str] = None
+
+@dataclass
+class HistoryEvent:
+    timestamp: datetime
+    source: InitiationSource
+    status: OperationStatus
+    operation_id: str = field(default_factory=lambda: datetime.now().strftime("%Y%m%d_%H%M%S_%f"))
+    files: List[FileOperationRecord] = field(default_factory=list)
+    error_message: Optional[str] = None
+    
+@dataclass
+class OperationEvent:
+    """Base class for any file operation (backup or restore)"""
+    timestamp: datetime
+    source: InitiationSource
+    status: OperationStatus
+    operation_type: str  # 'backup' or 'restore'
+    operation_id: str = field(default_factory=lambda: datetime.now().strftime("%Y%m%d_%H%M%S_%f"))
+    files: List[FileOperationRecord] = field(default_factory=list)
+    error_message: Optional[str] = None
+
+class HistoryManager:
+    """Enhanced history manager with file-level tracking"""
+    
+    def __init__(self, install_path):
+        self.history_dir = os.path.join(install_path, 'history')
+        self.backup_history_file = os.path.join(self.history_dir, 'backup_history.json')
+        self.restore_history_file = os.path.join(self.history_dir, 'restore_history.json')
+        self.active_operations: Dict[str, OperationEvent] = {}
+        self.last_modified_times = {
+            'backup': 0,
+            'restore': 0
+        }
+        
+        # Create directory if it doesn't exist
+        os.makedirs(self.history_dir, exist_ok=True)
+        
+        # Initialize history files if they don't exist
+        for file in [self.backup_history_file, self.restore_history_file]:
+            if not os.path.exists(file):
+                self.write_history(file, [])
+
+    def has_changes(self, event_type: str) -> bool:
+        """Check if the history file has been modified since last read"""
+        history_file = self.get_history_file(event_type)
+        if not os.path.exists(history_file):
+            return False
+            
+        current_mtime = os.path.getmtime(history_file)
+        last_mtime = self.last_modified_times.get(event_type, 0)
+        
+        if current_mtime > last_mtime:
+            self.last_modified_times[event_type] = current_mtime
+            return True
+            
+        return False
+
+    def get_history_file(self, operation_type: str) -> str:
+        """Get the appropriate history file for the operation type"""
+        return self.backup_history_file if operation_type == 'backup' else self.restore_history_file
+
+    def get_history(self, event_type: str, limit: int = None, force_refresh: bool = False) -> List[HistoryEvent]:
+        """Get history events, optionally checking for changes first"""
+        if not force_refresh and not self.has_changes(event_type):
+            return []  # No changes, signal to skip refresh
+            
+        file_path = self.backup_history_file if event_type == 'backup' else self.restore_history_file
+        history = self.read_history(file_path)
+        
+        # Convert dictionaries back to HistoryEvent objects
+        events = []
+        for event_dict in history:
+            try:
+                event = self.dict_to_event(event_dict)
+                events.append(event)
+            except Exception as e:
+                logging.error(f"Failed to convert history event: {e}")
+                continue
+            
+        # Sort by timestamp (newest first) and apply limit
+        events.sort(key=lambda x: x.timestamp, reverse=True)
+        return events[:limit] if limit else events
+
+    def read_history(self, file_path: str) -> list:
+        """Read history from JSON file"""
+        try:
+            with open(file_path, 'r') as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return []
+            
+    def write_history(self, file_path: str, history: list):
+        """Write history to JSON file"""
+        with open(file_path, 'w') as f:
+            json.dump(history, f, indent=2)
+
+    def add_event(self, event_type: str, event: OperationEvent):
+        """Add or update an event in history"""
+        history_file = self.get_history_file(event_type)
+        history = self.read_history(history_file)
+        
+        # Convert event to dictionary preserving original timestamp
+        event_dict = self.event_to_dict(event)
+        
+        # Find and update existing entry if it exists
+        updated = False
+        for i, existing_event in enumerate(history):
+            if existing_event.get('operation_id') == event.operation_id:
+                # Preserve original timestamp when updating
+                event_dict['timestamp'] = existing_event['timestamp']
+                history[i] = event_dict
+                updated = True
+                break
+                
+        # Only add as new entry if it doesn't exist
+        if not updated:
+            history.append(event_dict)
+        
+        # Write back to file
+        self.write_history(history_file, history)
+
+    def event_to_dict(self, event: OperationEvent) -> dict:
+        """Convert OperationEvent to dictionary for storage"""
+        return {
+            'timestamp': event.timestamp.isoformat(),  # Use original timestamp
+            'source': event.source.value,
+            'status': event.status.value,
+            'operation_type': event.operation_type,
+            'operation_id': event.operation_id,
+            'error_message': event.error_message,
+            'files': [
+                {
+                    'filepath': f.filepath,
+                    'timestamp': f.timestamp.isoformat(),
+                    'status': f.status.value,
+                    'error_message': f.error_message
+                }
+                for f in event.files
+            ]
+        }
+
+    def dict_to_event(self, event_dict: dict) -> HistoryEvent:
+        """Convert dictionary to HistoryEvent"""
+        files = [
+            FileOperationRecord(
+                filepath=f['filepath'],
+                timestamp=datetime.fromisoformat(f['timestamp']),
+                status=OperationStatus(f['status']),
+                error_message=f.get('error_message')
+            )
+            for f in event_dict.get('files', [])
+        ]
+        
+        return HistoryEvent(
+            timestamp=datetime.fromisoformat(event_dict['timestamp']),
+            source=InitiationSource(event_dict['source']),
+            status=OperationStatus(event_dict['status']),
+            operation_id=event_dict.get('operation_id', ''),
+            files=files,
+            error_message=event_dict.get('error_message')
+        )
+
+    def start_operation(self, operation_type: str, source: InitiationSource) -> str:
+        """Start a new operation and return its ID"""
+        event = OperationEvent(
+            timestamp=datetime.now(),
+            source=source,
+            status=OperationStatus.IN_PROGRESS,
+            operation_type=operation_type
+        )
+        self.active_operations[event.operation_id] = event
+        self.add_event(operation_type, event)  # Fixed: Pass both operation_type and event
+        return event.operation_id
+
+    def add_file_to_operation(self, operation_id: str, filepath: str, 
+                             status: OperationStatus, error_message: Optional[str] = None):
+        """Add a file record to an operation and update history"""
+        if operation_id in self.active_operations:
+            event = self.active_operations[operation_id]
+            
+            # Check if file already exists in this operation
+            file_exists = any(f.filepath == filepath for f in event.files)
+            if not file_exists:
+                file_record = FileOperationRecord(
+                    filepath=filepath,
+                    timestamp=datetime.now(),
+                    status=status,
+                    error_message=error_message
+                )
+                event.files.append(file_record)
+            
+            # Update operation status based on file statuses
+            self.update_operation_status(operation_id)
+            
+            # Write the current state to history file immediately
+            self.add_event(event.operation_type, event)
+
+    def get_operation(self, operation_id: str) -> Optional[OperationEvent]:
+        """Get an operation by ID, either active or from history"""
+        # First check active operations
+        if operation_id in self.active_operations:
+            return self.active_operations[operation_id]
+            
+        # If not active, check history
+        history_file = self.get_history_file('backup')  # Check backup first
+        history = self.read_history(history_file)
+        for event_dict in history:
+            if event_dict.get('operation_id') == operation_id:
+                return self.dict_to_event(event_dict)
+                
+        # Try restore history if not found in backup
+        history_file = self.get_history_file('restore')
+        history = self.read_history(history_file)
+        for event_dict in history:
+            if event_dict.get('operation_id') == operation_id:
+                return self.dict_to_event(event_dict)
+                
+        return None
+
+    def complete_operation(self, operation_id: str, final_status: OperationStatus, error_message: Optional[str] = None):
+        """Complete an operation by updating its status"""
+        if operation_id in self.active_operations:
+            event = self.active_operations[operation_id]
+            
+            # Update status and error message while preserving original timestamp
+            event.status = final_status
+            event.error_message = error_message
+            
+            # Update existing event in history
+            self.add_event(event.operation_type, event)
+            
+            # Remove from active operations
+            del self.active_operations[operation_id]
+
+    def cleanup_in_progress_operations(self, completed_operation_id: str):
+        """Clean up any stale IN_PROGRESS operations from history"""
+        for file_type in ['backup', 'restore']:
+            history_file = self.get_history_file(file_type)
+            try:
+                history = self.read_history(history_file)
+                updated_history = []
+                
+                for event in history:
+                    # Skip if this is a stale IN_PROGRESS version of our completed operation
+                    if (event.get('operation_id') == completed_operation_id and 
+                        event.get('status') == OperationStatus.IN_PROGRESS.value):
+                        continue
+                    updated_history.append(event)
+                
+                self.write_history(history_file, updated_history)
+                
+            except Exception as e:
+                logging.error(f"Failed to cleanup IN_PROGRESS operations: {e}")
+
+    def update_operation_status(self, operation_id: str):
+        """Update operation status based on file statuses"""
+        if operation_id in self.active_operations:
+            event = self.active_operations[operation_id]
+            
+            # Get all file statuses
+            file_statuses = [f.status for f in event.files]
+            
+            # For multi-file operations, stay in IN_PROGRESS until completion
+            # is explicitly called by complete_operation()
+            if event.status == OperationStatus.IN_PROGRESS:
+                new_status = OperationStatus.IN_PROGRESS
+            # Only set final status when operation is complete
+            elif file_statuses:
+                if OperationStatus.FAILED in file_statuses:
+                    new_status = OperationStatus.FAILED
+                elif all(status == OperationStatus.SUCCESS for status in file_statuses):
+                    new_status = OperationStatus.SUCCESS
+                else:
+                    new_status = OperationStatus.IN_PROGRESS
+            else:
+                new_status = event.status
+            
+            # Update status if changed
+            if new_status != event.status:
+                event.status = new_status
+                self.add_event(event.operation_type, event)
+
+    def update_event(self, event: OperationEvent):
+        """Update an existing event in history"""
+        history_file = self.get_history_file(event.operation_type)
+        history = self.read_history(history_file)
+        
+        # Find and update the event
+        updated = False
+        for i, event_dict in enumerate(history):
+            if event_dict.get('operation_id') == event.operation_id:
+                history[i] = self.event_to_dict(event)
+                updated = True
+                break
+                
+        if not updated:
+            history.append(self.event_to_dict(event))
+                
+        self.write_history(history_file, history)
+
+class OperationHistoryPanel(QWidget):
+    """Panel for displaying hierarchical backup/restore history"""
+    
+    def __init__(self, event_type: str, history_manager: HistoryManager, theme_manager, parent=None):
+        super().__init__(parent)
+        self.event_type = event_type
+        self.history_manager = history_manager
+        self.theme_manager = theme_manager
+        self.user_expanded_states = {}  # Track user preferences for expansion
+        self.scroll_position = 0  # Track scroll position
+        self.init_ui()
+        
+        # Set up refresh timer
+        self.refresh_timer = QTimer()
+        self.refresh_timer.timeout.connect(self.check_and_refresh_history)
+        self.refresh_timer.start(2000)  # Check every 2 seconds
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+
+        # Header section with title and dropdown
+        header_layout = QHBoxLayout()
+        
+        self.history_type_combo = QComboBox()
+        self.history_type_combo.addItems(["Backup History", "Restore History"])
+        self.history_type_combo.currentTextChanged.connect(self.on_history_type_changed)
+        self.history_type_combo.setFixedWidth(150)
+        header_layout.addWidget(self.history_type_combo)
+        header_layout.addStretch()
+        layout.addLayout(header_layout)
+
+        # Divider
+        divider = QFrame()
+        divider.setFrameShape(QFrame.HLine)
+        divider.setObjectName("HorizontalDivider")
+        layout.addWidget(divider)
+
+        # Create tree widget for history display
+        self.tree = QTreeWidget()
+        self.tree.setObjectName("HistoryTree")
+        
+        # Use the CustomTreeCarrot from FileExplorer
+        self.custom_style = CustomTreeCarrot(self.theme_manager)
+        self.tree.setStyle(self.custom_style)
+        
+        self.tree.setHeaderLabels([
+            "Time",
+            "Source",
+            "Status",
+            "Details"
+        ])
+        self.tree.setAlternatingRowColors(False)
+        self.tree.itemDoubleClicked.connect(self.on_item_double_clicked)
+        self.tree.itemExpanded.connect(self.on_item_expanded)
+        self.tree.itemCollapsed.connect(self.on_item_collapsed)
+        
+        # Enable column sorting
+        self.tree.setSortingEnabled(True)
+        self.tree.sortByColumn(0, Qt.DescendingOrder)
+        
+        for i in range(4):
+            self.tree.header().setSectionResizeMode(i, QHeaderView.ResizeToContents)
+        
+        layout.addWidget(self.tree)
+       
+    def on_item_expanded(self, item):
+        """Track when user expands an item"""
+        op_id = item.data(0, Qt.UserRole)
+        if op_id:
+            self.user_expanded_states[op_id] = True  # Update user preference
+
+    def on_item_collapsed(self, item):
+        """Track when user collapses an item"""
+        op_id = item.data(0, Qt.UserRole)
+        if op_id:
+            self.user_expanded_states[op_id] = False
+            # Force this to persist through next refresh
+            self.tree.setUpdatesEnabled(False)
+            item.setExpanded(False)
+            self.tree.setUpdatesEnabled(True)
+            
+    def refresh_history(self):
+        """Refresh history while preserving user expansion preferences"""
+        # Store current expansion states before refresh
+        expanded_states = {}
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            op_id = item.data(0, Qt.UserRole)
+            if op_id:
+                # If item is expanded OR user has previously set it to be expanded
+                expanded_states[op_id] = (
+                    item.isExpanded() or 
+                    self.user_expanded_states.get(op_id, False)
+                )
+
+        # Clear and rebuild tree
+        self.tree.clear()
+        events = self.history_manager.get_history(self.event_type)
+        current_ops = set()
+
+        for event in events:
+            current_ops.add(event.operation_id)
+            
+            # Create operation summary item
+            summary_item = self.create_operation_summary_item(event)
+            
+            # Add file details as child items
+            for file_record in sorted(event.files, key=lambda x: x.timestamp, reverse=True):
+                file_item = self.create_file_item(file_record)
+                summary_item.addChild(file_item)
+            
+            self.tree.addTopLevelItem(summary_item)
+            
+            # Determine if item should be expanded
+            should_expand = False
+            
+            # First check if we have a stored state
+            if event.operation_id in expanded_states:
+                should_expand = expanded_states[event.operation_id]
+            # For new in-progress operations, expand by default
+            elif event.status == OperationStatus.IN_PROGRESS:
+                should_expand = True
+                self.user_expanded_states[event.operation_id] = True
+            
+            summary_item.setExpanded(should_expand)
+            
+            # Store the state for future refreshes
+            if should_expand:
+                self.user_expanded_states[event.operation_id] = True
+
+        # Clean up tracking for operations that no longer exist
+        self.user_expanded_states = {
+            op_id: state 
+            for op_id, state in self.user_expanded_states.items() 
+            if op_id in current_ops
+        }
+
+        # Resize columns to content
+        for i in range(self.tree.columnCount()):
+            self.tree.resizeColumnToContents(i)
+
+    def refresh_history_with_events(self, events):
+        """Refresh history with provided events while preserving user preferences"""
+        # Store current expansion states before refresh
+        expanded_states = {}
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            op_id = item.data(0, Qt.UserRole)
+            if op_id:
+                expanded_states[op_id] = item.isExpanded()
+
+        # Clear and rebuild tree
+        self.tree.clear()
+        current_ops = set()
+
+        for event in events:
+            current_ops.add(event.operation_id)
+            
+            # Create operation summary item
+            summary_item = self.create_operation_summary_item(event)
+            
+            # Add file details as child items
+            for file_record in sorted(event.files, key=lambda x: x.timestamp, reverse=True):
+                file_item = self.create_file_item(file_record, event.source.value)  # Pass the source
+                summary_item.addChild(file_item)
+            
+            self.tree.addTopLevelItem(summary_item)
+            
+            # Set expansion state
+            should_expand = expanded_states.get(event.operation_id, False)
+            summary_item.setExpanded(should_expand)
+            
+            # Store the state for future refreshes
+            if should_expand:
+                self.user_expanded_states[event.operation_id] = True
+
+        # Resize columns to content
+        for i in range(self.tree.columnCount()):
+            self.tree.resizeColumnToContents(i)
+
+    def check_and_refresh_history(self):
+        """Check for changes before refreshing"""
+        # Save current scroll position
+        self.save_scroll_position()
+        
+        # Get history and check if there are changes
+        events = self.history_manager.get_history(self.event_type)
+        
+        if events:  # Only refresh if there are changes
+            self.refresh_history_with_events(events)
+            
+        # Restore scroll position
+        self.restore_scroll_position()
+
+    def create_operation_summary_item(self, event: OperationEvent) -> QTreeWidgetItem:
+        """Create a tree item for an operation summary with proper timestamp"""
+        # Count files by status
+        status_counts = {
+            OperationStatus.SUCCESS: 0,
+            OperationStatus.FAILED: 0,
+            OperationStatus.IN_PROGRESS: 0
+        }
+        
+        for file_record in event.files:
+            status_counts[file_record.status] = status_counts.get(file_record.status, 0) + 1
+        
+        # Create summary text
+        if status_counts[OperationStatus.IN_PROGRESS] > 0:
+            details = f"In Progress... ({len(event.files)} files so far)"
+        else:
+            total_files = sum(status_counts.values())
+            if total_files == 0:
+                if event.status == OperationStatus.SUCCESS:
+                    details = "Total: 1 (Success: 1)"
+                elif event.status == OperationStatus.FAILED:
+                    details = "Total: 1 (Failed: 1)"
+                else:
+                    details = "Total: 1 (In Progress)"
+            else:
+                details = (f"Total: {total_files} (Success: {status_counts[OperationStatus.SUCCESS]}, "
+                         f"Failed: {status_counts[OperationStatus.FAILED]})")
+
+        # Create the item using operation timestamp with 12-hour format
+        item = QTreeWidgetItem([
+            event.timestamp.strftime("%Y-%m-%d %I:%M:%S %p"),  # Changed to 12-hour format
+            event.source.value,
+            event.status.value,
+            details
+        ])
+        
+        # Store operation ID
+        item.setData(0, Qt.UserRole, event.operation_id)
+        
+        # Set colors and styling
+        self.set_item_status_color(item, event.status)
+        font = item.font(0)
+        font.setBold(True)
+        for i in range(4):
+            item.setFont(i, font)
+        
+        return item
+
+    def create_file_item(self, file_record: FileOperationRecord, parent_source: str) -> QTreeWidgetItem:
+        """Create a tree item for a file record with its individual timestamp"""
+        item = QTreeWidgetItem([
+            file_record.timestamp.strftime("%I:%M:%S %p"),
+            parent_source,  # Use the parent operation's source
+            file_record.status.value,
+            file_record.filepath
+        ])
+        
+        # Store file data
+        item.setData(0, Qt.UserRole, file_record.filepath)
+        
+        # Set colors based on status
+        self.set_item_status_color(item, file_record.status)
+        
+        # Add error message if present
+        if file_record.error_message:
+            error_item = QTreeWidgetItem([
+                "",
+                parent_source,  # Keep consistent with parent
+                "",
+                file_record.error_message
+            ])
+            error_item.setForeground(3, QColor("#DC3545"))  # Red for errors
+            item.addChild(error_item)
+        
+        return item
+
+    def apply_filters(self):
+        """Apply all filters to the history tree"""
+        status_filter = self.status_filter.currentText()
+        source_filter = self.source_filter.currentText()
+        search_text = self.search_box.text().lower()
+        
+        for i in range(self.tree.topLevelItemCount()):
+            top_item = self.tree.topLevelItem(i)
+            show_item = True
+            
+            # Check source filter
+            if source_filter != "All Sources":
+                if top_item.text(1) != source_filter:
+                    show_item = False
+            
+            # Check status filter
+            if status_filter != "All Statuses":
+                if top_item.text(2) != status_filter:
+                    show_item = False
+            
+            # Check file name search
+            if search_text:
+                # Search in child items (files)
+                has_matching_file = False
+                for j in range(top_item.childCount()):
+                    child = top_item.child(j)
+                    if search_text in child.text(1).lower() or search_text in child.text(3).lower():
+                        has_matching_file = True
+                        child.setHidden(False)
+                    else:
+                        child.setHidden(True)
+                show_item = has_matching_file
+            else:
+                # Show all child items if no search
+                for j in range(top_item.childCount()):
+                    top_item.child(j).setHidden(False)
+            
+            top_item.setHidden(not show_item)
+
+    def on_item_expanded(self, item: QTreeWidgetItem):
+        """Handle item expansion"""
+        # Resize columns to content when expanded
+        for i in range(self.tree.columnCount()):
+            self.tree.resizeColumnToContents(i)
+
+    def on_item_double_clicked(self, item: QTreeWidgetItem, column: int):
+        """Handle double-click on items"""
+        # If this is a file item (has filepath in details column)
+        filepath = item.text(3)
+        if os.path.exists(filepath):
+            if os.path.isfile(filepath):
+                # Open containing folder and select file
+                os.system(f'explorer /select,"{filepath}"')
+            else:
+                # Open directory
+                os.startfile(filepath)
+
+    def on_history_type_changed(self, history_type: str):
+        """Handle history type selection change"""
+        history_type_map = {
+            "Backup History": "backup",
+            "Restore History": "restore"
+        }
+        self.event_type = history_type_map[history_type]
+        # Force a refresh when switching history types
+        events = self.history_manager.get_history(self.event_type, force_refresh=True)
+        if events:
+            self.refresh_history_with_events(events)
+
+    def set_item_status_color(self, item: QTreeWidgetItem, status: OperationStatus):
+        """Set the color of an item based on its status"""
+        status_colors = {
+            OperationStatus.SUCCESS: "#28A745",    # Green
+            OperationStatus.FAILED: "#DC3545",     # Red
+            OperationStatus.IN_PROGRESS: "#FFC107" # Yellow
+        }
+        item.setForeground(2, QColor(status_colors[status]))
+
+    def save_scroll_position(self):
+        """Save the current scroll position"""
+        scrollbar = self.tree.verticalScrollBar()
+        if scrollbar:
+            self.scroll_position = scrollbar.value()
+
+    def restore_scroll_position(self):
+        """Restore the previously saved scroll position"""
+        scrollbar = self.tree.verticalScrollBar()
+        if scrollbar:
+            scrollbar.setValue(self.scroll_position)
+
+class BackgroundOperation:
+    """Handles background processing for backup/restore operations"""
+    def __init__(self, operation_type, paths, settings):
+        self.operation_type = operation_type
+        self.paths = paths if isinstance(paths, list) else [paths]
+        self.settings = settings.copy()  # Make a copy to avoid modifying original
+        self.queue = Queue()
+        self.process = None
+        self.total_files = 0
+        self.processed_files = 0
+        self.manager = Manager()
+        self.should_stop = self.manager.Value('b', False)
+
+        # Generate operation ID ONCE at initialization
+        self.operation_id = self.settings.get('operation_id') or datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        self.settings['operation_id'] = self.operation_id  # Ensure settings has our operation_id
+        
+        # Set the operation start time
+        self.start_time = datetime.now()
+        self.settings['operation_start_time'] = self.start_time
+
+    def start(self):
+        """Start the background operation"""
+        if self.operation_type == 'backup':
+            self.process = Process(target=self._backup_worker, 
+                                 args=(self.paths, self.settings, self.queue, self.should_stop))
+        else:
+            self.process = Process(target=self._restore_worker, 
+                                 args=(self.paths, self.settings, self.queue, self.should_stop))
+        
+        self.process.start()
+        return self.process.pid
+
+    def stop(self):
+        """Stop the background operation"""
+        if self.process and self.process.is_alive():
+            self.should_stop.value = True
+            self.process.join(timeout=5)
+            if self.process.is_alive():
+                self.process.terminate()
+
+    def get_progress(self):
+        """Get progress updates from the queue without blocking"""
+        try:
+            while True:
+                update = self.queue.get_nowait()
+                if update.get('type') == 'total_files':
+                    self.total_files = update['value']
+                elif update.get('type') == 'file_progress':
+                    self.processed_files += 1
+                    # Calculate percentage
+                    if self.total_files > 0:
+                        percentage = (self.processed_files / self.total_files) * 100
+                        update['progress'] = percentage
+                yield update
+        except Empty:
+            return
+
+    def update_progress(self):
+        """Process progress updates from the background operation"""
+        if not hasattr(self, 'history_manager'):
+            return
+            
+        for update in self.get_progress():
+            update_type = update.get('type')
+            
+            if update_type == 'file_progress':
+                file_path = update.get('filepath', '')
+                success = update.get('success', False)
+                error_msg = update.get('error')
+                
+                # Update file status in history
+                if self.operation_id:
+                    status = OperationStatus.SUCCESS if success else OperationStatus.FAILED
+                    self.history_manager.add_file_to_operation(
+                        self.operation_id,
+                        file_path,
+                        status,
+                        error_msg
+                    )
+                    
+                # Calculate progress percentage
+                if self.total_files > 0:
+                    percentage = (self.processed_files / self.total_files) * 100
+                    yield {
+                        'type': 'progress',
+                        'value': percentage,
+                        'current_file': file_path,
+                        'status': status,
+                        'error': error_msg
+                    }
+
+    @staticmethod
+    def _backup_worker(paths, settings, queue, should_stop):
+        """Worker process for backup operations"""
+        try:
+            # Use operation_id from settings consistently
+            operation_id = settings['operation_id']  # This is now guaranteed to exist
+            total_files = 0
+            success_count = 0
+            fail_count = 0
+            
+            # First count total files
+            for path in paths:
+                if os.path.isfile(path):
+                    total_files += 1
+                else:
+                    for _, _, files in os.walk(path):
+                        total_files += len(files)
+            
+            queue.put({'type': 'total_files', 'value': total_files})
+            
+            # Connect to hash database
+            hash_db_path = os.path.join(os.path.dirname(settings['settings_path']), 'schash.db')
+            dbconn = get_or_create_hash_db(hash_db_path)
+            
+            try:
+                processed = 0
+                for path in paths:
+                    if should_stop.value:
+                        break
+                        
+                    if os.path.isfile(path):
+                        try:
+                            success = backup_utils.process_file(
+                                pathlib.Path(path),
+                                settings['API_KEY'],
+                                settings['AGENT_ID'],
+                                settings['SECRET_KEY'],
+                                dbconn,
+                                True
+                            )
+                            success_count += 1 if success else 0
+                            fail_count += 0 if success else 1
+                            processed += 1
+                            
+                            # Use consistent operation_id
+                            queue.put({
+                                'type': 'file_progress',
+                                'filepath': path,
+                                'success': success,
+                                'total_files': total_files,
+                                'processed_files': processed,
+                                'operation_id': operation_id,  # From settings
+                                'record_file': True
+                            })
+                            
+                        except Exception as e:
+                            logging.error(f"Failed to backup file {path}: {e}")
+                            fail_count += 1
+                            queue.put({
+                                'type': 'file_progress',
+                                'filepath': path,
+                                'success': False,
+                                'error': str(e),
+                                'total_files': total_files,
+                                'processed_files': processed,
+                                'operation_id': operation_id,  # From settings
+                                'record_file': True
+                            })
+                    else:  # Directory
+                        for root, _, files in os.walk(path):
+                            if should_stop.value:
+                                break
+                            for file in files:
+                                if should_stop.value:
+                                    break
+                                    
+                                file_path = os.path.join(root, file)
+                                try:
+                                    normalized_path = file_path.replace('\\', '/')
+                                    
+                                    success = backup_utils.process_file(
+                                        pathlib.Path(normalized_path),
+                                        settings['API_KEY'],
+                                        settings['AGENT_ID'],
+                                        settings['SECRET_KEY'],
+                                        dbconn,
+                                        True
+                                    )
+                                    success_count += 1 if success else 0
+                                    fail_count += 0 if success else 1
+                                    processed += 1
+                                    
+                                    # Use consistent operation_id
+                                    queue.put({
+                                        'type': 'file_progress',
+                                        'filepath': normalized_path,
+                                        'success': success,
+                                        'total_files': total_files,
+                                        'processed_files': processed,
+                                        'operation_id': operation_id,  # From settings
+                                        'record_file': True,
+                                        'parent_folder': path
+                                    })
+                                    
+                                except Exception as e:
+                                    logging.error(f"Failed to backup file {file_path}: {e}")
+                                    fail_count += 1
+                                    queue.put({
+                                        'type': 'file_progress',
+                                        'filepath': normalized_path,
+                                        'success': False,
+                                        'error': str(e),
+                                        'total_files': total_files,
+                                        'processed_files': processed,
+                                        'operation_id': operation_id,  # From settings
+                                        'record_file': True,
+                                        'parent_folder': path
+                                    })
+                                    
+            finally:
+                if dbconn:
+                    dbconn.close()
+                    
+            # Use consistent operation_id for completion
+            queue.put({
+                'type': 'operation_complete',
+                'success_count': success_count,
+                'fail_count': fail_count,
+                'total': total_files,
+                'operation_id': operation_id  # From settings
+            })
+            
+        except Exception as e:
+            logging.error(f"Backup worker failed: {e}")
+            # Use consistent operation_id for failure
+            queue.put({
+                'type': 'operation_failed',
+                'error': str(e),
+                'operation_id': operation_id  # From settings
+            })
+
+    @staticmethod
+    def _restore_worker(paths, settings, queue, should_stop):
+        """Worker process for restore operations"""
+        try:
+            # Use operation_id from settings consistently
+            operation_id = settings['operation_id']  # This is now guaranteed to exist
+            total_files = 0
+            success_count = 0
+            fail_count = 0
+            
+            # First count total files
+            for path in paths:
+                if os.path.isfile(path):
+                    total_files += 1
+                else:
+                    for _, _, files in os.walk(path):
+                        total_files += len(files)
+            
+            queue.put({'type': 'total_files', 'value': total_files})
+            
+            processed = 0
+            for path in paths:
+                if should_stop.value:
+                    break
+                    
+                if os.path.isfile(path):
+                    try:
+                        success = restore_utils.restore_file(
+                            path,
+                            settings['API_KEY'],
+                            settings['AGENT_ID'],
+                            settings['SECRET_KEY']
+                        )
+                        success_count += 1 if success else 0
+                        fail_count += 0 if success else 1
+                        processed += 1
+                        
+                        queue.put({
+                            'type': 'file_progress',
+                            'filepath': path,
+                            'success': success,
+                            'total_files': total_files,
+                            'processed_files': processed,
+                            'operation_id': operation_id,
+                            'record_file': True,  # Added this flag
+                            'parent_folder': os.path.dirname(path)  # Added parent folder
+                        })
+                        
+                    except Exception as e:
+                        logging.error(f"Failed to restore file {path}: {e}")
+                        fail_count += 1
+                        queue.put({
+                            'type': 'file_progress',
+                            'filepath': path,
+                            'success': False,
+                            'error': str(e),
+                            'total_files': total_files,
+                            'processed_files': processed,
+                            'operation_id': operation_id,
+                            'record_file': True,  # Added this flag
+                            'parent_folder': os.path.dirname(path)  # Added parent folder
+                        })
+                        
+                else:  # Directory
+                    for root, _, files in os.walk(path):
+                        if should_stop.value:
+                            break
+                        for file in files:
+                            if should_stop.value:
+                                break
+                            file_path = os.path.join(root, file)
+                            try:
+                                normalized_path = file_path.replace('\\', '/')
+                                success = restore_utils.restore_file(
+                                    normalized_path,
+                                    settings['API_KEY'],
+                                    settings['AGENT_ID'],
+                                    settings['SECRET_KEY']
+                                )
+                                success_count += 1 if success else 0
+                                fail_count += 0 if success else 1
+                                processed += 1
+                                
+                                queue.put({
+                                    'type': 'file_progress',
+                                    'filepath': normalized_path,
+                                    'success': success,
+                                    'total_files': total_files,
+                                    'processed_files': processed,
+                                    'operation_id': operation_id,
+                                    'record_file': True,  # Added this flag
+                                    'parent_folder': path  # Using original path as parent folder
+                                })
+                                
+                            except Exception as e:
+                                logging.error(f"Failed to restore file {file_path}: {e}")
+                                fail_count += 1
+                                queue.put({
+                                    'type': 'file_progress',
+                                    'filepath': normalized_path,
+                                    'success': False,
+                                    'error': str(e),
+                                    'total_files': total_files,
+                                    'processed_files': processed,
+                                    'operation_id': operation_id,
+                                    'record_file': True,  # Added this flag
+                                    'parent_folder': path  # Using original path as parent folder
+                                })
+            
+            queue.put({
+                'type': 'operation_complete',
+                'success_count': success_count,
+                'fail_count': fail_count,
+                'total': total_files,
+                'operation_id': operation_id
+            })
+            
+        except Exception as e:
+            logging.error(f"Restore worker failed: {e}")
+            queue.put({
+                'type': 'operation_failed',
+                'error': str(e),
+                'operation_id': operation_id
+            })
+
+class OperationProgressWidget(QWidget):
+    """Widget to display backup/restore operation progress"""
+    operation_completed = pyqtSignal(dict)  # Emits final status when complete
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.theme_manager = parent.theme_manager if parent else None
+        self.history_manager = None  # Will be set by FileExplorerPanel
+        self.init_ui()
+        self.background_op = None
+        self.timer = None
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
+
+        # Progress information
+        info_layout = QHBoxLayout()
+        self.operation_label = QLabel("Operation: None")
+        self.file_count_label = QLabel("Files: 0/0")
+        info_layout.addWidget(self.operation_label)
+        info_layout.addWidget(self.file_count_label)
+        info_layout.addStretch()
+        
+        # Cancel button
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(self.cancel_operation)
+        self.cancel_button.setFixedWidth(70)
+        info_layout.addWidget(self.cancel_button)
+        
+        layout.addLayout(info_layout)
+
+        # Progress bar
+        self.progress_bar = QProgressBar()
+        layout.addWidget(self.progress_bar)
+
+        # Current file label
+        self.current_file_label = QLabel()
+        self.current_file_label.setWordWrap(True)
+        layout.addWidget(self.current_file_label)
+
+        self.setVisible(False)
+        self.apply_theme()
+
+    def apply_theme(self):
+        if not self.theme_manager:
+            return
+            
+        theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
+        self.setStyleSheet(f"""
+            QLabel {{
+                color: {theme['text_primary']};
+            }}
+            QProgressBar {{
+                border: 1px solid {theme['input_border']};
+                border-radius: 3px;
+                text-align: center;
+                background-color: {theme['panel_background']};
+            }}
+            QProgressBar::chunk {{
+                background-color: {theme['accent_color']};
+            }}
+        """)
+
+    def start_operation(self, operation_type, paths, settings):
+        """Start a new backup/restore operation"""
+        self.background_op = BackgroundOperation(operation_type, paths, settings)
+        self.background_op.start()
+        
+        self.operation_label.setText(f"Operation: {operation_type.capitalize()}")
+        self.progress_bar.setValue(0)
+        self.current_file_label.setText("Preparing...")
+        self.setVisible(True)
+        
+        # Start progress update timer
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_progress)
+        self.timer.start(100)  # Update every 100ms
+
+    def update_progress(self):
+        """Update progress display from background operation"""
+        if not self.background_op:
+            return
+        
+        try:
+            for progress in self.background_op.get_progress():
+                progress_type = progress.get('type')
+                operation_id = progress.get('operation_id')
+                
+                if not operation_id:
+                    continue
+
+                # Handle file progress updates
+                if progress_type == 'file_progress':
+                    if progress.get('record_file', False) and self.history_manager:
+                        filepath = progress['filepath'].replace('\\', '/')
+                        status = OperationStatus.SUCCESS if progress.get('success', False) else OperationStatus.FAILED
+                        
+                        self.history_manager.add_file_to_operation(
+                            operation_id,
+                            filepath,
+                            status,
+                            progress.get('error')
+                        )
+                    
+                    # Update progress bar if we have total files
+                    if progress.get('total_files') and progress.get('processed_files'):
+                        percentage = (progress['processed_files'] / progress['total_files']) * 100
+                        self.progress_bar.setValue(int(percentage))
+                    
+                    # Update current file label
+                    if 'filepath' in progress:
+                        if progress.get('parent_folder'):
+                            parent_folder = os.path.basename(progress['parent_folder'])
+                            filename = os.path.basename(progress['filepath'])
+                            self.current_file_label.setText(
+                                f"Processing: {parent_folder}/{filename}"
+                            )
+                        else:
+                            self.current_file_label.setText(
+                                f"Processing: {os.path.basename(progress['filepath'])}"
+                            )
+                        
+                    # Update file count label
+                    if progress.get('total_files'):
+                        self.file_count_label.setText(
+                            f"Files: {progress.get('processed_files', 0)}/{progress['total_files']}"
+                        )
+
+                # Handle operation completion
+                elif progress_type == 'operation_complete' and self.history_manager:
+                    # The operation's status has already been updated by the file processing
+                    # We just need to emit completion signal - don't create a new history entry
+                    self.operation_completed.emit({
+                        'success_count': progress.get('success_count', 0),
+                        'fail_count': progress.get('fail_count', 0),
+                        'total': progress.get('total', 0),
+                        'operation_type': self.background_op.operation_type
+                    })
+                    self.cleanup()
+                    
+                # Handle operation failure
+                elif progress_type == 'operation_failed' and self.history_manager:
+                    self.history_manager.complete_operation(
+                        operation_id,
+                        OperationStatus.FAILED,
+                        progress.get('error')
+                    )
+                    
+                    self.operation_completed.emit({
+                        'error': progress.get('error', 'Operation failed'),
+                        'operation_type': self.background_op.operation_type
+                    })
+                    self.cleanup()
+                    
+        except Exception as e:
+            logging.error(f"Error updating progress: {e}", exc_info=True)
+            self.cleanup()
+
+    def cancel_operation(self):
+        """Cancel the current operation"""
+        if self.background_op:
+            operation_type = self.background_op.operation_type
+            operation_id = self.background_op.operation_id
+            
+            # Stop the background operation
+            self.background_op.stop()
+            
+            # Recalculate final status based on completed files
+            if self.history_manager:
+                event = self.history_manager.get_operation(operation_id)
+                if event:
+                    completed_files = [f for f in event.files 
+                                     if f.status != OperationStatus.IN_PROGRESS]
+                    if completed_files:
+                        # Determine final status based on completed files
+                        final_status = (OperationStatus.FAILED 
+                                      if any(f.status == OperationStatus.FAILED for f in completed_files)
+                                      else OperationStatus.SUCCESS)
+                        
+                        # Update the operation's status
+                        self.history_manager.complete_operation(
+                            operation_id,
+                            final_status,
+                            "Operation cancelled by user"
+                        )
+                    else:
+                        # No files completed, mark as failed
+                        self.history_manager.complete_operation(
+                            operation_id,
+                            OperationStatus.FAILED,
+                            "Operation cancelled by user before any files were processed"
+                        )
+            
+            self.operation_completed.emit({
+                'error': 'Operation cancelled by user',
+                'operation_type': operation_type
+            })
+            self.cleanup()
+
+    def cleanup(self):
+        """Clean up after operation completes"""
+        if self.timer:
+            self.timer.stop()
+            self.timer = None
+            
+        if self.background_op:
+            self.background_op.stop()
+            self.background_op = None
+            
+        self.setVisible(False)
 
 class OutlookStyleEmailPreview(QWidget):
     def __init__(self, theme_manager, settings_path=None):
@@ -435,64 +1688,6 @@ class StormcloudMessageBox(QMessageBox):
         msg_box.setWindowTitle(title)
         msg_box.setStandardButtons(QMessageBox.Ok)
         return msg_box.exec_()
-
-class BackupTab(QWidget):
-    def __init__(self, parent, theme_manager):
-        super().__init__(parent)
-        self.theme_manager = theme_manager
-        self.parent = parent
-        self.init_ui()
-
-    def init_ui(self):
-        layout = QVBoxLayout(self)
-        
-        # Header with Start Backup Engine button
-        header_widget = self.create_header_widget()
-        layout.addWidget(header_widget)
-
-        # Grid layout for panels
-        grid_widget = QWidget()
-        self.grid_layout = QGridLayout(grid_widget)
-        self.setup_grid_layout()
-        layout.addWidget(grid_widget)
-
-    def create_header_widget(self):
-        header_widget = QWidget()
-        header_layout = QHBoxLayout(header_widget)
-        
-        self.start_button = QPushButton('Start Backup Engine')
-        self.start_button.setObjectName("start_button")
-        self.start_button.setFixedSize(200, 40)
-        self.start_button.clicked.connect(self.parent.toggle_backup_engine)
-        self.start_button.setCursor(Qt.PointingHandCursor)
-        
-        header_layout.addWidget(self.start_button)
-        header_layout.addStretch()
-        
-        return header_widget
-
-    def setup_grid_layout(self):
-        # Top-left panel (Configuration Dashboard)
-        config_dashboard = self.parent.create_configuration_dashboard()
-        self.grid_layout.addWidget(config_dashboard, 0, 0)
-
-        # Top-right panel (Backup Schedule)
-        backup_schedule = self.parent.create_backup_schedule_panel()
-        self.grid_layout.addWidget(backup_schedule, 0, 1)
-
-        # Bottom-left panel (File Explorer)
-        file_explorer = self.parent.create_blank_panel()
-        self.grid_layout.addWidget(file_explorer, 1, 0)
-
-        # Bottom-right panel (Stormcloud Web and Backed Up Folders)
-        bottom_right_panel = self.parent.create_bottom_right_panel()
-        self.grid_layout.addWidget(bottom_right_panel, 1, 1)
-
-        # Set equal column and row stretches
-        self.grid_layout.setColumnStretch(0, 1)
-        self.grid_layout.setColumnStretch(1, 1)
-        self.grid_layout.setRowStretch(0, 1)
-        self.grid_layout.setRowStretch(1, 1)
 
 @dataclass
 class Transaction:
@@ -1758,8 +2953,12 @@ class StormcloudApp(QMainWindow):
             "Stormcloud Backup Engine", systray_menu_options)
         self.systray.start()
         
-        # Load settings first
+        # Load settings and get install path first
         self.load_settings()
+        self.install_path = self.get_install_path()
+        
+        # Initialize history manager after install path is set
+        self.history_manager = HistoryManager(self.install_path)
         
         # Then initialize UI and other components
         self.set_app_icon()
@@ -1799,23 +2998,39 @@ class StormcloudApp(QMainWindow):
         self.tab_widget.setTabPosition(QTabWidget.South)
         main_layout.addWidget(self.tab_widget)
 
-        # Create and add Backup tab
-        backup_tab = QWidget()
-        self.setup_backup_tab(backup_tab)
-        self.tab_widget.addTab(backup_tab, "💾 Backup")
+        # Create and add tabs
+        self.backup_tab = self.create_backup_tab()
+        self.tab_widget.addTab(self.backup_tab, "💾 Backup")
 
-        # Create and add Payment Processing tab
         payment_tab = QWidget()
         self.setup_payment_tab(payment_tab)
         self.tab_widget.addTab(payment_tab, "💳 Payments")
 
-        # Create and add Meeting Scheduler tab
         self.meeting_scheduler_tab = MeetingSchedulerTab(self, self.theme_manager)
         self.tab_widget.addTab(self.meeting_scheduler_tab, "📅 Schedule | 👥 Meetings")
         
-        # Create and add On-Call Scheduler tab
         self.oncall_scheduler_tab = OnCallSchedulerTab(self, self.theme_manager)
         self.tab_widget.addTab(self.oncall_scheduler_tab, "📅 Schedule | 🏥 On-Call")
+
+    def get_install_path(self):
+        """Get Stormcloud installation path from stable settings"""
+        try:
+            appdata_path = os.getenv('APPDATA')
+            stable_settings_path = os.path.join(appdata_path, 'Stormcloud', 'stable_settings.cfg')
+            
+            if not os.path.exists(stable_settings_path):
+                logging.error(f"Stable settings file not found at: {stable_settings_path}")
+                return None
+                
+            with open(stable_settings_path, 'r') as f:
+                stable_settings = json.load(f)
+                install_path = stable_settings.get('install_path', '').replace('\\', '/')
+                logging.info(f"Found installation path: {install_path}")
+                return install_path
+                
+        except Exception as e:
+            logging.error(f"Failed to get installation path: {e}")
+            return None
 
     def set_app_icon(self):
         appdata_path = os.getenv('APPDATA')
@@ -2018,7 +3233,7 @@ class StormcloudApp(QMainWindow):
         blank_panel = self.create_blank_panel()
         self.grid_layout.addWidget(blank_panel, 1, 0)
 
-        # Bottom-right panel (Stormcloud Web and Backed Up Folders)
+        # Bottom-right panel
         bottom_right_panel = self.create_bottom_right_panel()
         self.grid_layout.addWidget(bottom_right_panel, 1, 1)
 
@@ -2028,58 +3243,29 @@ class StormcloudApp(QMainWindow):
         self.grid_layout.setRowStretch(0, 1)
         self.grid_layout.setRowStretch(1, 1)
 
-    def create_web_links_subpanel(self):
-        subpanel = QWidget()
-        layout = QVBoxLayout(subpanel)
-
-        # Subpanel header
-        header = QLabel("Stormcloud Web")
-        header.setObjectName("SubpanelHeader")
-        layout.addWidget(header)
-
-        # Horizontal divider
-        horizontal_line = QFrame()
-        horizontal_line.setFrameShape(QFrame.HLine)
-        horizontal_line.setObjectName("HorizontalDivider")
-        layout.addWidget(horizontal_line)
-
-        # Web links
-        self.add_web_link(layout, "https://apps.darkage.io", "Stormcloud Apps")
-        self.add_web_link(layout, "https://darkage.io", "Darkage Homepage")
-        self.add_web_link(layout, "https://darkage.io/support", "Support")
-
-        layout.addStretch(1)
-        return subpanel
-
     def create_bottom_right_panel(self):
+        """Create the operation history panel with dropdown selector"""
         content = QWidget()
         content.setObjectName("ContentWidget")
         main_layout = QVBoxLayout(content)
+        main_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Create two subpanels
-        subpanel_layout = QHBoxLayout()
-        left_subpanel = self.create_web_links_subpanel()
-        right_subpanel = self.create_backed_up_folders_subpanel()
+        # Create single history panel that can switch between backup/restore
+        self.history_panel = OperationHistoryPanel('backup', self.history_manager, self.theme_manager)
+        main_layout.addWidget(self.history_panel)
 
-        # Add vertical divider
-        vertical_line = QFrame()
-        vertical_line.setFrameShape(QFrame.VLine)
-        vertical_line.setObjectName("VerticalDivider")
+        return self.create_panel('Device History', content)
 
-        # Set width proportions
-        subpanel_layout.addWidget(left_subpanel, 50)
-        subpanel_layout.addWidget(vertical_line)
-        subpanel_layout.addWidget(right_subpanel, 50)
-
-        main_layout.addLayout(subpanel_layout)
-
-        return self.create_panel('Web & Folders', content)
-
-    def create_blank_panel(self):
+    def create_file_explorer_panel(self):
         """Create the file explorer panel"""
         if not hasattr(self, 'settings_cfg_path'):
             logging.error('Settings path not initialized')
             return self.create_panel('File Explorer', QLabel("Settings not loaded"))
+
+        content = QWidget()
+        content.setObjectName("ContentWidget")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
 
         appdata_path = os.getenv('APPDATA')
         json_directory = os.path.join(appdata_path, 'Stormcloud')
@@ -2091,10 +3277,13 @@ class StormcloudApp(QMainWindow):
             json_directory, 
             self.theme_manager, 
             self.settings_cfg_path,
-            self.systray  # Pass the existing systray instance
+            self.systray,
+            self.history_manager
         )
         
-        return self.create_panel('File Explorer', file_explorer)
+        content_layout.addWidget(file_explorer)
+        
+        return self.create_panel('File Explorer', content)
 
     def create_panel(self, title, content_widget):
         panel = QWidget()
@@ -2222,23 +3411,191 @@ class StormcloudApp(QMainWindow):
         content.setObjectName("ContentWidget")
         main_layout = QVBoxLayout(content)
 
+        # Create layout for two panels
+        panel_layout = QHBoxLayout()
+
+        # Left panel with stacked Settings and Properties
+        left_panel = self.create_stacked_settings_panel()
+        
+        # Add vertical divider - using same style as Web & Folders panel
+        vertical_line = QFrame()
+        vertical_line.setFrameShape(QFrame.VLine)
+        vertical_line.setObjectName("VerticalDivider")
+        
+        # Right panel for Backed Up Folders
+        right_panel = self.create_backed_up_folders_subpanel()
+
+        # Add panels and divider to layout with equal width
+        panel_layout.addWidget(left_panel)
+        panel_layout.addWidget(vertical_line)
+        panel_layout.addWidget(right_panel)
+        panel_layout.setStretch(0, 1)  # Left panel takes 1 part
+        panel_layout.setStretch(2, 1)  # Right panel takes 1 part
+        panel_layout.setSpacing(0)  # Reduce spacing to make divider look consistent
+
+        main_layout.addLayout(panel_layout)
+
+        return self.create_panel('Configuration Dashboard', content)
+
+    def create_stacked_settings_panel(self):
+        """Create left panel with stacked Settings and Properties"""
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)  # Remove spacing to control it within the splitter
+
+        # Create vertical splitter
+        splitter = QSplitter(Qt.Vertical)
+        splitter.setObjectName("SettingsSplitter")
+        splitter.setHandleWidth(3)  # Make handle slightly thicker than regular lines
+        
+        # Settings section
+        settings_widget = self.create_settings_section()
+        splitter.addWidget(settings_widget)
+        
+        # Properties section
+        properties_widget = self.create_properties_section()
+        splitter.addWidget(properties_widget)
+        
+        # Set initial sizes (60% settings, 40% properties)
+        splitter.setSizes([60, 40])
+        
+        layout.addWidget(splitter)
+        
+        # Apply styling to splitter
+        theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
+        splitter.setStyleSheet(f"""
+            QSplitter::handle {{
+                background-color: {theme['divider_color']};
+                margin: 10px 10px;  /* Match padding of panels */
+            }}
+            QSplitter::handle:hover {{
+                background-color: {theme['accent_color']};
+            }}
+        """)
+        
+        return panel
+
+    def create_settings_section(self):
+        """Create settings section of the stacked panel"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(10, 10, 10, 10)  # Consistent padding
+
+        # Subpanel header
+        header = QLabel("Settings")
+        header.setObjectName("SubpanelHeader")
+        layout.addWidget(header)
+
+        # Horizontal divider
+        horizontal_line = QFrame()
+        horizontal_line.setFrameShape(QFrame.HLine)
+        horizontal_line.setObjectName("HorizontalDivider")
+        layout.addWidget(horizontal_line)
+
+        # Status
+        self.status_value_text = QLabel('Unknown')
+        status_layout = QHBoxLayout()
+        status_layout.addWidget(QLabel('Backup Engine Status:'))
+        status_layout.addWidget(self.status_value_text)
+        layout.addLayout(status_layout)
+
+        # Backup mode
+        self.backup_mode_dropdown = QComboBox()
+        self.backup_mode_dropdown.addItems(['Realtime', 'Scheduled'])
+        self.backup_mode_dropdown.currentIndexChanged.connect(self.on_backup_mode_changed)
+        self.backup_mode_dropdown.setCursor(Qt.PointingHandCursor)
+        backup_mode_layout = QHBoxLayout()
+        backup_mode_layout.addWidget(QLabel('Backup Mode:'))
+        backup_mode_layout.addWidget(self.backup_mode_dropdown)
+        layout.addLayout(backup_mode_layout)
+
+        # Backup versions
+        maximum_backup_versions = 10
+        self.backup_versions_spinbox = QSpinBox()
+        self.backup_versions_spinbox.setMinimum(1)
+        self.backup_versions_spinbox.setMaximum(maximum_backup_versions)
+        self.backup_versions_spinbox.setValue(3)
+        self.backup_versions_spinbox.valueChanged.connect(self.on_backup_versions_changed)
+        self.backup_versions_spinbox.setObjectName("BackupVersionsSpinBox")
+        backup_versions_layout = QHBoxLayout()
+        backup_versions_layout.addWidget(QLabel(f'Backup Versions (max {maximum_backup_versions}):'))
+        backup_versions_layout.addWidget(self.backup_versions_spinbox)
+        layout.addLayout(backup_versions_layout)
+
+        layout.addStretch(1)
+        return widget
+        
+    def create_properties_section(self):
+        """Create properties section of the stacked panel"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(10, 10, 10, 10)  # Consistent padding
+
+        # Subpanel header
+        header = QLabel("Properties")
+        header.setObjectName("SubpanelHeader")
+        layout.addWidget(header)
+
+        # Horizontal divider
+        horizontal_line = QFrame()
+        horizontal_line.setFrameShape(QFrame.HLine)
+        horizontal_line.setObjectName("HorizontalDivider")
+        layout.addWidget(horizontal_line)
+
+        # Properties
+        properties_layout = QFormLayout()
+        self.agent_id_value = QLabel('Unknown')
+        self.api_key_value = QLabel('Unknown')
+        properties_layout.addRow('AGENT_ID:', self.agent_id_value)
+        properties_layout.addRow('API_KEY:', self.api_key_value)
+        layout.addLayout(properties_layout)
+
+        layout.addStretch(1)
+        return widget
+        """Create the bottom right panel with the new layout"""
+        content = QWidget()
+        content.setObjectName("ContentWidget")
+        main_layout = QVBoxLayout(content)
+
         # Create two subpanels
         subpanel_layout = QHBoxLayout()
-        left_subpanel = self.create_subpanel("Settings")
-        right_subpanel = self.create_subpanel("Properties")
+        
+        # Left subpanel (empty for now - will contain new functionality)
+        left_subpanel = QWidget()
+        left_subpanel.setObjectName("EmptySubpanel")
+        left_layout = QVBoxLayout(left_subpanel)
+        
+        # Add future widget placeholder header
+        header = QLabel("Future Widget")
+        header.setObjectName("SubpanelHeader")
+        left_layout.addWidget(header)
+
+        # Add horizontal divider
+        horizontal_line = QFrame()
+        horizontal_line.setFrameShape(QFrame.HLine)
+        horizontal_line.setObjectName("HorizontalDivider")
+        left_layout.addWidget(horizontal_line)
+
+        left_layout.addStretch()
 
         # Add vertical divider
         vertical_line = QFrame()
         vertical_line.setFrameShape(QFrame.VLine)
         vertical_line.setObjectName("VerticalDivider")
-        
-        subpanel_layout.addWidget(left_subpanel)
+
+        # Right subpanel (Stormcloud Web)
+        right_subpanel = self.create_web_links_subpanel()
+
+        # Set width proportions
+        subpanel_layout.addWidget(left_subpanel, 50)
         subpanel_layout.addWidget(vertical_line)
-        subpanel_layout.addWidget(right_subpanel)
+        subpanel_layout.addWidget(right_subpanel, 50)
+        subpanel_layout.setSpacing(0)  # Reduce spacing for consistent divider appearance
 
         main_layout.addLayout(subpanel_layout)
 
-        return self.create_panel('Configuration Dashboard', content)
+        return self.create_panel('Web & Folders', content)
 
     def create_subpanel(self, title):
         subpanel = QWidget()
@@ -2351,7 +3708,8 @@ class StormcloudApp(QMainWindow):
         logging.info(f"Backup mode changed to: {mode}")
 
     def toggle_backup_schedule_panel(self, enabled):
-        # Find the Backup Schedule panel and enable/disable it
+        """Toggle backup schedule panel and update button colors"""
+        # Find the Backup Schedule panel
         for i in range(self.grid_layout.count()):
             widget = self.grid_layout.itemAt(i).widget()
             if isinstance(widget, QWidget) and widget.findChild(QLabel, "HeaderLabel").text() == 'Backup Schedule':
@@ -2359,22 +3717,31 @@ class StormcloudApp(QMainWindow):
                 if content_widget:
                     content_widget.setEnabled(enabled)
                     content_widget.setProperty("enabled", str(enabled).lower())
+                    
+                    # Find all buttons and update their style
+                    for button in content_widget.findChildren(QPushButton):
+                        if not enabled:
+                            button.setStyleSheet("""
+                                QPushButton {
+                                    background-color: #444444;
+                                    color: #888888;
+                                    border: none;
+                                    padding: 5px 10px;
+                                    border-radius: 5px;
+                                }
+                                QPushButton:hover {
+                                    background-color: #4a4a4a;
+                                }
+                                QPushButton:pressed {
+                                    background-color: #404040;
+                                }
+                            """)
+                        else:
+                            button.setStyleSheet("")  # Reset to default theme style
+                    
                     content_widget.style().unpolish(content_widget)
                     content_widget.style().polish(content_widget)
-                break
-
-    def create_web_links_panel(self):
-        content = QWidget()
-        content.setObjectName("WebLinksPanel")
-        layout = QVBoxLayout(content)
-        
-        self.add_web_link(layout, "https://apps.darkage.io", "Stormcloud Apps")
-        self.add_web_link(layout, "https://darkage.io", "Darkage Homepage")
-        self.add_web_link(layout, "https://darkage.io/support", "Support")
-
-        layout.addStretch(1)
-        
-        return self.create_panel('Stormcloud Web', content)
+                    break
 
     def remove_backup_folder(self):
         current_item = self.backup_paths_list.currentItem()
@@ -2389,6 +3756,45 @@ class StormcloudApp(QMainWindow):
                 self.recursive_backup_paths.remove(folder)
             
             self.update_settings_file()
+
+    def create_backup_tab(self):
+        """Create and return the backup tab with its complete layout"""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        
+        # Header with Start Backup Engine button
+        header_widget = self.create_header_widget()
+        layout.addWidget(header_widget)
+
+        # Grid layout for panels
+        grid_widget = QWidget()
+        self.grid_layout = QGridLayout(grid_widget)
+        
+        # Top-left panel (Configuration Dashboard)
+        config_dashboard = self.create_configuration_dashboard()
+        self.grid_layout.addWidget(config_dashboard, 0, 0)
+
+        # Top-right panel (Backup Schedule)
+        backup_schedule = self.create_backup_schedule_panel()
+        self.grid_layout.addWidget(backup_schedule, 0, 1)
+
+        # Bottom-left panel (File Explorer)
+        self.file_explorer = self.create_file_explorer_panel()  # Updated method name
+        self.grid_layout.addWidget(self.file_explorer, 1, 0)
+
+        # Bottom-right panel (Operation History)
+        if not hasattr(self, 'operation_history_panel'):
+            self.operation_history_panel = self.create_bottom_right_panel()
+        self.grid_layout.addWidget(self.operation_history_panel, 1, 1)
+
+        # Set equal column and row stretches
+        self.grid_layout.setColumnStretch(0, 1)
+        self.grid_layout.setColumnStretch(1, 1)
+        self.grid_layout.setRowStretch(0, 1)
+        self.grid_layout.setRowStretch(1, 1)
+        
+        layout.addWidget(grid_widget)
+        return tab
 
     def create_backed_up_folders_subpanel(self):
         subpanel = QWidget()
@@ -2580,13 +3986,6 @@ class StormcloudApp(QMainWindow):
             settings.insert(i, "[]")
         
         return section_index
-
-    def add_web_link(self, layout, url, text):
-        link_button = QPushButton(text)
-        link_button.setObjectName("WebLink")
-        link_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(url)))
-        link_button.setProperty('clickable', 'true')
-        layout.addWidget(link_button)
 
     def update_schedule_list(self):
         if hasattr(self, 'schedule_list'):
@@ -2797,6 +4196,15 @@ class StormcloudApp(QMainWindow):
             exe_path = os.path.join(os.path.dirname(self.settings_cfg_path), 'stormcloud.exe').replace('\\', '/')
             subprocess.Popen([exe_path], shell=True)
             logging.info('Backup engine started successfully at %s', exe_path)
+            
+            # Add history event for realtime mode
+            if self.backup_mode == 'Realtime':
+                self.history_manager.add_event('backup', HistoryEvent(
+                    timestamp=dt.datetime.now(),
+                    source=InitiationSource.REALTIME,
+                    status=OperationStatus.IN_PROGRESS
+                ))
+            
             StormcloudMessageBox.information(self, 'Info', 'Backup engine started successfully.')
         except Exception as e:
             logging.error('Failed to start backup engine: %s', e)
@@ -3385,11 +4793,12 @@ class SearchResultDelegate(QStyledItemDelegate):
         return size
 
 class FileExplorerPanel(QWidget):
-    def __init__(self, json_directory, theme_manager, settings_path=None, systray=None):
+    def __init__(self, json_directory, theme_manager, settings_cfg_path=None, systray=None, history_manager=None):
         super().__init__()
         self.theme_manager = theme_manager
-        self.settings_path = settings_path
+        self.settings_path = settings_cfg_path  # Store as settings_path internally for compatibility
         self.systray = systray
+        self.history_manager = history_manager
         self.install_path = self.get_install_path()
         
         # Update metadata directory path
@@ -3433,8 +4842,6 @@ class FileExplorerPanel(QWidget):
         self.results_panel.setHeaderHidden(True)
         self.results_panel.itemClicked.connect(self.navigate_to_result)
         self.results_panel.setVisible(False)
-        
-        # Add this new line to set the custom delegate
         self.results_panel.setItemDelegate(SearchResultDelegate(self.theme_manager))
         
         self.main_splitter.addWidget(self.results_panel)
@@ -3458,6 +4865,12 @@ class FileExplorerPanel(QWidget):
         self.tree_view.doubleClicked.connect(self.show_metadata)
 
         self.load_data()
+        
+        # Progress widget with history manager
+        self.progress_widget = OperationProgressWidget(self)
+        self.progress_widget.history_manager = self.history_manager
+        self.progress_widget.operation_completed.connect(self.on_operation_completed)
+        layout.addWidget(self.progress_widget)
 
     def apply_theme(self):
         theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
@@ -3614,7 +5027,7 @@ class FileExplorerPanel(QWidget):
         self.update_results_panel()
 
     def show_context_menu(self, position):
-        """Show context menu for file/folder operations"""
+        """Enhanced context menu with file/folder awareness"""
         settings = self.read_settings()
         if not settings:
             StormcloudMessageBox.critical(self, "Error", "Could not read required settings")
@@ -3624,24 +5037,24 @@ class FileExplorerPanel(QWidget):
         if not index.isValid():
             return
 
-        item = self.model.itemFromIndex(index)
-        metadata = item.data(Qt.UserRole)
-        file_path = self.get_full_path(item)
-
+        self.current_item = self.model.itemFromIndex(index)
+        self.current_path = self.get_full_path(self.current_item)
+        
         menu = QMenu(self)
         restore_action = menu.addAction("Restore")
         backup_action = menu.addAction("Backup Now")
         
-        # Add version history option
+        # Add version history option only for files
         versions_action = None
-        if metadata and 'versions' in metadata:
-            versions_action = menu.addMenu("Versions")
-            for version in metadata['versions']:
-                timestamp = version.get('timestamp', 'Unknown')
-                version_action = versions_action.addAction(f"Restore version from {timestamp}")
-                version_action.setData(version)
+        if not self.is_folder(self.current_item):
+            metadata = self.current_item.data(Qt.UserRole)
+            if metadata and 'versions' in metadata:
+                versions_action = menu.addMenu("Versions")
+                for version in metadata['versions']:
+                    timestamp = version.get('timestamp', 'Unknown')
+                    version_action = versions_action.addAction(f"Restore version from {timestamp}")
+                    version_action.setData(version)
 
-        # Show menu at cursor position
         action = menu.exec_(self.tree_view.viewport().mapToGlobal(position))
         
         if not action:
@@ -3649,12 +5062,12 @@ class FileExplorerPanel(QWidget):
 
         try:
             if action == restore_action:
-                self.restore_file(file_path)
+                self.restore_item()
             elif action == backup_action:
-                self.backup_file(file_path)
+                self.backup_item()
             elif versions_action and action.parent() == versions_action:
                 version_data = action.data()
-                self.restore_file_version(file_path, version_data)
+                self.restore_file_version(self.current_path, version_data)
         except Exception as e:
             StormcloudMessageBox.critical(self, "Error", f"Operation failed: {str(e)}")
 
@@ -3830,7 +5243,7 @@ class FileExplorerPanel(QWidget):
                     logging.error(f'Settings did not parse to dictionary, got: {type(settings)}')
                     return None
                     
-                required_keys = ['API_KEY', 'AGENT_ID']
+                required_keys = ['API_KEY', 'AGENT_ID', 'SECRET_KEY']
                 missing_keys = [key for key in required_keys if key not in settings]
                 
                 if missing_keys:
@@ -3848,6 +5261,118 @@ class FileExplorerPanel(QWidget):
             logging.error(f'Unexpected error reading settings: {type(e).__name__} - {str(e)}')
             return None
 
+    def restore_item(self):
+        """Start a restore operation"""
+        self.start_operation('restore')
+
+    def backup_item(self):
+        """Start a backup operation"""
+        self.start_operation('backup')
+
+    def is_folder(self, item):
+        """Determine if the item is a folder based on whether it has children"""
+        return item.hasChildren()
+
+    def restore_folder(self, folder_path):
+        """Recursively restore a folder and its contents"""
+        settings = self.read_settings()
+        if not settings:
+            return
+
+        try:
+            success_count = 0
+            fail_count = 0
+            skipped_count = 0
+
+            # Process all items under this folder
+            for child_row in range(self.current_item.rowCount()):
+                child_item = self.current_item.child(child_row)
+                child_path = self.get_full_path(child_item)
+                
+                if self.is_folder(child_item):
+                    s, f, sk = self.restore_folder(child_path)
+                    success_count += s
+                    fail_count += f
+                    skipped_count += sk
+                else:
+                    try:
+                        if restore_utils.restore_file(child_path, 
+                                                    settings['API_KEY'],
+                                                    settings['AGENT_ID'],
+                                                    settings['SECRET_KEY']):
+                            success_count += 1
+                        else:
+                            fail_count += 1
+                    except Exception as e:
+                        logging.error(f"Failed to restore file {child_path}: {e}")
+                        fail_count += 1
+
+            # Show summary message
+            message = f"Folder restore complete:\n\n"
+            message += f"Successfully restored: {success_count} files\n"
+            if fail_count > 0:
+                message += f"Failed to restore: {fail_count} files\n"
+            if skipped_count > 0:
+                message += f"Skipped: {skipped_count} files\n"
+            
+            StormcloudMessageBox.information(self, "Restore Complete", message)
+            return success_count, fail_count, skipped_count
+
+        except Exception as e:
+            logging.error(f"Failed to restore folder {folder_path}: {e}")
+            StormcloudMessageBox.critical(self, "Error", f"Failed to restore folder: {str(e)}")
+            return 0, 1, 0
+
+    def backup_folder(self, folder_path):
+        """Recursively backup a folder and its contents"""
+        settings = self.read_settings()
+        if not settings:
+            return
+
+        try:
+            # Get the hash database connection
+            hash_db_path = os.path.join(self.install_path, 'schash.db')
+            dbconn = get_or_create_hash_db(hash_db_path)
+            
+            success_count = 0
+            fail_count = 0
+            
+            try:
+                # Process the folder recursively
+                for root, dirs, files in os.walk(folder_path):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        try:
+                            path_obj = pathlib.Path(file_path)
+                            if backup_utils.process_file(path_obj,
+                                                       settings['API_KEY'],
+                                                       settings['AGENT_ID'],
+                                                       settings['SECRET_KEY'],
+                                                       dbconn,
+                                                       True):  # Force backup
+                                success_count += 1
+                            else:
+                                fail_count += 1
+                        except Exception as e:
+                            logging.error(f"Failed to backup file {file_path}: {e}")
+                            fail_count += 1
+                
+                # Show summary message
+                message = f"Folder backup complete:\n\n"
+                message += f"Successfully backed up: {success_count} files\n"
+                if fail_count > 0:
+                    message += f"Failed to backup: {fail_count} files"
+                
+                StormcloudMessageBox.information(self, "Backup Complete", message)
+                
+            finally:
+                if dbconn:
+                    dbconn.close()
+
+        except Exception as e:
+            logging.error(f"Failed to backup folder {folder_path}: {e}")
+            StormcloudMessageBox.critical(self, "Error", f"Failed to backup folder: {str(e)}")
+
     def restore_file(self, file_path):
         """Restore file from backup"""
         settings = self.read_settings()
@@ -3861,7 +5386,8 @@ class FileExplorerPanel(QWidget):
             
             if restore_utils.restore_file(file_path
                                             , settings['API_KEY']
-                                            , settings['AGENT_ID']):
+                                            , settings['AGENT_ID']
+                                            , settings['SECRET_KEY']):
                 StormcloudMessageBox.information(self, "Success", f"Successfully restored {file_path}")
             else:
                 StormcloudMessageBox.critical(self, "Error", f"Failed to restore {file_path}")
@@ -3880,7 +5406,7 @@ class FileExplorerPanel(QWidget):
             # Add version info to the request
             version_id = version_data.get('version_id')
             if restore_utils.restore_file(file_path, settings['API_KEY'], settings['AGENT_ID'], 
-                                       version_id):
+                                       settings['SECRET_KEY'], version_id):
                 StormcloudMessageBox.information(self, "Success", 
                     f"Successfully restored version from {version_data.get('timestamp')} of {file_path}")
             else:
@@ -3936,6 +5462,7 @@ class FileExplorerPanel(QWidget):
                     path_obj,
                     settings['API_KEY'],
                     settings['AGENT_ID'],
+                    settings['SECRET_KEY'],
                     dbconn,
                     True
                 )
@@ -3960,6 +5487,57 @@ class FileExplorerPanel(QWidget):
             if 'dbconn' in locals():
                 dbconn.close()
             logging.info("=== MANUAL BACKUP OPERATION COMPLETE ===")
+
+    def on_operation_completed(self, result):
+        """Handle completion of backup/restore operations"""
+        if 'error' in result:
+            StormcloudMessageBox.critical(self, "Operation Failed", result['error'])
+            # Update the status of the existing event to FAILED
+            if self.history_manager and result.get('operation_type'):
+                self.history_manager.complete_operation(
+                    result.get('operation_id'),
+                    OperationStatus.FAILED,
+                    result['error']
+                )
+        else:
+            message = f"Operation completed:\n\n"
+            message += f"Successfully processed: {result['success_count']} files\n"
+            if result['fail_count'] > 0:
+                message += f"Failed to process: {result['fail_count']} files\n"
+            if result['total'] != (result['success_count'] + result['fail_count']):
+                message += f"Skipped: {result['total'] - (result['success_count'] + result['fail_count'])} files\n"
+            
+            StormcloudMessageBox.information(self, "Operation Complete", message)
+            
+            # No need to create a new event - the status has already been updated
+            # through file processing in the HistoryManager
+            
+            # Refresh file metadata after successful operation
+            self.load_data()
+
+    def start_operation(self, operation_type: str):
+        """Start a backup or restore operation"""
+        if not self.current_path:
+            return
+            
+        settings = self.read_settings()
+        if not settings:
+            return
+            
+        # Start a new operation in history
+        if self.history_manager:
+            operation_id = self.history_manager.start_operation(
+                operation_type,
+                InitiationSource.USER
+            )
+            settings['operation_id'] = operation_id
+            
+        # Add required settings
+        settings['settings_path'] = self.settings_path
+        settings['operation_type'] = operation_type
+        
+        # Start operation with progress tracking
+        self.progress_widget.start_operation(operation_type, self.current_path, settings)
 
 class FileSystemModel(QStandardItemModel):
     def __init__(self):
@@ -4027,32 +5605,43 @@ class CustomTreeCarrot(QProxyStyle):
 
     def drawPrimitive(self, element, option, painter, widget=None):
         if element == QStyle.PE_IndicatorBranch:
-            rect = option.rect
-            palette = option.palette
-            theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
-            
             if option.state & QStyle.State_Children:
+                rect = option.rect
                 center = rect.center()
+                theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
+                
                 painter.save()
-                painter.setRenderHint(QPainter.Antialiasing)
+                # Don't use antialiasing - we want crisp pixels
+                painter.setRenderHint(QPainter.Antialiasing, False)
                 
-                # Draw the circle
-                painter.setPen(Qt.NoPen)
-                painter.setBrush(QColor(theme["carrot_background"]))
-                painter.drawEllipse(center, 6, 6)
+                # Set up pen for single pixel drawing
+                pen = QPen(QColor(theme["accent_color"]))
+                pen.setWidth(1)
+                painter.setPen(pen)
                 
-                # Draw the triangle
-                painter.setPen(QPen(QColor(theme["carrot_foreground"]), 1.5))
                 if option.state & QStyle.State_Open:
-                    # Downward triangle for open state
-                    painter.drawLine(center.x() - 3, center.y() - 1, center.x() + 3, center.y() - 1)
-                    painter.drawLine(center.x() - 3, center.y() - 1, center.x(), center.y() + 2)
-                    painter.drawLine(center.x() + 3, center.y() - 1, center.x(), center.y() + 2)
+                    # Down carrot (rotated 90 degrees from right carrot)
+                    base_x = center.x() - 3
+                    base_y = center.y() - 2
+                    
+                    # Left diagonal line
+                    for i in range(4):
+                        painter.drawPoint(base_x + i, base_y + i)
+                    # Right diagonal line
+                    for i in range(4):
+                        painter.drawPoint(base_x + 6 - i, base_y + i)
                 else:
-                    # Rightward triangle for closed state
-                    painter.drawLine(center.x() - 1, center.y() - 3, center.x() - 1, center.y() + 3)
-                    painter.drawLine(center.x() - 1, center.y() - 3, center.x() + 2, center.y())
-                    painter.drawLine(center.x() - 1, center.y() + 3, center.x() + 2, center.y())
+                    # Right carrot (keep the working version)
+                    base_x = center.x() - 2
+                    base_y = center.y() - 3
+                    
+                    # Draw top diagonal line down-right
+                    for i in range(4):
+                        painter.drawPoint(base_x + i, base_y + i)
+                    # Draw bottom diagonal line up-right
+                    for i in range(4):
+                        painter.drawPoint(base_x + i, base_y + 6 - i)
+                
                 painter.restore()
             else:
                 super().drawPrimitive(element, option, painter, widget)
@@ -4229,6 +5818,10 @@ class ThemeManager(QObject):
                 }
                 QLabel#SubpanelHeader {
                     font-weight: bold;
+                }
+                QLabel#HistoryTypeLabel {
+                    color: #e8eaed;
+                    font-size: 14px;
                 }
                 #WebLink {
                     background-color: transparent;
@@ -4421,6 +6014,7 @@ class ThemeManager(QObject):
                 QTreeWidget#ResultsPanel QTreeWidgetItem[results="not_found"] {
                     color: #EA4335;
                 }
+                
                 BackupScheduleCalendar {
                     background-color: #202124;
                 }
@@ -4688,6 +6282,10 @@ class ThemeManager(QObject):
                 }
                 QLabel#SubpanelHeader {
                     font-weight: bold;
+                }
+                QLabel#HistoryTypeLabel {
+                    color: #202124;
+                    font-size: 14px;
                 }
                 QListWidget, QTreeWidget {
                     background-color: #ffffff;
