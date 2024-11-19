@@ -18,7 +18,6 @@ def handle_create_customer_request(request):
 
     required_fields = [
       'customer_name',
-      'customer_email',
       'plan'
     ]
 
@@ -29,7 +28,6 @@ def handle_create_customer_request(request):
     else:
         ncu.register_new_customer(
             request['customer_name'],
-            request['customer_email'],
             request['plan']
         )
 

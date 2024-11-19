@@ -103,7 +103,7 @@ def update_callback_for_device(device_id, callback_time, status_code):
     __teardown__(cursor,cnx)
     return ret
 
-def add_or_update_customer(customer_name,customer_email,customer_guid,plan,api_key):
+def add_or_update_customer(customer_name,customer_guid,plan,api_key):
   # IN customer_name varchar(256),
   # IN customer_email varchar(256),
   # IN customer_guid varchar(64),
@@ -113,6 +113,8 @@ def add_or_update_customer(customer_name,customer_email,customer_guid,plan,api_k
   ret = []
   cnx = __connect_to_db__()
   cursor = cnx.cursor(buffered=True)
+
+  customer_email = "notused@notused.com"
 
   try:
     cursor.callproc('add_or_update_customer',

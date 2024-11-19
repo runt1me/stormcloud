@@ -11,7 +11,7 @@ import database_utils as db
 def __logger__():
     return logging_utils.logger
 
-def generate_api_key(key_path):
+def generate_api_key():
     api_key = ""
     valid_token = False
 
