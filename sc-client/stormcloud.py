@@ -1,13 +1,22 @@
 import calendar
 import time
 from time import sleep
-from datetime import datetime
+from datetime import datetime, timedelta
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Optional, List, Dict
 import argparse
+import pathlib
 import os
 import json
+
+import sqlite3
 import yaml
+
 import threading
 import logging
+
+# import sslkeylog
 
 import keepalive_utils
 import backup_utils
@@ -17,7 +26,8 @@ import network_utils
 
 from infi.systray import SysTrayIcon   # pip install infi.systray
 
-from client_db_utils import get_or_create_hash_db
+from client_db_utils import (get_or_create_hash_db, hash_db_exists,
+                            create_hash_db, get_hash_db)
 
 ACTION_TIMER = 90
 
@@ -131,6 +141,141 @@ class BackupState:
             
         return False
 
+class BackupResult:
+    """Represent the detailed result of a backup operation"""
+    BACKED_UP = "backed_up"  # File was backed up successfully
+    UNCHANGED = "unchanged"  # File was unchanged, no backup needed
+    FAILED = "failed"    # Backup attempt failed
+    
+class InitiationSource(Enum):
+    REALTIME = "Realtime"
+    SCHEDULED = "Scheduled"
+    USER = "User-Initiated"
+
+class OperationStatus(Enum):
+    SUCCESS = "Success"
+    FAILED = "Failed"
+    IN_PROGRESS = "In Progress"
+
+@dataclass
+class FileOperationRecord:
+    filepath: str
+    timestamp: datetime
+    status: OperationStatus
+    error_message: Optional[str] = None
+
+@dataclass
+class HistoryEvent:
+    timestamp: datetime
+    source: InitiationSource
+    status: OperationStatus
+    operation_id: str = field(default_factory=lambda: datetime.now().strftime("%Y%m%d_%H%M%S_%f"))
+    files: List[FileOperationRecord] = field(default_factory=list)
+    error_message: Optional[str] = None
+
+class CoreHistoryManager:
+    """Simplified version of HistoryManager for core engine use"""
+    def __init__(self, install_path):
+        self.history_dir = os.path.join(install_path, 'history')
+        self.backup_history_file = os.path.join(self.history_dir, 'backup_history.json')
+        self.active_operations = {}
+        
+        # Create directory if it doesn't exist
+        os.makedirs(self.history_dir, exist_ok=True)
+        
+        # Initialize history file if it doesn't exist
+        if not os.path.exists(self.backup_history_file):
+            self.write_history(self.backup_history_file, [])
+
+    def start_operation(self, source: InitiationSource) -> str:
+        """Start a new backup operation and return its ID"""
+        event = HistoryEvent(
+            timestamp=datetime.now(),
+            source=source,
+            status=OperationStatus.IN_PROGRESS
+        )
+        self.active_operations[event.operation_id] = event
+        self.add_event('backup', event)
+        return event.operation_id
+
+    def add_file_record(self, operation_id: str, filepath: str, 
+                       status: OperationStatus, error_message: Optional[str] = None):
+        """Add a file record to an operation"""
+        if operation_id in self.active_operations:
+            event = self.active_operations[operation_id]
+            file_record = FileOperationRecord(
+                filepath=filepath,
+                timestamp=datetime.now(),
+                status=status,
+                error_message=error_message
+            )
+            event.files.append(file_record)
+            self.add_event('backup', event)
+
+    def complete_operation(self, operation_id: str, final_status: OperationStatus, 
+                         error_message: Optional[str] = None):
+        """Complete an operation with final status"""
+        if operation_id in self.active_operations:
+            event = self.active_operations[operation_id]
+            event.status = final_status
+            event.error_message = error_message
+            self.add_event('backup', event)
+            del self.active_operations[operation_id]
+
+    def read_history(self, file_path: str) -> list:
+        """Read history from JSON file"""
+        try:
+            with open(file_path, 'r') as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return []
+
+    def write_history(self, file_path: str, history: list):
+        """Write history to JSON file"""
+        with open(file_path, 'w') as f:
+            json.dump(history, f, indent=2)
+
+    def event_to_dict(self, event: HistoryEvent) -> dict:
+        """Convert HistoryEvent to dictionary for storage"""
+        return {
+            'timestamp': event.timestamp.isoformat(),
+            'source': event.source.value,
+            'status': event.status.value,
+            'operation_id': event.operation_id,
+            'error_message': event.error_message,
+            'files': [
+                {
+                    'filepath': f.filepath,
+                    'timestamp': f.timestamp.isoformat(),
+                    'status': f.status.value,
+                    'error_message': f.error_message
+                }
+                for f in event.files
+            ]
+        }
+
+    def add_event(self, event_type: str, event: HistoryEvent):
+        """Add or update an event in history"""
+        history = self.read_history(self.backup_history_file)
+        
+        # Convert event to dictionary
+        event_dict = self.event_to_dict(event)
+        
+        # Find and update existing entry if it exists
+        updated = False
+        for i, existing_event in enumerate(history):
+            if existing_event.get('operation_id') == event.operation_id:
+                history[i] = event_dict
+                updated = True
+                break
+                
+        # Add as new entry if it doesn't exist
+        if not updated:
+            history.append(event_dict)
+        
+        # Write back to file
+        self.write_history(self.backup_history_file, history)
+
 def should_backup(schedule, last_check_time, backup_state):
     """
     Enhanced backup check handling concurrent schedules and system time changes
@@ -188,8 +333,13 @@ def should_backup(schedule, last_check_time, backup_state):
     return should_run, trigger_source
 
 def main(settings_file_path,hash_db_file_path,ignore_hash_db):
-    settings = read_yaml_settings_file(settings_file_path)
-    logging_utils.send_logs_to_server(settings['API_KEY'],settings['AGENT_ID'])
+    # Honor SSLKEYLOGFILE if set by the OS
+    # sslkeylog.set_keylog(os.environ.get('SSLKEYLOGFILE'))
+
+    settings                = read_yaml_settings_file(settings_file_path)
+
+    if int(settings['SEND_LOGS']):
+        logging_utils.send_logs_to_server(settings['API_KEY'],settings['AGENT_ID'],settings['SECRET_KEY'])
     
     logging_utils.initialize_logging(uuid=settings['AGENT_ID'])
 
@@ -199,7 +349,7 @@ def main(settings_file_path,hash_db_file_path,ignore_hash_db):
         (
             "Backup now",
             None,
-            lambda x: logging.log(logging.INFO, "User clicked 'Backup now'.")
+            lambda x: logging.log(logging.INFO, "User clicked 'Backup now', but backup is always running.")
         )
     ,)
     systray = SysTrayIcon("stormcloud.ico", "Stormcloud Backup Engine", systray_menu_options)
@@ -274,15 +424,19 @@ def action_loop_and_sleep(settings, settings_file_path, dbconn, ignore_hash, sys
     active_thread = None
     last_check_time = datetime.now()
     backup_state = BackupState()
+    
+    # Initialize history manager
+    appdata_path = os.getenv('APPDATA')
+    settings_path = os.path.join(appdata_path, 'Stormcloud', 'stable_settings.cfg')
+    with open(settings_path, 'r') as f:
+        stable_settings = json.load(f)
+    install_path = stable_settings.get('install_path', '')
+    history_manager = CoreHistoryManager(install_path)
 
     while True:
         try:
             settings = read_yaml_settings_file(settings_file_path)
             network_utils.sync_backup_folders(settings)
-
-            logging.log(logging.INFO,"Stormcloud is running with settings: %s"
-                % ([(s, settings[s]) for s in settings.keys()])
-            )
 
             # Handle keepalive thread
             cur_keepalive_freq = int(settings['KEEPALIVE_FREQ'])
@@ -290,36 +444,47 @@ def action_loop_and_sleep(settings, settings_file_path, dbconn, ignore_hash, sys
                 active_thread = start_keepalive_thread(
                     cur_keepalive_freq,
                     settings['API_KEY'],
-                    settings['AGENT_ID']
+                    settings['AGENT_ID'],
+                    settings['SECRET_KEY']
                 )
 
-            # Check backup mode
             backup_mode = settings.get('BACKUP_MODE', 'Realtime')
             current_time = datetime.now()
 
             if backup_mode == 'Realtime':
                 if not backup_state.backup_in_progress:
+                    # Start backup operation in history
+                    operation_id = history_manager.start_operation(InitiationSource.REALTIME)
                     backup_state.start_backup('realtime')
+                    
                     try:
-                        backup_start_time = time.time()
-                        backup_utils.perform_backup(
+                        success = perform_backup_with_history(
                             settings['BACKUP_PATHS'],
                             settings['RECURSIVE_BACKUP_PATHS'],
-                            settings['API_KEY'],
-                            settings['AGENT_ID'],
+                            settings,
                             dbconn,
                             ignore_hash,
-                            systray
+                            systray,
+                            history_manager,
+                            operation_id
                         )
-                        logging.info(f"Backup took {time.time() - backup_start_time} seconds.")
                         save_file_metadata(settings)
-                        backup_state.complete_backup(success=True)
+                        backup_state.complete_backup(success=success)
+                        
+                        final_status = OperationStatus.SUCCESS if success else OperationStatus.FAILED
+                        history_manager.complete_operation(operation_id, final_status)
+                        
                     except Exception as e:
                         logging.error(f"Backup failed: {str(e)}")
                         backup_state.complete_backup(success=False)
-                        
-                    last_check_time = current_time
-                    sleep(ACTION_TIMER)
+                        history_manager.complete_operation(
+                            operation_id,
+                            OperationStatus.FAILED,
+                            str(e)
+                        )
+                    
+                last_check_time = current_time
+                sleep(ACTION_TIMER)
                 
             else:  # Scheduled mode
                 schedule = parse_schedule(settings)
@@ -327,24 +492,34 @@ def action_loop_and_sleep(settings, settings_file_path, dbconn, ignore_hash, sys
                 
                 if should_run and source:
                     if backup_state.start_backup(source):
-                        logging.info(f"Starting {source} backup at {current_time}")
+                        # Start backup operation in history
+                        operation_id = history_manager.start_operation(InitiationSource.SCHEDULED)
+                        
                         try:
-                            backup_start_time = time.time()
-                            backup_utils.perform_backup(
+                            success = perform_backup_with_history(
                                 settings['BACKUP_PATHS'],
                                 settings['RECURSIVE_BACKUP_PATHS'],
-                                settings['API_KEY'],
-                                settings['AGENT_ID'],
+                                settings,
                                 dbconn,
                                 ignore_hash,
-                                systray
+                                systray,
+                                history_manager,
+                                operation_id
                             )
-                            logging.info(f"Scheduled backup completed. Duration: {time.time() - backup_start_time} seconds.")
                             save_file_metadata(settings)
-                            backup_state.complete_backup(success=True)
+                            backup_state.complete_backup(success=success)
+                            
+                            final_status = OperationStatus.SUCCESS if success else OperationStatus.FAILED
+                            history_manager.complete_operation(operation_id, final_status)
+                            
                         except Exception as e:
                             logging.error(f"Scheduled backup failed: {str(e)}")
                             backup_state.complete_backup(success=False)
+                            history_manager.complete_operation(
+                                operation_id,
+                                OperationStatus.FAILED,
+                                str(e)
+                            )
                 
                 last_check_time = current_time
                 sleep(ACTION_TIMER)
@@ -352,6 +527,160 @@ def action_loop_and_sleep(settings, settings_file_path, dbconn, ignore_hash, sys
         except Exception as e:
             logging.error(f"Error in backup loop: {str(e)}")
             sleep(ACTION_TIMER)
+
+def perform_backup_with_history(backup_paths, recursive_paths, settings, dbconn, 
+                              ignore_hash, systray, history_manager, operation_id):
+    """Perform backup with history tracking"""
+    success = True
+    files_processed = False  # Track if we actually processed any files
+    
+    def normalize_path(path):
+        """Normalize path to use forward slashes"""
+        return str(path).replace('\\', '/')
+    
+    def process_path(path, is_recursive=False):
+        nonlocal success, files_processed
+        path = normalize_path(path)
+        
+        try:
+            if os.path.isfile(path):
+                try:
+                    backup_result = backup_utils.process_file(
+                        pathlib.Path(path),
+                        settings['API_KEY'],
+                        settings['AGENT_ID'],
+                        settings['SECRET_KEY'],
+                        dbconn,
+                        ignore_hash
+                    )
+                    
+                    if backup_result == BackupResult.BACKED_UP:
+                        files_processed = True
+                        history_manager.add_file_record(
+                            operation_id,
+                            path,
+                            OperationStatus.SUCCESS,
+                            None
+                        )
+                    elif backup_result == BackupResult.FAILED:
+                        files_processed = True
+                        success = False
+                        history_manager.add_file_record(
+                            operation_id,
+                            path,
+                            OperationStatus.FAILED,
+                            "Backup operation failed"
+                        )
+                    # Skip recording UNCHANGED files
+                    
+                except Exception as e:
+                    files_processed = True
+                    success = False
+                    error_msg = str(e)
+                    logging.error(f"Error backing up file {path}: {error_msg}")
+                    history_manager.add_file_record(
+                        operation_id,
+                        path,
+                        OperationStatus.FAILED,
+                        error_msg
+                    )
+                    
+            elif is_recursive:  # Directory with recursive backup
+                for root, _, files in os.walk(path):
+                    for file in files:
+                        file_path = normalize_path(os.path.join(root, file))
+                        try:
+                            file_success = backup_utils.process_file(
+                                pathlib.Path(file_path),
+                                settings['API_KEY'],
+                                settings['AGENT_ID'],
+                                settings['SECRET_KEY'],
+                                dbconn,
+                                ignore_hash
+                            )
+                            status = OperationStatus.SUCCESS if file_success else OperationStatus.FAILED
+                            history_manager.add_file_record(
+                                operation_id, 
+                                file_path, 
+                                status,
+                                None if file_success else "File backup failed"
+                            )
+                            if not file_success:
+                                success = False
+                                logging.error(f"Failed to backup file: {file_path}")
+                        except Exception as e:
+                            success = False
+                            error_msg = str(e)
+                            logging.error(f"Error backing up file {file_path}: {error_msg}")
+                            history_manager.add_file_record(
+                                operation_id,
+                                file_path,
+                                OperationStatus.FAILED,
+                                error_msg
+                            )
+            
+            elif os.path.isdir(path):  # Directory without recursive backup
+                # Only process files in the immediate directory
+                for entry in os.scandir(path):
+                    if entry.is_file():
+                        file_path = normalize_path(entry.path)
+                        try:
+                            file_success = backup_utils.process_file(
+                                pathlib.Path(file_path),
+                                settings['API_KEY'],
+                                settings['AGENT_ID'],
+                                settings['SECRET_KEY'],
+                                dbconn,
+                                ignore_hash
+                            )
+                            status = OperationStatus.SUCCESS if file_success else OperationStatus.FAILED
+                            history_manager.add_file_record(
+                                operation_id, 
+                                file_path, 
+                                status,
+                                None if file_success else "File backup failed"
+                            )
+                            if not file_success:
+                                success = False
+                                logging.error(f"Failed to backup file: {file_path}")
+                        except Exception as e:
+                            success = False
+                            error_msg = str(e)
+                            logging.error(f"Error backing up file {file_path}: {error_msg}")
+                            history_manager.add_file_record(
+                                operation_id,
+                                file_path,
+                                OperationStatus.FAILED,
+                                error_msg
+                            )
+
+        except Exception as e:
+            files_processed = True
+            success = False
+            error_msg = f"Error processing path {path}: {str(e)}"
+            logging.error(error_msg)
+            history_manager.add_file_record(
+                operation_id,
+                path,
+                OperationStatus.FAILED,
+                error_msg
+            )
+
+    # Process backup paths
+    logging.info("Processing regular backup paths: %s", backup_paths)
+    for path in backup_paths:
+        process_path(path, False)
+
+    # Process recursive backup paths
+    logging.info("Processing recursive backup paths: %s", recursive_paths)
+    for path in recursive_paths:
+        process_path(path, True)
+
+    # If no files needed processing, consider it a success
+    if not files_processed:
+        success = True
+
+    return success
 
 def parse_schedule(settings):
     """Parse the BACKUP_SCHEDULE from settings and return structured schedule data"""
@@ -370,10 +699,10 @@ def read_yaml_settings_file(fn):
     with open(fn, 'r') as settings_file:
         return yaml.safe_load(settings_file)
 
-def start_keepalive_thread(freq,api_key,agent_id):
+def start_keepalive_thread(freq,api_key,agent_id,secret_key):
     logging.log(logging.INFO,"starting new keepalive thread with freq %d" % freq)
 
-    t = threading.Thread(target=keepalive_utils.execute_ping_loop,args=(freq,api_key,agent_id))
+    t = threading.Thread(target=keepalive_utils.execute_ping_loop,args=(freq,api_key,agent_id,secret_key))
     t.start()
 
     logging.log(logging.INFO,"returning from start thread")

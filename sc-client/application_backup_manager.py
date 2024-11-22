@@ -4194,7 +4194,7 @@ class StormcloudApp(QMainWindow):
 
         try:
             exe_path = os.path.join(os.path.dirname(self.settings_cfg_path), 'stormcloud.exe').replace('\\', '/')
-            subprocess.Popen([exe_path], shell=True)
+            subprocess.Popen([exe_path], shell=True, cwd=os.path.dirname(self.settings_cfg_path))
             logging.info('Backup engine started successfully at %s', exe_path)
             
             # Add history event for realtime mode
