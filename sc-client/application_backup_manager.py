@@ -4237,22 +4237,39 @@ class StormcloudApp(QMainWindow):
             
     def create_folder_item_widget(self, folder, recursive):
         widget = QWidget()
+        widget.setMinimumWidth(200)  # Minimum width constraint
         layout = QHBoxLayout(widget)
-        layout.setContentsMargins(5, 2, 5, 2)
+        layout.setContentsMargins(10, 5, 10, 5)  # Increased margins
+        layout.setSpacing(10)  # Added explicit spacing
 
         checkbox = QCheckBox()
         checkbox.setChecked(recursive)
         checkbox.stateChanged.connect(lambda state, f=folder: self.toggle_recursive(f, state == Qt.Checked))
+        checkbox.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
         label = QLabel(folder)
         label.setWordWrap(True)
+        label.setMinimumWidth(150)  # Minimum text width
+        label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        
+        # Override any inherited styles
+        label.setStyleSheet("""
+            QLabel {
+                padding: 2px;
+                background: transparent;
+                border: none;
+            }
+        """)
 
         layout.addWidget(checkbox)
-        layout.addWidget(label, stretch=1)
+        layout.addWidget(label, stretch=2)  # Increased stretch factor
         layout.setAlignment(Qt.AlignLeft)
 
+        # Set size policies for the widget
+        widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        
         return widget
-            
+        
     def add_folder_to_backup(self, folder, recursive=False):
         # Check if the folder is already in the list
         for i in range(self.backup_paths_list.count()):
@@ -6121,6 +6138,11 @@ class ThemeManager(QObject):
                     color: #e8eaed;
                     font-family: 'Arial', sans-serif;
                 }
+                QWidget[class="folder-item"] QLabel {
+                    min-width: 150px;
+                    padding: 2px;
+                    color: inherit;
+                }
                 #PanelWidget {
                     background-color: #333333;
                     border: 1px solid #666;
@@ -6636,6 +6658,11 @@ class ThemeManager(QObject):
                     background-color: #f8f9fa;
                     color: #202124;
                     font-family: 'Arial', sans-serif;
+                }
+                QWidget[class="folder-item"] QLabel {
+                    min-width: 150px;
+                    padding: 2px;
+                    color: inherit;
                 }
                 QMenuBar {
                     background-color: #ffffff;
