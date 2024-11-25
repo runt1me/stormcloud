@@ -1259,15 +1259,18 @@ class BackgroundOperation:
             finally:
                 if dbconn:
                     dbconn.close()
-                    
-            # Use consistent operation_id for completion
-            queue.put({
-                'type': 'operation_complete',
-                'success_count': success_count,
-                'fail_count': fail_count,
-                'total': total_files,
-                'operation_id': operation_id
-            })
+            
+            # Send final completion status
+            if not should_stop.value:
+                successful = fail_count == 0 and success_count > 0
+                queue.put({
+                    'type': 'operation_complete',
+                    'success_count': success_count,
+                    'fail_count': fail_count,
+                    'total': total_files,
+                    'operation_id': operation_id,
+                    'status': OperationStatus.SUCCESS if successful else OperationStatus.FAILED
+                })
             
         except Exception as e:
             logging.error(f"Backup worker failed: {e}")
@@ -1501,7 +1504,10 @@ class OperationProgressWidget(QWidget):
                 try:
                     update = self.background_op.queue.get_nowait()
                     
-                    if update['type'] == 'file_progress':
+                    if update['type'] == 'total_files':
+                        self.file_count_label.setText(f"Files: 0/{update['value']}")
+                        
+                    elif update['type'] == 'file_progress':
                         file_path = update.get('filepath', '')
                         success = update.get('success', False)
                         error_msg = update.get('error')
@@ -1519,12 +1525,26 @@ class OperationProgressWidget(QWidget):
                         if update.get('total_files', 0) > 0:
                             percentage = (update.get('processed_files', 0) / update.get('total_files', 0)) * 100
                             self.progress_bar.setValue(int(percentage))
-                            
+                        
+                        total_files = update.get('total_files', 0)
+                        processed_files = update.get('processed_files', 0)
+                        if total_files > 0:
+                            self.file_count_label.setText(f"Files: {processed_files}/{total_files}")
+                            percentage = (processed_files / total_files) * 100
+                            self.progress_bar.setValue(int(percentage))
+                        
                         # Update current file label
                         if 'filepath' in update:
                             self.current_file_label.setText(f"Processing: {os.path.basename(file_path)}")
                             
                     elif update['type'] == 'operation_complete':
+                        if self.history_manager:
+                            final_status = OperationStatus.SUCCESS if update['fail_count'] == 0 else OperationStatus.FAILED
+                            self.history_manager.complete_operation(
+                                update.get('operation_id'),
+                                final_status
+                            )
+                    
                         self.operation_completed.emit({
                             'success_count': update.get('success_count', 0),
                             'fail_count': update.get('fail_count', 0),
