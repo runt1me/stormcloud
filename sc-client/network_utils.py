@@ -6,10 +6,6 @@ import os
 import logging
 import base64
 
-ONE_MB = 1024*1024
-THRESHOLD_MB = 200
-CHUNK_SIZE = ONE_MB
-
 SERVER_NAME="www2.darkage.io"
 SERVER_PORT=8443
 
@@ -19,6 +15,8 @@ API_ENDPOINT_KEEPALIVE               = 'https://%s:%d/api/keepalive'            
 API_ENDPOINT_RESTORE_FILE            = 'https://%s:%d/api/restore-file'            % (SERVER_NAME,SERVER_PORT)
 API_ENDPOINT_REGISTER_BACKUP_FOLDERS = 'https://%s:%d/api/register-backup-folders' % (SERVER_NAME,SERVER_PORT)
 API_ENDPOINT_FILE_METADATA           = 'https://%s:%d/api/file-metadata'           % (SERVER_NAME,SERVER_PORT)
+# API_ENDPOINT_AUTHENTICATE            = 'https://%s:%d/api/validate-api-key'        % (SERVER_NAME,SERVER_PORT)
+API_ENDPOINT_LOGIN                   = 'https://%s:%d/api/login'                   % (SERVER_NAME,SERVER_PORT)
 
 def fetch_file_metadata(api_key, agent_id):
     url = API_ENDPOINT_FILE_METADATA
@@ -36,38 +34,79 @@ def fetch_file_metadata(api_key, agent_id):
         logging.error(f"Error fetching file metadata: {e}")
         return None
 
+ONE_MB = 1024*1024
+THRESHOLD_MB = 200
+CHUNK_SIZE = ONE_MB
+
+def authenticate_user(email: str, password: str, settings_path: str) -> dict:
+    """Authenticate user with server using API key from settings"""
+    import traceback
+    
+    url = API_ENDPOINT_LOGIN
+    headers = {'Content-Type': 'application/json'}
+    
+    logging.info(f"Starting authentication attempt for user: {email}")
+    
+    try:
+        data = {
+            'email': email,
+            'password': password
+        }
+        
+        logging.info(f"Making authentication request to: {url}")
+        
+        response = requests.post(url, headers=headers, json=data)
+        logging.info(f"Response status code: {response.status_code}")
+        
+        if response.status_code == 200:
+            response_data = response.json()
+            logging.info("Authentication response received and parsed")
+            return response_data
+        else:
+            logging.error(f"Authentication failed with status code: {response.status_code}")
+            logging.error(f"Response content: {response.text}")
+            try:
+                error_response = response.json()
+                return {
+                    'success': False,
+                    'message': error_response.get('message', f"Server returned status code: {response.status_code}")
+                }
+            except:
+                return {
+                    'success': False,
+                    'message': f"Server returned status code: {response.status_code}"
+                }
+            
+    except Exception as e:
+        logging.error(f"Authentication request failed with exception: {str(e)}")
+        logging.error(f"Exception details: {traceback.format_exc()}")
+        raise
+
 def ship_file_to_server(api_key,agent_id,path):
-    """
-        Uploads file to server.
-        Calls either _stream_upload_file or _upload_file
-        based on the size of the file.
-    """
     size = os.path.getsize(path)
 
-    _dump_file_info(path,size)
+    logging.log(logging.INFO,dump_file_info(path,size))
 
     if size > THRESHOLD_MB * ONE_MB:
         logging.log(logging.INFO, "File size over %dMB, using MultipartEncoder" % THRESHOLD_MB)
 
-        ret = _stream_upload_file(
+        ret = stream_upload_file(
             api_key,
             agent_id,
             path
         )
 
     else:
-        ret = _upload_file(
+        ret = upload_file(
             api_key,
             agent_id,
             path
         )
 
+    #crypto_utils.remove_temp_file(unencrypted_path_to_encrypted_file)
     return ret
 
-def _dump_file_info(path,size):
-    logging.log(logging.INFO,"Sending: %s %d" % (path,size))
-
-def _stream_upload_file(api_key,agent_id,local_file_path):
+def stream_upload_file(api_key,agent_id,local_file_path):
     url = API_ENDPOINT_BACKUP_FILE_STREAM
     response = None
 
@@ -92,7 +131,7 @@ def _stream_upload_file(api_key,agent_id,local_file_path):
     finally:
         return response.status_code if response else 500
 
-def _upload_file(api_key,agent_id,local_file_path):
+def upload_file(api_key,agent_id,local_file_path):
     url = API_ENDPOINT_BACKUP_FILE
     response = None
 
@@ -175,6 +214,11 @@ def tls_send_json_data_get(json_data_as_string, expected_response_code, show_jso
                 return (0, response_json)
         else:
             return (1, None)
+
+def dump_file_info(path,size):
+    logging.log(logging.INFO,"== SENDING FILE : ==")
+    logging.log(logging.INFO,"\tPATH: %s" %path)
+    logging.log(logging.INFO,"\tSIZE: %d" %size)
     
 def sync_backup_folders(settings):
     api_key = settings['API_KEY']

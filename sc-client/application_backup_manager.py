@@ -9,7 +9,9 @@ import signal
 import smtplib
 import stripe
 import subprocess
+import sys
 import time
+import traceback
 import win32api
 import win32gui
 import win32con
@@ -44,6 +46,7 @@ from PyQt5.QtWinExtras import QtWin
 #   Core imports
 import restore_utils
 import backup_utils
+import network_utils
 
 from client_db_utils import get_or_create_hash_db
 
@@ -87,6 +90,8 @@ class HistoryEvent:
     operation_id: str = field(default_factory=lambda: datetime.now().strftime("%Y%m%d_%H%M%S_%f"))
     files: List[FileOperationRecord] = field(default_factory=list)
     error_message: Optional[str] = None
+    user_email: Optional[str] = None
+    operation_type: Optional[str] = None  # Add operation_type field
     
 @dataclass
 class OperationEvent:
@@ -99,6 +104,283 @@ class OperationEvent:
     files: List[FileOperationRecord] = field(default_factory=list)
     error_message: Optional[str] = None
 
+class LoginDialog(QDialog):
+    def __init__(self, theme_manager, settings_path, parent=None):
+        super().__init__(parent)
+        self.theme_manager = theme_manager
+        self.settings_path = settings_path
+        self.api_key = None
+        self.user_info = None
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)  # Remove ? button
+        self.init_ui()
+        self.apply_theme()
+        self.setWindowIcon(self.get_app_icon())
+        
+    def init_ui(self):
+        self.setWindowTitle('Stormcloud Login')
+        self.setFixedSize(380, 280)  # Golden ratio-based dimensions
+        
+        # Main layout with perfect spacing
+        layout = QVBoxLayout(self)
+        layout.setSpacing(0)
+        layout.setContentsMargins(32, 24, 32, 32)
+        
+        # Title
+        title_label = QLabel('Welcome to Stormcloud')
+        title_label.setObjectName("login-title")
+        title_label.setAlignment(Qt.AlignCenter)
+        font = title_label.font()
+        font.setPointSize(18)
+        font.setWeight(QFont.DemiBold)  # Slightly less heavy than bold
+        title_label.setFont(font)
+        layout.addWidget(title_label)
+        
+        # Add perfect spacing after title
+        layout.addSpacing(28)
+        
+        # Form layout with proper alignment
+        form_layout = QFormLayout()
+        form_layout.setSpacing(20)
+        form_layout.setContentsMargins(0, 0, 0, 0)
+        form_layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        # Key changes for alignment:
+        form_layout.setRowWrapPolicy(QFormLayout.DontWrapRows)
+        form_layout.setLabelAlignment(Qt.AlignVCenter | Qt.AlignRight)  # Right align labels
+        form_layout.setFormAlignment(Qt.AlignVCenter)
+        
+        # Create inputs with labels
+        for label_text, placeholder, is_password in [
+            ("Email:", "Enter your email", False),
+            ("Password:", "Enter your password", True)
+        ]:
+            # Create label with proper alignment
+            label = QLabel(label_text)
+            label.setObjectName("login-label")
+            label.setAlignment(Qt.AlignVCenter | Qt.AlignRight)  # Ensure label itself is aligned
+            
+            # Create input with consistent height
+            input_field = QLineEdit()
+            input_field.setPlaceholderText(placeholder)
+            input_field.setObjectName("login-input")
+            input_field.setFixedHeight(36)
+            
+            if is_password:
+                input_field.setEchoMode(QLineEdit.Password)
+                self.password_input = input_field
+            else:
+                self.email_input = input_field
+            
+            form_layout.addRow(label, input_field)
+
+        layout.addLayout(form_layout)
+        
+        # Perfect spacing before button
+        layout.addSpacing(24)
+        
+        # Error label
+        self.error_label = QLabel()
+        self.error_label.setObjectName("login-error")
+        self.error_label.setAlignment(Qt.AlignCenter)
+        self.error_label.setWordWrap(True)
+        self.error_label.hide()
+        layout.addWidget(self.error_label)
+        
+        # Login button with refined proportions
+        self.login_button = QPushButton('Login')
+        self.login_button.setObjectName("login-button")
+        self.login_button.clicked.connect(self.attempt_login)
+        self.login_button.setFixedHeight(40)
+        layout.addWidget(self.login_button)
+        
+        # Subtle loading indicator
+        self.loading_indicator = QProgressBar()
+        self.loading_indicator.setObjectName("login-loading")
+        self.loading_indicator.setFixedHeight(2)
+        self.loading_indicator.setTextVisible(False)
+        self.loading_indicator.hide()
+        layout.addWidget(self.loading_indicator)
+        
+        # Connect enter key
+        self.email_input.returnPressed.connect(self.login_button.click)
+        self.password_input.returnPressed.connect(self.login_button.click)
+
+    def get_app_icon(self):
+        """Get application icon using existing process"""
+        appdata_path = os.getenv('APPDATA')
+        stable_settings_path = os.path.join(appdata_path, 'Stormcloud', 'stable_settings.cfg')
+        
+        if os.path.exists(stable_settings_path):
+            with open(stable_settings_path, 'r') as f:
+                stable_settings = json.load(f)
+            
+            install_path = stable_settings.get('install_path', '')
+            exe_path = os.path.join(install_path, 'stormcloud.exe')
+            
+            if os.path.exists(exe_path):
+                try:
+                    # Extract icon
+                    large, small = win32gui.ExtractIconEx(exe_path, 0)
+                    if large:
+                        win32gui.DestroyIcon(small[0])
+                        
+                        # Convert icon to HICON
+                        hicon = large[0]
+                        
+                        # Use QtWin to convert HICON to QPixmap
+                        pixmap = QtWin.fromHICON(hicon)
+                        
+                        # Create QIcon and return it
+                        icon = QIcon(pixmap)
+                        
+                        # Clean up
+                        win32gui.DestroyIcon(hicon)
+                        return icon
+                except Exception as e:
+                    logging.error(f"Failed to set icon: {e}")
+        return QIcon()
+
+    def apply_theme(self):
+        theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
+        
+        # Calculate subtle variations for depth
+        input_border = QColor(theme['input_border'])
+        input_border.setAlpha(40)  # More subtle border
+        
+        hover_color = QColor(theme['accent_color'])
+        hover_color.setAlpha(90)  # Subtle hover state
+        
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {theme['panel_background']};
+            }}
+            
+            QLabel#login-title {{
+                color: {theme['text_primary']};
+                margin-bottom: 8px;
+            }}
+            
+            QLabel#login-label {{
+                color: {theme['text_primary']};
+                font-size: 13px;
+                font-weight: 500;
+                margin-right: 12px;
+                min-width: 75px;
+            }}
+            
+            QLineEdit#login-input {{
+                background-color: {theme['input_background']};
+                color: {theme['text_primary']};
+                border: 1px solid {input_border.name()};
+                border-radius: 6px;
+                padding: 6px 12px;
+                font-size: 13px;
+                selection-background-color: {hover_color.name()};
+            }}
+            
+            QLineEdit#login-input:hover {{
+                border: 1px solid {theme['input_border']};
+            }}
+            
+            QLineEdit#login-input:focus {{
+                border: 2px solid {theme['accent_color']};
+                padding: 5px 11px;  /* Adjust padding to prevent size change */
+            }}
+            
+            QLineEdit#login-input::placeholder {{
+                color: rgba(200, 200, 200, 0.7);
+            }}
+            
+            QPushButton#login-button {{
+                background-color: {theme['accent_color']};
+                color: white;
+                border: none;
+                border-radius: 6px;
+                font-size: 14px;
+                font-weight: 500;
+                margin-top: 8px;
+            }}
+            
+            QPushButton#login-button:hover {{
+                background-color: {theme['accent_color_hover']};
+            }}
+            
+            QPushButton#login-button:pressed {{
+                background-color: {theme['accent_color_pressed']};
+                /* Remove transform property as it's not supported */
+            }}
+            
+            QLabel#login-error {{
+                color: {theme['payment_failed']};
+                font-size: 12px;
+                margin: 4px 0;
+            }}
+            
+            QProgressBar#login-loading {{
+                background-color: transparent;
+                border: none;
+                margin-top: 8px;
+            }}
+            
+            QProgressBar#login-loading::chunk {{
+                background-color: {theme['accent_color']};
+                border-radius: 1px;
+            }}
+        """)
+
+    def show_error(self, message):
+        """Display error message"""
+        self.error_label.setText(message)
+        self.error_label.show()
+        self.loading_indicator.hide()
+        self.login_button.setEnabled(True)
+
+    def attempt_login(self):
+        """Handle login attempt"""
+        
+        logging.info("Starting login attempt")
+        self.error_label.hide()
+        self.login_button.setEnabled(False)
+        self.loading_indicator.show()
+        self.loading_indicator.setRange(0, 0)
+        
+        email = self.email_input.text().strip()
+        password = self.password_input.text()
+        
+        logging.info(f"Validating input fields - Email provided: {'Yes' if email else 'No'}, Password provided: {'Yes' if password else 'No'}")
+        
+        if not email or not password:
+            logging.warning("Login attempt failed: Missing email or password")
+            self.show_error("Please enter both email and password.")
+            return
+        
+        try:
+            # Use stored settings path
+            logging.info(f"Using settings path: {self.settings_path}")
+            
+            logging.info("Making authentication request to server")
+            response = network_utils.authenticate_user(email, password, self.settings_path)
+            
+            logging.info(f"Server response received - Success: {response.get('success', False)}")
+            
+            if response.get('success'):
+                logging.info("Authentication successful - storing credentials")
+                self.user_info = {
+                    'email': email,  # Make sure we store the email used to log in
+                    'verified': response['data']['user_info'].get('verified', False),
+                    'mfa_enabled': response['data']['user_info'].get('mfa_enabled', False)
+                }
+                logging.info(f"Login successful for email: {email}")
+                self.accept()
+            else:
+                error_msg = response.get('message', 'Invalid credentials')
+                logging.warning(f"Authentication failed - Server message: {error_msg}")
+                self.show_error(error_msg)
+            
+        except Exception as e:
+            logging.error(f"Login attempt failed with exception: {str(e)}")
+            logging.error(f"Exception traceback: {traceback.format_exc()}")
+            self.show_error("Connection error. Please try again.")
+
 class HistoryManager:
     """Enhanced history manager with file-level tracking"""
     
@@ -106,11 +388,12 @@ class HistoryManager:
         self.history_dir = os.path.join(install_path, 'history')
         self.backup_history_file = os.path.join(self.history_dir, 'backup_history.json')
         self.restore_history_file = os.path.join(self.history_dir, 'restore_history.json')
-        self.active_operations: Dict[str, OperationEvent] = {}
+        self.active_operations = {}
         self.last_modified_times = {
             'backup': 0,
             'restore': 0
         }
+        self.current_user_email = None  # Will be set when operations are initiated
         
         # Create directory if it doesn't exist
         os.makedirs(self.history_dir, exist_ok=True)
@@ -174,38 +457,39 @@ class HistoryManager:
         with open(file_path, 'w') as f:
             json.dump(history, f, indent=2)
 
-    def add_event(self, event_type: str, event: OperationEvent):
-        """Add or update an event in history"""
-        history_file = self.get_history_file(event_type)
-        history = self.read_history(history_file)
+    def add_event(self, event_type: str, event: HistoryEvent):
+        logging.info(f"Adding/updating event with user: {event.user_email or self.current_user_email}")
+        history = self.read_history(self.backup_history_file)
         
-        # Convert event to dictionary preserving original timestamp
+        # Ensure event has user email
+        if not event.user_email:
+            event.user_email = self.current_user_email
+        
+        # Convert event to dictionary
         event_dict = self.event_to_dict(event)
         
         # Find and update existing entry if it exists
         updated = False
         for i, existing_event in enumerate(history):
             if existing_event.get('operation_id') == event.operation_id:
-                # Preserve original timestamp when updating
-                event_dict['timestamp'] = existing_event['timestamp']
                 history[i] = event_dict
                 updated = True
                 break
-                
-        # Only add as new entry if it doesn't exist
+        
         if not updated:
             history.append(event_dict)
         
         # Write back to file
-        self.write_history(history_file, history)
+        self.write_history(self.backup_history_file, history)
 
-    def event_to_dict(self, event: OperationEvent) -> dict:
-        """Convert OperationEvent to dictionary for storage"""
-        return {
-            'timestamp': event.timestamp.isoformat(),  # Use original timestamp
+    def event_to_dict(self, event: HistoryEvent) -> dict:
+        """Convert HistoryEvent to dictionary for storage"""
+        logging.debug(f"Converting event to dict with email: {event.user_email}")
+        
+        event_dict = {
+            'timestamp': event.timestamp.isoformat(),
             'source': event.source.value,
             'status': event.status.value,
-            'operation_type': event.operation_type,
             'operation_id': event.operation_id,
             'error_message': event.error_message,
             'files': [
@@ -216,8 +500,12 @@ class HistoryManager:
                     'error_message': f.error_message
                 }
                 for f in event.files
-            ]
+            ],
+            'user_email': event.user_email or self.current_user_email  # Add fallback here too
         }
+        
+        logging.debug(f"Created event dict: {event_dict}")
+        return event_dict
 
     def dict_to_event(self, event_dict: dict) -> HistoryEvent:
         """Convert dictionary to HistoryEvent"""
@@ -237,19 +525,21 @@ class HistoryManager:
             status=OperationStatus(event_dict['status']),
             operation_id=event_dict.get('operation_id', ''),
             files=files,
-            error_message=event_dict.get('error_message')
+            error_message=event_dict.get('error_message'),
+            user_email=event_dict.get('user_email')  # Load user email if it exists
         )
 
-    def start_operation(self, operation_type: str, source: InitiationSource) -> str:
+    def start_operation(self, operation_type: str, source: InitiationSource, user_email: Optional[str] = None) -> str:
         """Start a new operation and return its ID"""
-        event = OperationEvent(
+        logging.info(f"HistoryManager starting operation for user: {user_email or self.current_user_email}")
+        event = HistoryEvent(
             timestamp=datetime.now(),
             source=source,
             status=OperationStatus.IN_PROGRESS,
-            operation_type=operation_type
+            user_email=user_email or self.current_user_email  # Use current_user_email as fallback
         )
         self.active_operations[event.operation_id] = event
-        self.add_event(operation_type, event)  # Fixed: Pass both operation_type and event
+        self.add_event(operation_type, event)
         return event.operation_id
 
     def add_file_to_operation(self, operation_id: str, filepath: str, 
@@ -274,6 +564,24 @@ class HistoryManager:
             
             # Write the current state to history file immediately
             self.add_event(event.operation_type, event)
+
+    def add_file_record(self, operation_id: str, filepath: str, 
+                       status: OperationStatus, error_message: Optional[str] = None):
+        """Add a file record to an operation and update history"""
+        logging.debug(f"Adding file record for operation {operation_id}: {filepath}")
+        if operation_id in self.active_operations:
+            event = self.active_operations[operation_id]
+            file_record = FileOperationRecord(
+                filepath=filepath,
+                timestamp=datetime.now(),
+                status=status,
+                error_message=error_message
+            )
+            event.files.append(file_record)
+            logging.debug(f"Added file record to operation {operation_id}, total files: {len(event.files)}")
+            
+            # Write the updated event immediately
+            self.add_event('backup', event)  # Assuming backup, we could check operation_type if needed
 
     def get_operation(self, operation_id: str) -> Optional[OperationEvent]:
         """Get an operation by ID, either active or from history"""
@@ -386,8 +694,8 @@ class OperationHistoryPanel(QWidget):
         self.event_type = event_type
         self.history_manager = history_manager
         self.theme_manager = theme_manager
-        self.user_expanded_states = {}  # Track user preferences for expansion
-        self.scroll_position = 0  # Track scroll position
+        self.user_expanded_states = {}
+        self.scroll_position = 0
         self.init_ui()
         
         # Set up refresh timer
@@ -428,6 +736,7 @@ class OperationHistoryPanel(QWidget):
             "Time",
             "Source",
             "Status",
+            "User",  # New column
             "Details"
         ])
         self.tree.setAlternatingRowColors(False)
@@ -439,7 +748,7 @@ class OperationHistoryPanel(QWidget):
         self.tree.setSortingEnabled(True)
         self.tree.sortByColumn(0, Qt.DescendingOrder)
         
-        for i in range(4):
+        for i in range(5):
             self.tree.header().setSectionResizeMode(i, QHeaderView.ResizeToContents)
         
         layout.addWidget(self.tree)
@@ -573,9 +882,8 @@ class OperationHistoryPanel(QWidget):
         # Restore scroll position
         self.restore_scroll_position()
 
-    def create_operation_summary_item(self, event: OperationEvent) -> QTreeWidgetItem:
-        """Create a tree item for an operation summary with proper timestamp"""
-        # Count files by status
+    def create_operation_summary_item(self, event: HistoryEvent) -> QTreeWidgetItem:
+        """Create a tree item for an operation summary with user info"""
         status_counts = {
             OperationStatus.SUCCESS: 0,
             OperationStatus.FAILED: 0,
@@ -585,7 +893,6 @@ class OperationHistoryPanel(QWidget):
         for file_record in event.files:
             status_counts[file_record.status] = status_counts.get(file_record.status, 0) + 1
         
-        # Create summary text
         if status_counts[OperationStatus.IN_PROGRESS] > 0:
             details = f"In Progress... ({len(event.files)} files so far)"
         else:
@@ -601,11 +908,11 @@ class OperationHistoryPanel(QWidget):
                 details = (f"Total: {total_files} (Success: {status_counts[OperationStatus.SUCCESS]}, "
                          f"Failed: {status_counts[OperationStatus.FAILED]})")
 
-        # Create the item using operation timestamp with 12-hour format
         item = QTreeWidgetItem([
-            event.timestamp.strftime("%Y-%m-%d %I:%M:%S %p"),  # Changed to 12-hour format
+            event.timestamp.strftime("%Y-%m-%d %I:%M:%S %p"),
             event.source.value,
             event.status.value,
+            event.user_email or "System",  # Show "System" if no user email
             details
         ])
         
@@ -616,7 +923,7 @@ class OperationHistoryPanel(QWidget):
         self.set_item_status_color(item, event.status)
         font = item.font(0)
         font.setBold(True)
-        for i in range(4):
+        for i in range(5):  # Updated for new column
             item.setFont(i, font)
         
         return item
@@ -751,10 +1058,11 @@ class BackgroundOperation:
         self.processed_files = 0
         self.manager = Manager()
         self.should_stop = self.manager.Value('b', False)
+        self.user_email = settings.get('user_email')  # Add user email from settings
 
         # Generate operation ID ONCE at initialization
         self.operation_id = self.settings.get('operation_id') or datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        self.settings['operation_id'] = self.operation_id  # Ensure settings has our operation_id
+        self.settings['operation_id'] = self.operation_id
         
         # Set the operation start time
         self.start_time = datetime.now()
@@ -763,10 +1071,10 @@ class BackgroundOperation:
     def start(self):
         """Start the background operation"""
         if self.operation_type == 'backup':
-            self.process = Process(target=self._backup_worker, 
+            self.process = Process(target=BackgroundOperation._backup_worker, 
                                  args=(self.paths, self.settings, self.queue, self.should_stop))
         else:
-            self.process = Process(target=self._restore_worker, 
+            self.process = Process(target=BackgroundOperation._restore_worker, 
                                  args=(self.paths, self.settings, self.queue, self.should_stop))
         
         self.process.start()
@@ -810,8 +1118,8 @@ class BackgroundOperation:
                 success = update.get('success', False)
                 error_msg = update.get('error')
                 
-                # Update file status in history
-                if self.operation_id:
+                # Update file status in history if record_file is True
+                if self.operation_id and update.get('record_file', True):
                     status = OperationStatus.SUCCESS if success else OperationStatus.FAILED
                     self.history_manager.add_file_to_operation(
                         self.operation_id,
@@ -836,7 +1144,7 @@ class BackgroundOperation:
         """Worker process for backup operations"""
         try:
             # Use operation_id from settings consistently
-            operation_id = settings['operation_id']  # This is now guaranteed to exist
+            operation_id = settings['operation_id']
             total_files = 0
             success_count = 0
             fail_count = 0
@@ -867,7 +1175,6 @@ class BackgroundOperation:
                                 pathlib.Path(path),
                                 settings['API_KEY'],
                                 settings['AGENT_ID'],
-                                settings['SECRET_KEY'],
                                 dbconn,
                                 True
                             )
@@ -875,14 +1182,14 @@ class BackgroundOperation:
                             fail_count += 0 if success else 1
                             processed += 1
                             
-                            # Use consistent operation_id
+                            # Use consistent operation_id and ensure record_file is True
                             queue.put({
                                 'type': 'file_progress',
                                 'filepath': path,
                                 'success': success,
                                 'total_files': total_files,
                                 'processed_files': processed,
-                                'operation_id': operation_id,  # From settings
+                                'operation_id': operation_id,
                                 'record_file': True
                             })
                             
@@ -896,7 +1203,7 @@ class BackgroundOperation:
                                 'error': str(e),
                                 'total_files': total_files,
                                 'processed_files': processed,
-                                'operation_id': operation_id,  # From settings
+                                'operation_id': operation_id,
                                 'record_file': True
                             })
                     else:  # Directory
@@ -915,7 +1222,6 @@ class BackgroundOperation:
                                         pathlib.Path(normalized_path),
                                         settings['API_KEY'],
                                         settings['AGENT_ID'],
-                                        settings['SECRET_KEY'],
                                         dbconn,
                                         True
                                     )
@@ -923,14 +1229,14 @@ class BackgroundOperation:
                                     fail_count += 0 if success else 1
                                     processed += 1
                                     
-                                    # Use consistent operation_id
+                                    # Ensure record_file is True for directory contents
                                     queue.put({
                                         'type': 'file_progress',
                                         'filepath': normalized_path,
                                         'success': success,
                                         'total_files': total_files,
                                         'processed_files': processed,
-                                        'operation_id': operation_id,  # From settings
+                                        'operation_id': operation_id,
                                         'record_file': True,
                                         'parent_folder': path
                                     })
@@ -945,7 +1251,7 @@ class BackgroundOperation:
                                         'error': str(e),
                                         'total_files': total_files,
                                         'processed_files': processed,
-                                        'operation_id': operation_id,  # From settings
+                                        'operation_id': operation_id,
                                         'record_file': True,
                                         'parent_folder': path
                                     })
@@ -960,7 +1266,7 @@ class BackgroundOperation:
                 'success_count': success_count,
                 'fail_count': fail_count,
                 'total': total_files,
-                'operation_id': operation_id  # From settings
+                'operation_id': operation_id
             })
             
         except Exception as e:
@@ -969,7 +1275,7 @@ class BackgroundOperation:
             queue.put({
                 'type': 'operation_failed',
                 'error': str(e),
-                'operation_id': operation_id  # From settings
+                'operation_id': operation_id
             })
 
     @staticmethod
@@ -1002,8 +1308,7 @@ class BackgroundOperation:
                         success = restore_utils.restore_file(
                             path,
                             settings['API_KEY'],
-                            settings['AGENT_ID'],
-                            settings['SECRET_KEY']
+                            settings['AGENT_ID']
                         )
                         success_count += 1 if success else 0
                         fail_count += 0 if success else 1
@@ -1048,8 +1353,7 @@ class BackgroundOperation:
                                 success = restore_utils.restore_file(
                                     normalized_path,
                                     settings['API_KEY'],
-                                    settings['AGENT_ID'],
-                                    settings['SECRET_KEY']
+                                    settings['AGENT_ID']
                                 )
                                 success_count += 1 if success else 0
                                 fail_count += 0 if success else 1
@@ -1104,7 +1408,8 @@ class OperationProgressWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.theme_manager = parent.theme_manager if parent else None
-        self.history_manager = None  # Will be set by FileExplorerPanel
+        self.history_manager = None
+        self.user_email = None
         self.init_ui()
         self.background_op = None
         self.timer = None
@@ -1163,95 +1468,89 @@ class OperationProgressWidget(QWidget):
         """)
 
     def start_operation(self, operation_type, paths, settings):
-        """Start a new backup/restore operation"""
+        """Start a new operation with non-blocking progress updates"""
         self.background_op = BackgroundOperation(operation_type, paths, settings)
         self.background_op.start()
         
+        if self.history_manager:
+            self.history_manager.current_user_email = settings.get('user_email')
+        
+        if operation_id := settings.get('operation_id'):
+            if operation := self.history_manager.get_operation(operation_id):
+                operation.operation_type = operation_type
+                
+        self.operation_id = settings.get('operation_id')
         self.operation_label.setText(f"Operation: {operation_type.capitalize()}")
         self.progress_bar.setValue(0)
         self.current_file_label.setText("Preparing...")
         self.setVisible(True)
         
-        # Start progress update timer
+        # Use shorter timer interval for more responsive updates
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_progress)
-        self.timer.start(100)  # Update every 100ms
+        self.timer.start(100)  # Check every 100ms
 
     def update_progress(self):
-        """Update progress display from background operation"""
+        """Process progress updates from the background operation asynchronously"""
         if not self.background_op:
             return
-        
+            
         try:
-            for progress in self.background_op.get_progress():
-                progress_type = progress.get('type')
-                operation_id = progress.get('operation_id')
-                
-                if not operation_id:
-                    continue
-
-                # Handle file progress updates
-                if progress_type == 'file_progress':
-                    if progress.get('record_file', False) and self.history_manager:
-                        filepath = progress['filepath'].replace('\\', '/')
-                        status = OperationStatus.SUCCESS if progress.get('success', False) else OperationStatus.FAILED
+            # Use get_nowait() instead of blocking get()
+            while True:
+                try:
+                    update = self.background_op.queue.get_nowait()
+                    
+                    if update['type'] == 'file_progress':
+                        file_path = update.get('filepath', '')
+                        success = update.get('success', False)
+                        error_msg = update.get('error')
                         
-                        self.history_manager.add_file_to_operation(
-                            operation_id,
-                            filepath,
-                            status,
-                            progress.get('error')
-                        )
-                    
-                    # Update progress bar if we have total files
-                    if progress.get('total_files') and progress.get('processed_files'):
-                        percentage = (progress['processed_files'] / progress['total_files']) * 100
-                        self.progress_bar.setValue(int(percentage))
-                    
-                    # Update current file label
-                    if 'filepath' in progress:
-                        if progress.get('parent_folder'):
-                            parent_folder = os.path.basename(progress['parent_folder'])
-                            filename = os.path.basename(progress['filepath'])
-                            self.current_file_label.setText(
-                                f"Processing: {parent_folder}/{filename}"
-                            )
-                        else:
-                            self.current_file_label.setText(
-                                f"Processing: {os.path.basename(progress['filepath'])}"
+                        if self.operation_id and update.get('record_file', True):
+                            status = OperationStatus.SUCCESS if success else OperationStatus.FAILED
+                            self.history_manager.add_file_to_operation(
+                                self.operation_id,
+                                file_path,
+                                status,
+                                error_msg
                             )
                         
-                    # Update file count label
-                    if progress.get('total_files'):
-                        self.file_count_label.setText(
-                            f"Files: {progress.get('processed_files', 0)}/{progress['total_files']}"
-                        )
-
-                # Handle operation completion
-                elif progress_type == 'operation_complete' and self.history_manager:
-                    # The operation's status has already been updated by the file processing
-                    # We just need to emit completion signal - don't create a new history entry
-                    self.operation_completed.emit({
-                        'success_count': progress.get('success_count', 0),
-                        'fail_count': progress.get('fail_count', 0),
-                        'total': progress.get('total', 0),
-                        'operation_type': self.background_op.operation_type
-                    })
-                    self.cleanup()
-                    
-                # Handle operation failure
-                elif progress_type == 'operation_failed' and self.history_manager:
-                    self.history_manager.complete_operation(
-                        operation_id,
-                        OperationStatus.FAILED,
-                        progress.get('error')
-                    )
-                    
-                    self.operation_completed.emit({
-                        'error': progress.get('error', 'Operation failed'),
-                        'operation_type': self.background_op.operation_type
-                    })
-                    self.cleanup()
+                        # Update progress percentage
+                        if update.get('total_files', 0) > 0:
+                            percentage = (update.get('processed_files', 0) / update.get('total_files', 0)) * 100
+                            self.progress_bar.setValue(int(percentage))
+                            
+                        # Update current file label
+                        if 'filepath' in update:
+                            self.current_file_label.setText(f"Processing: {os.path.basename(file_path)}")
+                            
+                    elif update['type'] == 'operation_complete':
+                        self.operation_completed.emit({
+                            'success_count': update.get('success_count', 0),
+                            'fail_count': update.get('fail_count', 0),
+                            'total': update.get('total', 0),
+                            'operation_type': self.background_op.operation_type
+                        })
+                        self.cleanup()
+                        break
+                        
+                    elif update['type'] == 'operation_failed':
+                        if self.history_manager:
+                            self.history_manager.complete_operation(
+                                update.get('operation_id'),
+                                OperationStatus.FAILED,
+                                update.get('error')
+                            )
+                        
+                        self.operation_completed.emit({
+                            'error': update.get('error', 'Operation failed'),
+                            'operation_type': self.background_op.operation_type
+                        })
+                        self.cleanup()
+                        break
+                        
+                except Empty:
+                    break
                     
         except Exception as e:
             logging.error(f"Error updating progress: {e}", exc_info=True)
@@ -2942,8 +3241,15 @@ class StormcloudApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.theme_manager = ThemeManager()
+        self.user_email = None
         self.setWindowTitle('Stormcloud Backup Manager')
-        self.setGeometry(100, 100, 800, 600)
+        # self.setGeometry(100, 100, 800, 600)
+        
+        # Add json_directory initialization
+        appdata_path = os.getenv('APPDATA')
+        self.json_directory = os.path.join(appdata_path, 'Stormcloud')
+        os.makedirs(self.json_directory, exist_ok=True)
+        
         self.backup_schedule = {'weekly': {}, 'monthly': {}}
         
         # Create systray at initialization
@@ -2953,12 +3259,19 @@ class StormcloudApp(QMainWindow):
             "Stormcloud Backup Engine", systray_menu_options)
         self.systray.start()
         
-        # Load settings and get install path first
+        # Load settings first
         self.load_settings()
         self.install_path = self.get_install_path()
         
-        # Initialize history manager after install path is set
+        # Initialize history manager after install path is set and pass user_email
         self.history_manager = HistoryManager(self.install_path)
+        
+        # Attempt login before initializing UI
+        if not self.authenticate_user():
+            sys.exit(0)
+            
+        # Update history manager with authenticated user
+        self.history_manager.current_user_email = self.user_email
         
         # Then initialize UI and other components
         self.set_app_icon()
@@ -3011,6 +3324,26 @@ class StormcloudApp(QMainWindow):
         
         self.oncall_scheduler_tab = OnCallSchedulerTab(self, self.theme_manager)
         self.tab_widget.addTab(self.oncall_scheduler_tab, "📅 Schedule | 🏥 On-Call")
+
+    def authenticate_user(self) -> bool:
+        while True:
+            dialog = LoginDialog(
+                theme_manager=self.theme_manager,
+                settings_path=self.settings_cfg_path, 
+                parent=self
+            )
+            
+            if not dialog.exec_():
+                return False
+            
+            if dialog.user_info:
+                self.user_info = dialog.user_info
+                self.user_email = dialog.user_info['email']
+                logging.info(f"StormcloudApp stored user email: {self.user_email}")
+                
+                return True
+                
+            return False
 
     def get_install_path(self):
         """Get Stormcloud installation path from stable settings"""
@@ -3759,6 +4092,7 @@ class StormcloudApp(QMainWindow):
 
     def create_backup_tab(self):
         """Create and return the backup tab with its complete layout"""
+        logging.info(f"Creating backup tab with user email: {self.user_email}")
         tab = QWidget()
         layout = QVBoxLayout(tab)
         
@@ -3769,6 +4103,16 @@ class StormcloudApp(QMainWindow):
         # Grid layout for panels
         grid_widget = QWidget()
         self.grid_layout = QGridLayout(grid_widget)
+        
+        # Create file explorer with user email
+        self.file_explorer = FileExplorerPanel(
+            json_directory=self.json_directory,
+            theme_manager=self.theme_manager,
+            settings_cfg_path=self.settings_cfg_path,
+            systray=self.systray,
+            history_manager=self.history_manager,
+            user_email=self.user_email
+        )
         
         # Top-left panel (Configuration Dashboard)
         config_dashboard = self.create_configuration_dashboard()
@@ -4793,12 +5137,14 @@ class SearchResultDelegate(QStyledItemDelegate):
         return size
 
 class FileExplorerPanel(QWidget):
-    def __init__(self, json_directory, theme_manager, settings_cfg_path=None, systray=None, history_manager=None):
+    def __init__(self, json_directory, theme_manager, settings_cfg_path=None, systray=None, history_manager=None, user_email=None):
         super().__init__()
         self.theme_manager = theme_manager
-        self.settings_path = settings_cfg_path  # Store as settings_path internally for compatibility
+        self.settings_path = settings_cfg_path
         self.systray = systray
         self.history_manager = history_manager
+        self.user_email = user_email
+        logging.info(f"FileExplorerPanel initialized with user email: {user_email}")
         self.install_path = self.get_install_path()
         
         # Update metadata directory path
@@ -4809,6 +5155,10 @@ class FileExplorerPanel(QWidget):
         self.init_ui()
         self.load_data()
         self.apply_theme()
+        
+        # Initialize progress widget with user email
+        if hasattr(self, 'progress_widget'):
+            self.progress_widget.user_email = self.user_email
         
         self.theme_manager.theme_changed.connect(self.on_theme_changed)
 
@@ -5028,8 +5378,16 @@ class FileExplorerPanel(QWidget):
 
     def show_context_menu(self, position):
         """Enhanced context menu with file/folder awareness"""
+        # First verify we have settings path
+        if not hasattr(self, 'settings_path') or not self.settings_path:
+            logging.error("Settings path not initialized")
+            StormcloudMessageBox.critical(self, "Error", "Settings path not configured")
+            return
+
+        # Read settings with proper error handling
         settings = self.read_settings()
         if not settings:
+            logging.error("Failed to read settings file")
             StormcloudMessageBox.critical(self, "Error", "Could not read required settings")
             return
 
@@ -5235,30 +5593,35 @@ class FileExplorerPanel(QWidget):
 
         try:
             with open(self.settings_path, 'r') as f:
-                content = f.read()
-                logging.debug(f'Raw settings content: {content[:100]}...')  # Log first 100 chars
+                settings = {}
+                current_section = None
                 
-                settings = yaml.safe_load(content)
-                if not isinstance(settings, dict):
-                    logging.error(f'Settings did not parse to dictionary, got: {type(settings)}')
-                    return None
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                        
+                    if ':' in line and not line.startswith(' '):
+                        key, value = [x.strip() for x in line.split(':', 1)]
+                        if value:
+                            settings[key] = value
+                        else:
+                            current_section = key
+                            settings[key] = {}
+                    elif current_section and line.startswith('-'):
+                        settings[current_section] = settings.get(current_section, [])
+                        settings[current_section].append(line.lstrip('- ').strip())
                     
-                required_keys = ['API_KEY', 'AGENT_ID', 'SECRET_KEY']
-                missing_keys = [key for key in required_keys if key not in settings]
-                
-                if missing_keys:
-                    logging.error(f'Missing required settings keys: {missing_keys}')
-                    logging.debug(f'Available keys: {list(settings.keys())}')
+                required_keys = ['API_KEY', 'AGENT_ID']
+                if not all(key in settings for key in required_keys):
+                    logging.error(f'Missing required settings keys: {[key for key in required_keys if key not in settings]}')
                     return None
                     
                 logging.info('Successfully loaded all required settings')
                 return settings
-                
-        except yaml.YAMLError as e:
-            logging.error(f'Failed to parse YAML settings: {e}')
-            return None
+                    
         except Exception as e:
-            logging.error(f'Unexpected error reading settings: {type(e).__name__} - {str(e)}')
+            logging.error(f'Error reading settings: {str(e)}')
             return None
 
     def restore_item(self):
@@ -5298,8 +5661,7 @@ class FileExplorerPanel(QWidget):
                     try:
                         if restore_utils.restore_file(child_path, 
                                                     settings['API_KEY'],
-                                                    settings['AGENT_ID'],
-                                                    settings['SECRET_KEY']):
+                                                    settings['AGENT_ID']):
                             success_count += 1
                         else:
                             fail_count += 1
@@ -5347,7 +5709,6 @@ class FileExplorerPanel(QWidget):
                             if backup_utils.process_file(path_obj,
                                                        settings['API_KEY'],
                                                        settings['AGENT_ID'],
-                                                       settings['SECRET_KEY'],
                                                        dbconn,
                                                        True):  # Force backup
                                 success_count += 1
@@ -5386,8 +5747,7 @@ class FileExplorerPanel(QWidget):
             
             if restore_utils.restore_file(file_path
                                             , settings['API_KEY']
-                                            , settings['AGENT_ID']
-                                            , settings['SECRET_KEY']):
+                                            , settings['AGENT_ID']):
                 StormcloudMessageBox.information(self, "Success", f"Successfully restored {file_path}")
             else:
                 StormcloudMessageBox.critical(self, "Error", f"Failed to restore {file_path}")
@@ -5405,8 +5765,7 @@ class FileExplorerPanel(QWidget):
         try:
             # Add version info to the request
             version_id = version_data.get('version_id')
-            if restore_utils.restore_file(file_path, settings['API_KEY'], settings['AGENT_ID'], 
-                                       settings['SECRET_KEY'], version_id):
+            if restore_utils.restore_file(file_path, settings['API_KEY'], settings['AGENT_ID'], version_id):
                 StormcloudMessageBox.information(self, "Success", 
                     f"Successfully restored version from {version_data.get('timestamp')} of {file_path}")
             else:
@@ -5462,7 +5821,6 @@ class FileExplorerPanel(QWidget):
                     path_obj,
                     settings['API_KEY'],
                     settings['AGENT_ID'],
-                    settings['SECRET_KEY'],
                     dbconn,
                     True
                 )
@@ -5516,7 +5874,6 @@ class FileExplorerPanel(QWidget):
             self.load_data()
 
     def start_operation(self, operation_type: str):
-        """Start a backup or restore operation"""
         if not self.current_path:
             return
             
@@ -5524,19 +5881,21 @@ class FileExplorerPanel(QWidget):
         if not settings:
             return
             
-        # Start a new operation in history
+        # Add user email to settings
+        settings['user_email'] = self.user_email
+            
         if self.history_manager:
+            logging.info(f"Starting {operation_type} operation for user: {self.user_email}")
             operation_id = self.history_manager.start_operation(
                 operation_type,
-                InitiationSource.USER
+                InitiationSource.USER,
+                self.user_email
             )
             settings['operation_id'] = operation_id
             
-        # Add required settings
         settings['settings_path'] = self.settings_path
         settings['operation_type'] = operation_type
         
-        # Start operation with progress tracking
         self.progress_widget.start_operation(operation_type, self.current_path, settings)
 
 class FileSystemModel(QStandardItemModel):

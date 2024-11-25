@@ -1,6 +1,8 @@
 import mysql.connector
 from mysql.connector import Error
 
+import binascii
+import hashlib
 import os
 import traceback
 
@@ -103,7 +105,7 @@ def update_callback_for_device(device_id, callback_time, status_code):
     __teardown__(cursor,cnx)
     return ret
 
-def add_or_update_customer(customer_name,customer_guid,plan,api_key):
+def add_or_update_customer(customer_name,customer_email,customer_guid,plan,api_key):
   # IN customer_name varchar(256),
   # IN customer_email varchar(256),
   # IN customer_guid varchar(64),
@@ -113,8 +115,6 @@ def add_or_update_customer(customer_name,customer_guid,plan,api_key):
   ret = []
   cnx = __connect_to_db__()
   cursor = cnx.cursor(buffered=True)
-
-  customer_email = "notused@notused.com"
 
   try:
     cursor.callproc('add_or_update_customer',
@@ -172,7 +172,7 @@ def add_or_update_file_for_device(device_id, file_name, file_path, client_full_n
     __teardown__(cursor,cnx)
     return ret
 
-def add_or_update_device_for_customer(customer_id, device_name, device_type, ip_address, operating_system, device_status, last_callback, agent_id):
+def add_or_update_device_for_customer(customer_id, device_name, device_type, ip_address, operating_system, device_status, last_callback, stormcloud_path_to_secret_key, agent_id):
   # IN CID INT,
   # IN device_name varchar(512),
   # IN device_type varchar(512),
@@ -186,9 +186,6 @@ def add_or_update_device_for_customer(customer_id, device_name, device_type, ip_
   ret = []
   cnx = __connect_to_db__()
   cursor = cnx.cursor(buffered=True)
-
-  # Placeholder for deprecated field
-  stormcloud_path_to_secret_key = "/dev/null"
 
   try:
     cursor.callproc('add_or_update_device_for_customer',
@@ -699,6 +696,83 @@ def get_file_metadata_for_agent(agent_id):
     finally:
         __teardown__(cursor, cnx)
         return ret
+
+def validate_user_credentials(username, password):
+    """
+    Validate user credentials using stored procedure and SHA-512 hash
+    Returns dict with authentication results
+    """
+    ret = {
+        'success': False,
+        'email': None,
+        'api_key': None,
+        'verified': False,
+        'mfa_enabled': False
+    }
+
+    cnx = __connect_to_db__()
+    cursor = cnx.cursor(buffered=True)
+
+    try:
+        __logger__().info(f"Calling stored procedure for username: {username}")
+        cursor.callproc('validate_user_credentials', (username,))
+        
+        for result in cursor.stored_results():
+            row = result.fetchone()
+            if row:
+                __logger__().info("Found user record in database")
+                stored_salt = row[0]
+                stored_hash = row[1]
+                ret['verified'] = bool(row[2])
+                ret['mfa_enabled'] = bool(row[3])
+                ret['email'] = row[4]
+
+                # Match ColdFusion's hashing approach:
+                # 1. Concatenate salt and password as strings first
+                # 2. Use SHA-512
+                # 3. Convert to uppercase to match CF's Hash() output
+                string_to_hash = stored_salt + password
+                hasher = hashlib.sha512()
+                hasher.update(string_to_hash.encode('UTF-8'))
+                calculated_hash = hasher.hexdigest().upper()
+
+                __logger__().debug(f"Salt used: {stored_salt}")
+                __logger__().debug(f"Stored hash: {stored_hash}")
+                __logger__().debug(f"Calculated hash: {calculated_hash}")
+                
+                # Compare hashes
+                ret['success'] = (calculated_hash == stored_hash)
+                
+                if ret['success']:
+                    __logger__().info(f"Successful authentication for user: {username}")
+                else:
+                    __logger__().info(f"Invalid password for user: {username}")
+            else:
+                __logger__().info(f"No user found for username: {username}")
+
+    except Error as e:
+        __logger__().error(f"Error in validate_user_credentials: {e}")
+        __logger__().error(f"Full traceback: {traceback.format_exc()}")
+    finally:
+        __teardown__(cursor, cnx)
+
+    return ret
+
+def hash_password(password):
+    """
+    Hash a password using the same method as ColdFusion
+    Returns tuple of (salt, hashed_password)
+    """
+    # Generate a random salt
+    salt = binascii.hexlify(os.urandom(12)).decode()  # 24 chars when hex encoded
+    
+    # Match ColdFusion hashing:
+    string_to_hash = salt + password
+    hasher = hashlib.sha512()
+    hasher.update(string_to_hash.encode('UTF-8'))
+    password_hash = hasher.hexdigest().upper()
+    
+    return salt, password_hash
 
 def __connect_to_db__():
   mysql_username = os.getenv('MYSQLUSER')

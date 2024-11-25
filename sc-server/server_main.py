@@ -138,6 +138,44 @@ def validate_api_key():
     else:
         return RESPONSE_400_BAD_REQUEST
 
+@app.route('/api/login', methods=['POST'])
+def login():
+    logger.info(flask.request)
+    if flask.request.headers['Content-Type'] != 'application/json':
+        return RESPONSE_400_MUST_BE_JSON
+
+    data = flask.request.get_json()
+    if not data:
+        return RESPONSE_400_BAD_REQUEST
+        
+    # Validate required fields
+    if 'email' not in data or 'password' not in data:
+        return jsonify({
+            'success': False,
+            'message': 'Missing required fields'
+        }), 400
+        
+    # Validate credentials against SCLogin table
+    result = db.validate_user_credentials(data['email'], data['password'])
+    if not result['success']:
+        return jsonify({
+            'success': False,
+            'message': 'Invalid credentials'
+        }), 401
+        
+    # Return user info and API key
+    return jsonify({
+        'success': True,
+        'data': {
+            'api_key': result['api_key'],
+            'user_info': {
+                'email': data['email'],
+                'verified': result['verified'],
+                'mfa_enabled': result['mfa_enabled']
+            }
+        }
+    }), 200
+
 @app.route('/api/hello', methods=['POST'])
 def hello():
     logger.info(flask.request)
@@ -400,6 +438,57 @@ def get_file_metadata():
 
     else:
         return RESPONSE_400_BAD_REQUEST
+        
+@app.route('/api/authenticate', methods=['POST'])
+def authenticate():
+    logger.info(flask.request)
+    if flask.request.headers['Content-Type'] != 'application/json':
+        return RESPONSE_400_MUST_BE_JSON
+
+    data = flask.request.get_json()
+    if not data:
+        return RESPONSE_400_BAD_REQUEST
+        
+    # Validate required fields
+    if 'username' not in data or 'password' not in data:
+        return jsonify({
+            "success": False,
+            "message": "Missing required fields"
+        }), 400
+
+    # No need to validate API key for auth endpoint
+    result, response = validate_request_generic(
+        data, 
+        api_key_required=False,
+        agent_id_required=False
+    )
+    if not result:
+        return response
+
+    username = data['username']
+    password = data['password']
+
+    # Validate credentials
+    auth_result = db.validate_user_credentials(username, password)
+    
+    if auth_result.get('success'):
+        return jsonify({
+            "success": True,
+            "message": "Authentication successful",
+            "data": {
+                "api_key": auth_result.get('api_key'),
+                "user_info": {
+                    "email": auth_result.get('email'),
+                    "verified": auth_result.get('verified'),
+                    "mfa_enabled": auth_result.get('mfa_enabled')
+                }
+            }
+        })
+    else:
+        return jsonify({
+            "success": False,
+            "message": "Invalid credentials"
+        }), 401
 
 @app.route('/api/stripe/create-customer', methods=['POST'])
 def create_stripe_customer():

@@ -339,7 +339,7 @@ def main(settings_file_path,hash_db_file_path,ignore_hash_db):
     settings                = read_yaml_settings_file(settings_file_path)
 
     if int(settings['SEND_LOGS']):
-        logging_utils.send_logs_to_server(settings['API_KEY'],settings['AGENT_ID'],settings['SECRET_KEY'])
+        logging_utils.send_logs_to_server(settings['API_KEY'],settings['AGENT_ID'])
     
     logging_utils.initialize_logging(uuid=settings['AGENT_ID'])
 
@@ -444,8 +444,7 @@ def action_loop_and_sleep(settings, settings_file_path, dbconn, ignore_hash, sys
                 active_thread = start_keepalive_thread(
                     cur_keepalive_freq,
                     settings['API_KEY'],
-                    settings['AGENT_ID'],
-                    settings['SECRET_KEY']
+                    settings['AGENT_ID']
                 )
 
             backup_mode = settings.get('BACKUP_MODE', 'Realtime')
@@ -549,7 +548,6 @@ def perform_backup_with_history(backup_paths, recursive_paths, settings, dbconn,
                         pathlib.Path(path),
                         settings['API_KEY'],
                         settings['AGENT_ID'],
-                        settings['SECRET_KEY'],
                         dbconn,
                         ignore_hash
                     )
@@ -594,7 +592,6 @@ def perform_backup_with_history(backup_paths, recursive_paths, settings, dbconn,
                                 pathlib.Path(file_path),
                                 settings['API_KEY'],
                                 settings['AGENT_ID'],
-                                settings['SECRET_KEY'],
                                 dbconn,
                                 ignore_hash
                             )
@@ -629,7 +626,6 @@ def perform_backup_with_history(backup_paths, recursive_paths, settings, dbconn,
                                 pathlib.Path(file_path),
                                 settings['API_KEY'],
                                 settings['AGENT_ID'],
-                                settings['SECRET_KEY'],
                                 dbconn,
                                 ignore_hash
                             )
@@ -699,10 +695,10 @@ def read_yaml_settings_file(fn):
     with open(fn, 'r') as settings_file:
         return yaml.safe_load(settings_file)
 
-def start_keepalive_thread(freq,api_key,agent_id,secret_key):
+def start_keepalive_thread(freq,api_key,agent_id):
     logging.log(logging.INFO,"starting new keepalive thread with freq %d" % freq)
 
-    t = threading.Thread(target=keepalive_utils.execute_ping_loop,args=(freq,api_key,agent_id,secret_key))
+    t = threading.Thread(target=keepalive_utils.execute_ping_loop,args=(freq,api_key,agent_id))
     t.start()
 
     logging.log(logging.INFO,"returning from start thread")
