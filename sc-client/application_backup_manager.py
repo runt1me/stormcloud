@@ -87,11 +87,11 @@ class HistoryEvent:
     timestamp: datetime
     source: InitiationSource
     status: OperationStatus
+    operation_type: Optional[str] = None  # Add operation_type field
     operation_id: str = field(default_factory=lambda: datetime.now().strftime("%Y%m%d_%H%M%S_%f"))
     files: List[FileOperationRecord] = field(default_factory=list)
     error_message: Optional[str] = None
     user_email: Optional[str] = None
-    operation_type: Optional[str] = None  # Add operation_type field
     
 @dataclass
 class OperationEvent:
@@ -458,17 +458,20 @@ class HistoryManager:
             json.dump(history, f, indent=2)
 
     def add_event(self, event_type: str, event: HistoryEvent):
-        logging.info(f"Adding/updating event with user: {event.user_email or self.current_user_email}")
-        history = self.read_history(self.backup_history_file)
+        """Add/update event in appropriate history file based on operation type"""
+        # Select correct history file
+        history_file = (self.restore_history_file 
+                       if event_type == 'restore' 
+                       else self.backup_history_file)
         
-        # Ensure event has user email
+        history = self.read_history(history_file)
+        
         if not event.user_email:
             event.user_email = self.current_user_email
         
-        # Convert event to dictionary
         event_dict = self.event_to_dict(event)
         
-        # Find and update existing entry if it exists
+        # Update existing or add new
         updated = False
         for i, existing_event in enumerate(history):
             if existing_event.get('operation_id') == event.operation_id:
@@ -479,9 +482,8 @@ class HistoryManager:
         if not updated:
             history.append(event_dict)
         
-        # Write back to file
-        self.write_history(self.backup_history_file, history)
-
+        # Write to correct history file
+        self.write_history(history_file, history)
     def event_to_dict(self, event: HistoryEvent) -> dict:
         """Convert HistoryEvent to dictionary for storage"""
         logging.debug(f"Converting event to dict with email: {event.user_email}")
@@ -531,17 +533,17 @@ class HistoryManager:
 
     def start_operation(self, operation_type: str, source: InitiationSource, user_email: Optional[str] = None) -> str:
         """Start a new operation and return its ID"""
-        logging.info(f"HistoryManager starting operation for user: {user_email or self.current_user_email}")
         event = HistoryEvent(
             timestamp=datetime.now(),
             source=source,
             status=OperationStatus.IN_PROGRESS,
-            user_email=user_email or self.current_user_email  # Use current_user_email as fallback
+            user_email=user_email or self.current_user_email,
+            operation_type=operation_type  # Add operation type
         )
         self.active_operations[event.operation_id] = event
         self.add_event(operation_type, event)
         return event.operation_id
-
+    
     def add_file_to_operation(self, operation_id: str, filepath: str, 
                              status: OperationStatus, error_message: Optional[str] = None):
         """Add a file record to an operation and update history"""
@@ -605,7 +607,7 @@ class HistoryManager:
                 
         return None
 
-    def complete_operation(self, operation_id: str, final_status: OperationStatus, error_message: Optional[str] = None):
+    def complete_operation(self, operation_id: str, final_status: OperationStatus, error_message: Optional[str] = None, user_email: Optional[str] = None):
         """Complete an operation by updating its status"""
         if operation_id in self.active_operations:
             event = self.active_operations[operation_id]
@@ -613,6 +615,7 @@ class HistoryManager:
             # Update status and error message while preserving original timestamp
             event.status = final_status
             event.error_message = error_message
+            event.user_email = user_email or event.user_email or self.current_user_email
             
             # Update existing event in history
             self.add_event(event.operation_type, event)
@@ -1285,13 +1288,12 @@ class BackgroundOperation:
     def _restore_worker(paths, settings, queue, should_stop):
         """Worker process for restore operations"""
         try:
-            # Use operation_id from settings consistently
-            operation_id = settings['operation_id']  # This is now guaranteed to exist
+            operation_id = settings['operation_id']
             total_files = 0
             success_count = 0
             fail_count = 0
             
-            # First count total files
+            # Count total files
             for path in paths:
                 if os.path.isfile(path):
                     total_files += 1
@@ -1324,8 +1326,9 @@ class BackgroundOperation:
                             'total_files': total_files,
                             'processed_files': processed,
                             'operation_id': operation_id,
-                            'record_file': True,  # Added this flag
-                            'parent_folder': os.path.dirname(path)  # Added parent folder
+                            'record_file': True,
+                            'parent_folder': os.path.dirname(path),
+                            'user_email': settings.get('user_email')  # Pass user email
                         })
                         
                     except Exception as e:
@@ -1339,8 +1342,9 @@ class BackgroundOperation:
                             'total_files': total_files,
                             'processed_files': processed,
                             'operation_id': operation_id,
-                            'record_file': True,  # Added this flag
-                            'parent_folder': os.path.dirname(path)  # Added parent folder
+                            'record_file': True,
+                            'parent_folder': os.path.dirname(path),
+                            'user_email': settings.get('user_email')  # Pass user email
                         })
                         
                 else:  # Directory
@@ -1369,8 +1373,9 @@ class BackgroundOperation:
                                     'total_files': total_files,
                                     'processed_files': processed,
                                     'operation_id': operation_id,
-                                    'record_file': True,  # Added this flag
-                                    'parent_folder': path  # Using original path as parent folder
+                                    'record_file': True,
+                                    'parent_folder': path,
+                                    'user_email': settings.get('user_email')  # Pass user email
                                 })
                                 
                             except Exception as e:
@@ -1384,24 +1389,31 @@ class BackgroundOperation:
                                     'total_files': total_files,
                                     'processed_files': processed,
                                     'operation_id': operation_id,
-                                    'record_file': True,  # Added this flag
-                                    'parent_folder': path  # Using original path as parent folder
+                                    'record_file': True,
+                                    'parent_folder': path,
+                                    'user_email': settings.get('user_email')  # Pass user email
                                 })
             
-            queue.put({
-                'type': 'operation_complete',
-                'success_count': success_count,
-                'fail_count': fail_count,
-                'total': total_files,
-                'operation_id': operation_id
-            })
-            
+            # Send final completion status
+            if not should_stop.value:
+                successful = fail_count == 0 and success_count > 0
+                queue.put({
+                    'type': 'operation_complete',
+                    'success_count': success_count,
+                    'fail_count': fail_count,
+                    'total': total_files,
+                    'operation_id': operation_id,
+                    'status': OperationStatus.SUCCESS if successful else OperationStatus.FAILED,
+                    'user_email': settings.get('user_email')  # Pass user email
+                })
+                
         except Exception as e:
             logging.error(f"Restore worker failed: {e}")
             queue.put({
                 'type': 'operation_failed',
                 'error': str(e),
-                'operation_id': operation_id
+                'operation_id': operation_id,
+                'user_email': settings.get('user_email')  # Pass user email
             })
 
 class OperationProgressWidget(QWidget):
@@ -1581,6 +1593,7 @@ class OperationProgressWidget(QWidget):
         if self.background_op:
             operation_type = self.background_op.operation_type
             operation_id = self.background_op.operation_id
+            user_email = self.user_email  # Get current user's email
             
             # Stop the background operation
             self.background_op.stop()
@@ -1597,18 +1610,20 @@ class OperationProgressWidget(QWidget):
                                       if any(f.status == OperationStatus.FAILED for f in completed_files)
                                       else OperationStatus.SUCCESS)
                         
-                        # Update the operation's status
+                        # Update the operation's status with user email
                         self.history_manager.complete_operation(
                             operation_id,
                             final_status,
-                            "Operation cancelled by user"
+                            "Operation cancelled by user",
+                            user_email  # Pass user email
                         )
                     else:
                         # No files completed, mark as failed
                         self.history_manager.complete_operation(
                             operation_id,
                             OperationStatus.FAILED,
-                            "Operation cancelled by user before any files were processed"
+                            "Operation cancelled by user before any files were processed",
+                            user_email  # Pass user email
                         )
             
             self.operation_completed.emit({
@@ -5901,11 +5916,10 @@ class FileExplorerPanel(QWidget):
         if not settings:
             return
             
-        # Add user email to settings
         settings['user_email'] = self.user_email
-            
+        settings['operation_type'] = operation_type  # Add operation type
+                
         if self.history_manager:
-            logging.info(f"Starting {operation_type} operation for user: {self.user_email}")
             operation_id = self.history_manager.start_operation(
                 operation_type,
                 InitiationSource.USER,
@@ -5914,10 +5928,9 @@ class FileExplorerPanel(QWidget):
             settings['operation_id'] = operation_id
             
         settings['settings_path'] = self.settings_path
-        settings['operation_type'] = operation_type
         
         self.progress_widget.start_operation(operation_type, self.current_path, settings)
-
+    
 class FileSystemModel(QStandardItemModel):
     def __init__(self):
         super().__init__()
