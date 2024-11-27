@@ -735,10 +735,6 @@ def validate_user_credentials(username, password):
                 hasher = hashlib.sha512()
                 hasher.update(string_to_hash.encode('UTF-8'))
                 calculated_hash = hasher.hexdigest().upper()
-
-                __logger__().debug(f"Salt used: {stored_salt}")
-                __logger__().debug(f"Stored hash: {stored_hash}")
-                __logger__().debug(f"Calculated hash: {calculated_hash}")
                 
                 # Compare hashes
                 ret['success'] = (calculated_hash == stored_hash)
