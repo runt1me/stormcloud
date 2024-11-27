@@ -103,7 +103,6 @@ def ship_file_to_server(api_key,agent_id,path):
             path
         )
 
-    #crypto_utils.remove_temp_file(unencrypted_path_to_encrypted_file)
     return ret
 
 def stream_upload_file(api_key,agent_id,local_file_path):
