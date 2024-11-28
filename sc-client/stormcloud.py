@@ -9,6 +9,7 @@ import argparse
 import pathlib
 import os
 import json
+import traceback
 
 import sqlite3
 import yaml
@@ -318,7 +319,14 @@ def main(settings_file_path,hash_db_file_path,ignore_hash_db):
     # Honor SSLKEYLOGFILE if set by the OS
     # sslkeylog.set_keylog(os.environ.get('SSLKEYLOGFILE'))
 
-    settings                = read_yaml_settings_file(settings_file_path)
+    if settings_file_path == 'use_app_data':
+        settings_file_path = _get_settings_path_from_install()
+
+        if not settings_file_path:
+            logging.log(logging.ERROR, "Unable to find settings file. Exiting!")
+            exit()
+
+    settings = read_yaml_settings_file(settings_file_path)
 
     if int(settings['SEND_LOGS']):
         logging_utils.send_logs_to_server(settings['API_KEY'],settings['AGENT_ID'])
@@ -677,6 +685,35 @@ def read_yaml_settings_file(fn):
     with open(fn, 'r') as settings_file:
         return yaml.safe_load(settings_file)
 
+def _get_settings_path_from_install():
+    """
+        Parses stable_settings.cfg to get install directory.
+        Returns path: <install directory> + 'settings.cfg'.
+    """
+    success = False
+
+    # Get installation path from settings
+    appdata_path = os.getenv('APPDATA')
+    stable_settings_path = os.path.join(appdata_path, 'Stormcloud', 'stable_settings.cfg')
+
+    try:
+        with open(stable_settings_path, 'r') as f:
+            stable_settings = json.load(f)
+        install_path = stable_settings.get('install_path', '')
+            
+        # By default, should be named settings.cfg in install directory.
+        settings_file_path = os.path.join(install_path, 'settings.cfg')
+        success = True
+
+    except Exception as e:
+        print(traceback.format_exc())
+        pass
+    finally:
+        if success:
+            return settings_file_path
+        else:
+            return None
+
 def start_keepalive_thread(freq,api_key,agent_id):
     logging.log(logging.INFO,"starting new keepalive thread with freq %d" % freq)
 
@@ -712,7 +749,7 @@ if __name__ == "__main__":
 
     description += 'Welcome to Stormcloud, the best backup system!'
     parser = argparse.ArgumentParser(description=description, formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument("-s", "--settings-file",type=str,default="settings.cfg",help="Path to settings file (default=./settings.cfg)")
+    parser.add_argument("-s", "--settings-file",type=str,default="use_app_data",help="Path to settings file (default=<install directory>/settings.cfg)")
     parser.add_argument("-d", "--hash-db", type=str, default="schash.db", help="Path to hash db file (default=./schash.db")
     parser.add_argument("-o", "--ignore-hash-db", action="store_true", help="override the hash db, to backup files even if they haven't changed")
 
