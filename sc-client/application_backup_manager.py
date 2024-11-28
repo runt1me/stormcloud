@@ -7,6 +7,7 @@ import psutil
 import pytz
 import signal
 import smtplib
+import sqlite3
 import stripe
 import subprocess
 import sys
@@ -26,6 +27,7 @@ from infi.systray import SysTrayIcon
 from multiprocessing import Process, Queue, Manager
 from queue import Empty
 from typing import Optional, List, Dict
+from pathlib import Path
 
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QMenu,
                              QLabel, QPushButton, QToolButton, QListWidget, QListWidgetItem,
@@ -41,6 +43,7 @@ from PyQt5.QtGui import (QDesktopServices, QFont, QIcon, QColor,
                          QPalette, QPainter, QPixmap, QTextCharFormat,
                          QStandardItemModel, QStandardItem, QPen, QPolygon)
 from PyQt5.QtWinExtras import QtWin
+
 
 # Stormcloud imports
 #   Core imports
@@ -83,6 +86,34 @@ class FileOperationRecord:
     error_message: Optional[str] = None
 
 @dataclass
+class FileRecord:
+   filepath: str
+   timestamp: datetime
+   status: OperationStatus
+   error_message: Optional[str] = None
+   operation_id: Optional[str] = None
+
+@dataclass
+class Operation:
+    operation_id: str
+    timestamp: datetime
+    source: InitiationSource
+    status: OperationStatus
+    operation_type: str
+    user_email: Optional[str] = None
+    error_message: Optional[str] = None
+    files: List[FileRecord] = field(default_factory=list)
+    
+    def __post_init__(self):
+        # If this is a user operation with no email, default to "Unknown User"
+        # This handles historical data that may lack proper attribution
+        if self.source == InitiationSource.USER and not self.user_email:
+            self.user_email = "Unknown User"
+        # For system operations, always use "System"
+        elif self.source in (InitiationSource.REALTIME, InitiationSource.SCHEDULED):
+            self.user_email = "System"
+
+@dataclass
 class HistoryEvent:
     timestamp: datetime
     source: InitiationSource
@@ -103,6 +134,31 @@ class OperationEvent:
     operation_id: str = field(default_factory=lambda: datetime.now().strftime("%Y%m%d_%H%M%S_%f"))
     files: List[FileOperationRecord] = field(default_factory=list)
     error_message: Optional[str] = None
+
+def init_db(db_path):
+   with sqlite3.connect(db_path) as conn:
+       conn.execute("""
+       CREATE TABLE IF NOT EXISTS operations (
+           operation_id TEXT PRIMARY KEY,
+           timestamp DATETIME NOT NULL,
+           source TEXT NOT NULL,
+           status TEXT NOT NULL,
+           operation_type TEXT NOT NULL,
+           user_email TEXT,
+           error_message TEXT,
+           last_modified DATETIME NOT NULL
+       )""")
+       
+       conn.execute("""
+       CREATE TABLE IF NOT EXISTS file_records (
+           id INTEGER PRIMARY KEY,
+           operation_id TEXT NOT NULL,
+           filepath TEXT NOT NULL,
+           timestamp DATETIME NOT NULL,
+           status TEXT NOT NULL, 
+           error_message TEXT,
+           FOREIGN KEY (operation_id) REFERENCES operations(operation_id)
+       )""")
 
 class LoginDialog(QDialog):
     def __init__(self, theme_manager, settings_path, parent=None):
@@ -382,312 +438,323 @@ class LoginDialog(QDialog):
             self.show_error("Connection error. Please try again.")
 
 class HistoryManager:
-    """Enhanced history manager with file-level tracking"""
-    
     def __init__(self, install_path):
-        self.history_dir = os.path.join(install_path, 'history')
-        self.backup_history_file = os.path.join(self.history_dir, 'backup_history.json')
-        self.restore_history_file = os.path.join(self.history_dir, 'restore_history.json')
+        self.db_path = Path(install_path) / 'history' / 'history.db'
+        self.db_path.parent.mkdir(exist_ok=True)
+        init_db(self.db_path)
+        self._current_user_email = None
         self.active_operations = {}
-        self.last_modified_times = {
-            'backup': 0,
-            'restore': 0
-        }
-        self.current_user_email = None  # Will be set when operations are initiated
-        
-        # Create directory if it doesn't exist
-        os.makedirs(self.history_dir, exist_ok=True)
-        
-        # Initialize history files if they don't exist
-        for file in [self.backup_history_file, self.restore_history_file]:
-            if not os.path.exists(file):
-                self.write_history(file, [])
+        self.last_checks = {'backup': datetime.min, 'restore': datetime.min}
 
-    def has_changes(self, event_type: str) -> bool:
-        """Check if the history file has been modified since last read"""
-        history_file = self.get_history_file(event_type)
-        if not os.path.exists(history_file):
-            return False
-            
-        current_mtime = os.path.getmtime(history_file)
-        last_mtime = self.last_modified_times.get(event_type, 0)
-        
-        if current_mtime > last_mtime:
-            self.last_modified_times[event_type] = current_mtime
-            return True
-            
-        return False
+    @property
+    def current_user_email(self) -> Optional[str]:
+        return self._current_user_email
 
-    def get_history_file(self, operation_type: str) -> str:
-        """Get the appropriate history file for the operation type"""
-        return self.backup_history_file if operation_type == 'backup' else self.restore_history_file
+    @current_user_email.setter
+    def current_user_email(self, email: Optional[str]):
+        if email != "System":  # Don't overwrite with system attribution
+            self._current_user_email = email
+            logging.info(f"HistoryManager current_user_email set to: {email}")
 
-    def get_history(self, event_type: str, limit: int = None, force_refresh: bool = False) -> List[HistoryEvent]:
-        """Get history events, optionally checking for changes first"""
-        if not force_refresh and not self.has_changes(event_type):
-            return []  # No changes, signal to skip refresh
-            
-        file_path = self.backup_history_file if event_type == 'backup' else self.restore_history_file
-        history = self.read_history(file_path)
-        
-        # Convert dictionaries back to HistoryEvent objects
-        events = []
-        for event_dict in history:
-            try:
-                event = self.dict_to_event(event_dict)
-                events.append(event)
-            except Exception as e:
-                logging.error(f"Failed to convert history event: {e}")
-                continue
-            
-        # Sort by timestamp (newest first) and apply limit
-        events.sort(key=lambda x: x.timestamp, reverse=True)
-        return events[:limit] if limit else events
-
-    def read_history(self, file_path: str) -> list:
-        """Read history from JSON file"""
+    def has_changes(self, operation_type: str) -> bool:
         try:
-            with open(file_path, 'r') as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT MAX(last_modified) FROM operations 
+                    WHERE operation_type = ?
+                """, (operation_type,))
+                last_modified = cursor.fetchone()[0]
+                if last_modified:
+                    last_modified = datetime.fromisoformat(last_modified)
+                    if last_modified > self.last_checks[operation_type]:
+                        self.last_checks[operation_type] = last_modified
+                        return True
+                return False
+        except sqlite3.Error as e:
+            logging.error(f"Database error checking changes: {e}")
+            return False
+
+    def get_history(self, operation_type: str, limit: int = None, force_refresh: bool = False):
+        """Get history events with robust user attribution handling"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # Add logging to track what we're loading
+                logging.info(f"Loading history for operation type: {operation_type}")
+                
+                query = """
+                    SELECT o.*, f.filepath, f.timestamp, f.status, f.error_message
+                    FROM operations o
+                    LEFT JOIN file_records f ON o.operation_id = f.operation_id
+                    WHERE o.operation_type = ?
+                    ORDER BY o.timestamp DESC
+                """
+                params = [operation_type]
+                
+                if limit:
+                    query += " LIMIT ?"
+                    params.append(limit)
+                
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+
+                # Group by operation_id
+                operations = {}
+                for row in rows:
+                    op_id = row[0]
+                    if op_id not in operations:
+                        # Get the source and user email from the database
+                        source = InitiationSource(row[2])
+                        user_email = row[5]
+                        
+                        # Log what we found in the database
+                        logging.info(f"Loading operation {op_id} - Source: {source}, User: {user_email}")
+                        
+                        try:
+                            operations[op_id] = Operation(
+                                operation_id=op_id,
+                                timestamp=datetime.fromisoformat(row[1]),
+                                source=source,
+                                status=OperationStatus(row[3]),
+                                operation_type=row[4],
+                                user_email=user_email,
+                                error_message=row[6],
+                                files=[]
+                            )
+                        except Exception as e:
+                            logging.error(f"Error creating operation object for {op_id}: {e}")
+                            # Skip this operation and continue with others
+                            continue
+                    
+                    # Add file record if it exists
+                    if row[8]:  # filepath column
+                        operations[op_id].files.append(FileRecord(
+                            filepath=row[8],
+                            timestamp=datetime.fromisoformat(row[9]),
+                            status=OperationStatus(row[10]),
+                            error_message=row[11],
+                            operation_id=op_id
+                        ))
+
+                return list(operations.values())
+
+        except sqlite3.Error as e:
+            logging.error(f"Database error getting history: {e}")
             return []
+
+    def fix_operation_attribution(self):
+        """Utility method to fix historical operations with missing attribution"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                # Update any USER operations with null/empty email to "Unknown User"
+                conn.execute("""
+                    UPDATE operations 
+                    SET user_email = 'Unknown User'
+                    WHERE source = ? AND (user_email IS NULL OR user_email = '')
+                """, (InitiationSource.USER.value,))
+                
+                # Update any REALTIME/SCHEDULED operations to use "System"
+                conn.execute("""
+                    UPDATE operations 
+                    SET user_email = 'System'
+                    WHERE source IN (?, ?) AND (user_email IS NULL OR user_email = '')
+                """, (InitiationSource.REALTIME.value, InitiationSource.SCHEDULED.value))
+                
+                conn.commit()
+                
+            logging.info("Fixed attribution for historical operations")
             
-    def write_history(self, file_path: str, history: list):
-        """Write history to JSON file"""
-        with open(file_path, 'w') as f:
-            json.dump(history, f, indent=2)
+        except sqlite3.Error as e:
+            logging.error(f"Database error fixing operation attribution: {e}")
+        
+    def update_operation_status(self, operation_id: str):
+        if operation_id not in self.active_operations:
+            return
+ 
+        operation = self.active_operations[operation_id]
+        if operation.status == OperationStatus.IN_PROGRESS:
+            return
+ 
+        file_statuses = [f.status for f in operation.files]
+        if OperationStatus.FAILED in file_statuses:
+            new_status = OperationStatus.FAILED
+        elif all(s == OperationStatus.SUCCESS for s in file_statuses):
+            new_status = OperationStatus.SUCCESS
+        else:
+            new_status = OperationStatus.IN_PROGRESS
 
-    def add_event(self, event_type: str, event: HistoryEvent):
-        """Add/update event in appropriate history file based on operation type"""
-        # Select correct history file
-        history_file = (self.restore_history_file 
-                       if event_type == 'restore' 
-                       else self.backup_history_file)
-        
-        history = self.read_history(history_file)
-        
-        if not event.user_email:
-            event.user_email = self.current_user_email
-        
-        event_dict = self.event_to_dict(event)
-        
-        # Update existing or add new
-        updated = False
-        for i, existing_event in enumerate(history):
-            if existing_event.get('operation_id') == event.operation_id:
-                history[i] = event_dict
-                updated = True
-                break
-        
-        if not updated:
-            history.append(event_dict)
-        
-        # Write to correct history file
-        self.write_history(history_file, history)
-    def event_to_dict(self, event: HistoryEvent) -> dict:
-        """Convert HistoryEvent to dictionary for storage"""
-        logging.debug(f"Converting event to dict with email: {event.user_email}")
-        
-        event_dict = {
-            'timestamp': event.timestamp.isoformat(),
-            'source': event.source.value,
-            'status': event.status.value,
-            'operation_id': event.operation_id,
-            'error_message': event.error_message,
-            'files': [
-                {
-                    'filepath': f.filepath,
-                    'timestamp': f.timestamp.isoformat(),
-                    'status': f.status.value,
-                    'error_message': f.error_message
-                }
-                for f in event.files
-            ],
-            'user_email': event.user_email or self.current_user_email  # Add fallback here too
-        }
-        
-        logging.debug(f"Created event dict: {event_dict}")
-        return event_dict
-
-    def dict_to_event(self, event_dict: dict) -> HistoryEvent:
-        """Convert dictionary to HistoryEvent"""
-        files = [
-            FileOperationRecord(
-                filepath=f['filepath'],
-                timestamp=datetime.fromisoformat(f['timestamp']),
-                status=OperationStatus(f['status']),
-                error_message=f.get('error_message')
-            )
-            for f in event_dict.get('files', [])
-        ]
-        
-        return HistoryEvent(
-            timestamp=datetime.fromisoformat(event_dict['timestamp']),
-            source=InitiationSource(event_dict['source']),
-            status=OperationStatus(event_dict['status']),
-            operation_id=event_dict.get('operation_id', ''),
-            files=files,
-            error_message=event_dict.get('error_message'),
-            user_email=event_dict.get('user_email')  # Load user email if it exists
-        )
+        if new_status != operation.status:
+            operation.status = new_status
+            self._update_operation(operation)
 
     def start_operation(self, operation_type: str, source: InitiationSource, user_email: Optional[str] = None) -> str:
-        """Start a new operation and return its ID"""
-        event = HistoryEvent(
+        # Use provided email or current email for user operations
+        operation_user_email = None
+        if source == InitiationSource.USER:
+            operation_user_email = user_email or self._current_user_email
+            if not operation_user_email:
+                raise ValueError("User email required for user-initiated operations")
+        else:
+            operation_user_email = "System"
+        
+        operation = Operation(
+            operation_id=datetime.now().strftime("%Y%m%d_%H%M%S_%f"),
             timestamp=datetime.now(),
             source=source,
             status=OperationStatus.IN_PROGRESS,
-            user_email=user_email or self.current_user_email,
-            operation_type=operation_type  # Add operation type
+            operation_type=operation_type,
+            user_email=operation_user_email,
+            files=[]
         )
-        self.active_operations[event.operation_id] = event
-        self.add_event(operation_type, event)
-        return event.operation_id
-    
+        
+        self.active_operations[operation.operation_id] = operation
+        self._save_operation(operation)
+        return operation.operation_id
     def add_file_to_operation(self, operation_id: str, filepath: str, 
-                             status: OperationStatus, error_message: Optional[str] = None):
-        """Add a file record to an operation and update history"""
-        if operation_id in self.active_operations:
-            event = self.active_operations[operation_id]
-            
-            # Check if file already exists in this operation
-            file_exists = any(f.filepath == filepath for f in event.files)
-            if not file_exists:
-                file_record = FileOperationRecord(
-                    filepath=filepath,
-                    timestamp=datetime.now(),
-                    status=status,
-                    error_message=error_message
-                )
-                event.files.append(file_record)
-            
-            # Update operation status based on file statuses
-            self.update_operation_status(operation_id)
-            
-            # Write the current state to history file immediately
-            self.add_event(event.operation_type, event)
+                            status: OperationStatus, error_message: Optional[str] = None):
+        if operation_id not in self.active_operations:
+            return
 
-    def add_file_record(self, operation_id: str, filepath: str, 
-                       status: OperationStatus, error_message: Optional[str] = None):
-        """Add a file record to an operation and update history"""
-        logging.debug(f"Adding file record for operation {operation_id}: {filepath}")
-        if operation_id in self.active_operations:
-            event = self.active_operations[operation_id]
-            file_record = FileOperationRecord(
+        operation = self.active_operations[operation_id]
+        if not any(f.filepath == filepath for f in operation.files):
+            file_record = FileRecord(
                 filepath=filepath,
                 timestamp=datetime.now(),
                 status=status,
-                error_message=error_message
+                error_message=error_message,
+                operation_id=operation_id
             )
-            event.files.append(file_record)
-            logging.debug(f"Added file record to operation {operation_id}, total files: {len(event.files)}")
-            
-            # Write the updated event immediately
-            self.add_event('backup', event)  # Assuming backup, we could check operation_type if needed
+            operation.files.append(file_record)
+            self._save_file_record(file_record)
+            self.update_operation_status(operation_id)
 
-    def get_operation(self, operation_id: str) -> Optional[OperationEvent]:
-        """Get an operation by ID, either active or from history"""
+    def complete_operation(self, operation_id: str, final_status: OperationStatus,
+                           error_message: Optional[str] = None, user_email: Optional[str] = None):
+        if operation_id in self.active_operations:
+            operation = self.active_operations[operation_id]
+            operation.status = final_status
+            operation.error_message = error_message
+            # Preserve the original user_email if it exists and no new one is provided
+            operation.user_email = user_email or operation.user_email or self.current_user_email
+            self._update_operation(operation)
+            del self.active_operations[operation_id]
+        
+    def get_operation(self, operation_id: str) -> Optional[Operation]:
+        """Get an operation by ID with improved user attribution handling"""
         # First check active operations
         if operation_id in self.active_operations:
             return self.active_operations[operation_id]
             
-        # If not active, check history
-        history_file = self.get_history_file('backup')  # Check backup first
-        history = self.read_history(history_file)
-        for event_dict in history:
-            if event_dict.get('operation_id') == operation_id:
-                return self.dict_to_event(event_dict)
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT o.*, f.filepath, f.timestamp, f.status, f.error_message
+                    FROM operations o
+                    LEFT JOIN file_records f ON o.operation_id = f.operation_id
+                    WHERE o.operation_id = ?
+                """, (operation_id,))
                 
-        # Try restore history if not found in backup
-        history_file = self.get_history_file('restore')
-        history = self.read_history(history_file)
-        for event_dict in history:
-            if event_dict.get('operation_id') == operation_id:
-                return self.dict_to_event(event_dict)
+                rows = cursor.fetchall()
+                if not rows:
+                    return None
+                    
+                # Create operation from first row with explicit user attribution
+                operation = Operation(
+                    operation_id=rows[0][0],
+                    timestamp=datetime.fromisoformat(rows[0][1]),
+                    source=InitiationSource(rows[0][2]),
+                    status=OperationStatus(rows[0][3]),
+                    operation_type=rows[0][4],
+                    user_email=rows[0][5],  # Explicitly preserve user attribution
+                    error_message=rows[0][6],
+                    files=[]
+                )
                 
-        return None
+                # Add file records
+                for row in rows:
+                    if row[8]:  # If file record exists
+                        operation.files.append(FileRecord(
+                            filepath=row[8],
+                            timestamp=datetime.fromisoformat(row[9]),
+                            status=OperationStatus(row[10]),
+                            error_message=row[11],
+                            operation_id=operation_id
+                        ))
+                        
+                return operation
+                
+        except sqlite3.Error as e:
+            logging.error(f"Database error getting operation: {e}")
+            return None
 
-    def complete_operation(self, operation_id: str, final_status: OperationStatus, error_message: Optional[str] = None, user_email: Optional[str] = None):
-        """Complete an operation by updating its status"""
-        if operation_id in self.active_operations:
-            event = self.active_operations[operation_id]
-            
-            # Update status and error message while preserving original timestamp
-            event.status = final_status
-            event.error_message = error_message
-            event.user_email = user_email or event.user_email or self.current_user_email
-            
-            # Update existing event in history
-            self.add_event(event.operation_type, event)
-            
-            # Remove from active operations
-            del self.active_operations[operation_id]
+    def _save_operation(self, operation: Operation):
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                # Add logging to track user attribution
+                logging.info(f"Saving operation {operation.operation_id} with user: {operation.user_email}")
+                
+                conn.execute("""
+                    INSERT INTO operations 
+                    (operation_id, timestamp, source, status, operation_type, 
+                     user_email, error_message, last_modified)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    operation.operation_id,
+                    operation.timestamp.isoformat(),
+                    operation.source.value,
+                    operation.status.value,
+                    operation.operation_type,
+                    operation.user_email,
+                    operation.error_message,
+                    datetime.now().isoformat()
+                ))
+        except sqlite3.Error as e:
+            logging.error(f"Database error saving operation: {e}")
+            raise
 
-    def cleanup_in_progress_operations(self, completed_operation_id: str):
-        """Clean up any stale IN_PROGRESS operations from history"""
-        for file_type in ['backup', 'restore']:
-            history_file = self.get_history_file(file_type)
-            try:
-                history = self.read_history(history_file)
-                updated_history = []
+    def _update_operation(self, operation: Operation):
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                # Add logging to track user attribution updates
+                logging.info(f"Updating operation {operation.operation_id} with user: {operation.user_email}")
                 
-                for event in history:
-                    # Skip if this is a stale IN_PROGRESS version of our completed operation
-                    if (event.get('operation_id') == completed_operation_id and 
-                        event.get('status') == OperationStatus.IN_PROGRESS.value):
-                        continue
-                    updated_history.append(event)
-                
-                self.write_history(history_file, updated_history)
-                
-            except Exception as e:
-                logging.error(f"Failed to cleanup IN_PROGRESS operations: {e}")
+                conn.execute("""
+                    UPDATE operations SET
+                    status = ?,
+                    error_message = ?,
+                    user_email = ?,
+                    last_modified = ?
+                    WHERE operation_id = ?
+                """, (
+                    operation.status.value,
+                    operation.error_message,
+                    operation.user_email,
+                    datetime.now().isoformat(),
+                    operation.operation_id
+                ))
+        except sqlite3.Error as e:
+            logging.error(f"Database error updating operation: {e}")
+            raise
 
-    def update_operation_status(self, operation_id: str):
-        """Update operation status based on file statuses"""
-        if operation_id in self.active_operations:
-            event = self.active_operations[operation_id]
-            
-            # Get all file statuses
-            file_statuses = [f.status for f in event.files]
-            
-            # For multi-file operations, stay in IN_PROGRESS until completion
-            # is explicitly called by complete_operation()
-            if event.status == OperationStatus.IN_PROGRESS:
-                new_status = OperationStatus.IN_PROGRESS
-            # Only set final status when operation is complete
-            elif file_statuses:
-                if OperationStatus.FAILED in file_statuses:
-                    new_status = OperationStatus.FAILED
-                elif all(status == OperationStatus.SUCCESS for status in file_statuses):
-                    new_status = OperationStatus.SUCCESS
-                else:
-                    new_status = OperationStatus.IN_PROGRESS
-            else:
-                new_status = event.status
-            
-            # Update status if changed
-            if new_status != event.status:
-                event.status = new_status
-                self.add_event(event.operation_type, event)
-
-    def update_event(self, event: OperationEvent):
-        """Update an existing event in history"""
-        history_file = self.get_history_file(event.operation_type)
-        history = self.read_history(history_file)
-        
-        # Find and update the event
-        updated = False
-        for i, event_dict in enumerate(history):
-            if event_dict.get('operation_id') == event.operation_id:
-                history[i] = self.event_to_dict(event)
-                updated = True
-                break
-                
-        if not updated:
-            history.append(self.event_to_dict(event))
-                
-        self.write_history(history_file, history)
+    def _save_file_record(self, file_record: FileRecord):
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute("""
+                    INSERT INTO file_records
+                    (operation_id, filepath, timestamp, status, error_message)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (
+                    file_record.operation_id,
+                    file_record.filepath,
+                    file_record.timestamp.isoformat(),
+                    file_record.status.value,
+                    file_record.error_message
+                ))
+        except sqlite3.Error as e:
+            logging.error(f"Database error saving file record: {e}")
 
 class OperationHistoryPanel(QWidget):
     """Panel for displaying hierarchical backup/restore history"""
@@ -747,13 +814,12 @@ class OperationHistoryPanel(QWidget):
         self.tree.itemExpanded.connect(self.on_item_expanded)
         self.tree.itemCollapsed.connect(self.on_item_collapsed)
         
-        # Enable column sorting
         self.tree.setSortingEnabled(True)
         self.tree.sortByColumn(0, Qt.DescendingOrder)
-        
+
         for i in range(5):
-            self.tree.header().setSectionResizeMode(i, QHeaderView.ResizeToContents)
-        
+           self.tree.header().setSectionResizeMode(i, QHeaderView.ResizeToContents)
+
         layout.addWidget(self.tree)
        
     def on_item_expanded(self, item):
@@ -886,7 +952,6 @@ class OperationHistoryPanel(QWidget):
         self.restore_scroll_position()
 
     def create_operation_summary_item(self, event: HistoryEvent) -> QTreeWidgetItem:
-        """Create a tree item for an operation summary with user info"""
         status_counts = {
             OperationStatus.SUCCESS: 0,
             OperationStatus.FAILED: 0,
@@ -912,25 +977,24 @@ class OperationHistoryPanel(QWidget):
                          f"Failed: {status_counts[OperationStatus.FAILED]})")
 
         item = QTreeWidgetItem([
-            event.timestamp.strftime("%Y-%m-%d %I:%M:%S %p"),
+            event.timestamp.strftime("%Y-%m-%d %H:%M"),
             event.source.value,
             event.status.value,
-            event.user_email or "System",  # Show "System" if no user email
+            event.user_email or "System",
             details
         ])
         
         # Store operation ID
         item.setData(0, Qt.UserRole, event.operation_id)
         
-        # Set colors and styling
         self.set_item_status_color(item, event.status)
         font = item.font(0)
         font.setBold(True)
-        for i in range(5):  # Updated for new column
+        for i in range(5):
             item.setFont(i, font)
         
         return item
-
+    
     def create_file_item(self, file_record: FileOperationRecord, parent_source: str) -> QTreeWidgetItem:
         """Create a tree item for a file record with its individual timestamp"""
         item = QTreeWidgetItem([
@@ -1025,8 +1089,8 @@ class OperationHistoryPanel(QWidget):
         self.event_type = history_type_map[history_type]
         # Force a refresh when switching history types
         events = self.history_manager.get_history(self.event_type, force_refresh=True)
-        if events:
-            self.refresh_history_with_events(events)
+        # Always refresh UI, even with empty list
+        self.refresh_history_with_events(events)
 
     def set_item_status_color(self, item: QTreeWidgetItem, status: OperationStatus):
         """Set the color of an item based on its status"""
@@ -1424,10 +1488,18 @@ class OperationProgressWidget(QWidget):
         super().__init__(parent)
         self.theme_manager = parent.theme_manager if parent else None
         self.history_manager = None
-        self.user_email = None
+        self._user_email = None
         self.init_ui()
         self.background_op = None
         self.timer = None
+
+    @property
+    def user_email(self) -> Optional[str]:
+        return self._user_email
+
+    @user_email.setter
+    def user_email(self, email: Optional[str]):
+        self._user_email = email
 
     def init_ui(self):
         layout = QVBoxLayout(self)
@@ -1484,26 +1556,26 @@ class OperationProgressWidget(QWidget):
 
     def start_operation(self, operation_type, paths, settings):
         """Start a new operation with non-blocking progress updates"""
+        # Store the user email but don't update history manager
+        self._user_email = settings.get('user_email')
+        
         self.background_op = BackgroundOperation(operation_type, paths, settings)
         self.background_op.start()
         
         if self.history_manager:
-            self.history_manager.current_user_email = settings.get('user_email')
+            # Remove this line - don't update history_manager's email here
+            # self.history_manager.current_user_email = settings.get('user_email')
+            pass
         
-        if operation_id := settings.get('operation_id'):
-            if operation := self.history_manager.get_operation(operation_id):
-                operation.operation_type = operation_type
-                
         self.operation_id = settings.get('operation_id')
         self.operation_label.setText(f"Operation: {operation_type.capitalize()}")
         self.progress_bar.setValue(0)
         self.current_file_label.setText("Preparing...")
         self.setVisible(True)
         
-        # Use shorter timer interval for more responsive updates
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_progress)
-        self.timer.start(100)  # Check every 100ms
+        self.timer.start(100)
 
     def update_progress(self):
         """Process progress updates from the background operation asynchronously"""
@@ -5195,24 +5267,38 @@ class FileExplorerPanel(QWidget):
         self.settings_path = settings_cfg_path
         self.systray = systray
         self.history_manager = history_manager
-        self.user_email = user_email
+        self._user_email = user_email
         logging.info(f"FileExplorerPanel initialized with user email: {user_email}")
-        self.install_path = self.get_install_path()
         
         # Update metadata directory path
+        self.install_path = self.get_install_path()
         self.metadata_dir = os.path.join(self.install_path, 'file_explorer', 'manifest')
         os.makedirs(self.metadata_dir, exist_ok=True)
         
         self.search_history = []
+        
+        # Create progress widget before initializing UI
+        self.progress_widget = OperationProgressWidget(self)
+        if self.history_manager:
+            self.progress_widget.history_manager = self.history_manager
+        self.progress_widget.user_email = self._user_email
+        self.progress_widget.operation_completed.connect(self.on_operation_completed)
+        
+        # Initialize UI components
         self.init_ui()
         self.load_data()
         self.apply_theme()
-        
-        # Initialize progress widget with user email
+
+    @property
+    def user_email(self) -> Optional[str]:
+        return self._user_email
+
+    @user_email.setter
+    def user_email(self, email: Optional[str]):
+        self._user_email = email
         if hasattr(self, 'progress_widget'):
-            self.progress_widget.user_email = self.user_email
-        
-        self.theme_manager.theme_changed.connect(self.on_theme_changed)
+            self.progress_widget.user_email = email
+        logging.info(f"FileExplorerPanel user_email updated to: {email}")
 
     def init_ui(self):
         self.setObjectName("FileExplorerPanel")
@@ -5265,13 +5351,8 @@ class FileExplorerPanel(QWidget):
         self.tree_view.customContextMenuRequested.connect(self.show_context_menu)
         self.tree_view.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.tree_view.doubleClicked.connect(self.show_metadata)
-
-        self.load_data()
         
         # Progress widget with history manager
-        self.progress_widget = OperationProgressWidget(self)
-        self.progress_widget.history_manager = self.history_manager
-        self.progress_widget.operation_completed.connect(self.on_operation_completed)
         layout.addWidget(self.progress_widget)
 
     def apply_theme(self):
@@ -5420,7 +5501,6 @@ class FileExplorerPanel(QWidget):
         full_path = os.path.join(self.install_path, relative_path)
         full_path = os.path.normpath(full_path)
         
-        logging.info(f"Resolved path: {relative_path} -> {full_path}")
         return full_path
 
     def show_partial_matches(self, search_text, match_data):
@@ -5933,16 +6013,22 @@ class FileExplorerPanel(QWidget):
         if not settings:
             return
             
+        # Ensure user attribution is properly set
         settings['user_email'] = self.user_email
-        settings['operation_type'] = operation_type  # Add operation type
-                
+        logging.info(f"Starting {operation_type} operation with user: {self.user_email}")
+        
         if self.history_manager:
-            operation_id = self.history_manager.start_operation(
-                operation_type,
-                InitiationSource.USER,
-                self.user_email
-            )
-            settings['operation_id'] = operation_id
+            try:
+                operation_id = self.history_manager.start_operation(
+                    operation_type,
+                    InitiationSource.USER,
+                    self.user_email
+                )
+                settings['operation_id'] = operation_id
+            except ValueError as e:
+                logging.error(f"Failed to start operation: {e}")
+                StormcloudMessageBox.critical(self, "Error", str(e))
+                return
             
         settings['settings_path'] = self.settings_path
         

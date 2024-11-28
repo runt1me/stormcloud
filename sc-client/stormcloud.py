@@ -26,7 +26,14 @@ import network_utils
 
 from infi.systray import SysTrayIcon   # pip install infi.systray
 
-from client_db_utils import get_or_create_hash_db
+from client_db_utils import (get_or_create_hash_db, hash_db_exists,
+                            create_hash_db, get_hash_db)
+
+# App Device History tracking using SQLite
+from history_db import (
+    init_db, Operation, FileRecord, 
+    InitiationSource, OperationStatus
+)
 
 ACTION_TIMER = 90
 
@@ -173,108 +180,84 @@ class HistoryEvent:
     error_message: Optional[str] = None
 
 class CoreHistoryManager:
-    """Simplified version of HistoryManager for core engine use"""
     def __init__(self, install_path):
-        self.history_dir = os.path.join(install_path, 'history')
-        self.backup_history_file = os.path.join(self.history_dir, 'backup_history.json')
+        self.db_path = f"{install_path}/history/history.db"
+        init_db(self.db_path)
         self.active_operations = {}
-        
-        # Create directory if it doesn't exist
-        os.makedirs(self.history_dir, exist_ok=True)
-        
-        # Initialize history file if it doesn't exist
-        if not os.path.exists(self.backup_history_file):
-            self.write_history(self.backup_history_file, [])
 
     def start_operation(self, source: InitiationSource) -> str:
-        """Start a new backup operation and return its ID"""
-        event = HistoryEvent(
+        operation = Operation(
+            operation_id=datetime.now().strftime("%Y%m%d_%H%M%S_%f"),
             timestamp=datetime.now(),
             source=source,
-            status=OperationStatus.IN_PROGRESS
+            status=OperationStatus.IN_PROGRESS,
+            operation_type='backup'  # Explicitly set type for core operations
         )
-        self.active_operations[event.operation_id] = event
-        self.add_event('backup', event)
-        return event.operation_id
-
-    def add_file_record(self, operation_id: str, filepath: str, 
+        self.active_operations[operation.operation_id] = operation
+        self._save_operation(operation)
+        return operation.operation_id
+    
+    def add_file_record(self, operation_id: str, filepath: str,
                        status: OperationStatus, error_message: Optional[str] = None):
-        """Add a file record to an operation"""
-        if operation_id in self.active_operations:
-            event = self.active_operations[operation_id]
-            file_record = FileOperationRecord(
-                filepath=filepath,
-                timestamp=datetime.now(),
-                status=status,
-                error_message=error_message
-            )
-            event.files.append(file_record)
-            self.add_event('backup', event)
-
-    def complete_operation(self, operation_id: str, final_status: OperationStatus, 
-                         error_message: Optional[str] = None):
-        """Complete an operation with final status"""
-        if operation_id in self.active_operations:
-            event = self.active_operations[operation_id]
-            event.status = final_status
-            event.error_message = error_message
-            self.add_event('backup', event)
-            del self.active_operations[operation_id]
-
-    def read_history(self, file_path: str) -> list:
-        """Read history from JSON file"""
         try:
-            with open(file_path, 'r') as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            return []
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute("""
+                    INSERT INTO file_records 
+                    (operation_id, filepath, timestamp, status, error_message)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (
+                    operation_id,
+                    filepath,
+                    datetime.now().isoformat(),
+                    status.value,
+                    error_message
+                ))
+                conn.execute("""
+                    UPDATE operations SET last_modified = ? 
+                    WHERE operation_id = ?
+                """, (datetime.now().isoformat(), operation_id))
+        except sqlite3.Error as e:
+            logging.error(f"Failed to add file record: {e}")
 
-    def write_history(self, file_path: str, history: list):
-        """Write history to JSON file"""
-        with open(file_path, 'w') as f:
-            json.dump(history, f, indent=2)
+    def complete_operation(self, operation_id: str, final_status: OperationStatus,
+                         error_message: Optional[str] = None):
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute("""
+                    UPDATE operations 
+                    SET status = ?, error_message = ?, last_modified = ?
+                    WHERE operation_id = ?
+                """, (
+                    final_status.value, 
+                    error_message,
+                    datetime.now().isoformat(),
+                    operation_id
+                ))
 
-    def event_to_dict(self, event: HistoryEvent) -> dict:
-        """Convert HistoryEvent to dictionary for storage"""
-        return {
-            'timestamp': event.timestamp.isoformat(),
-            'source': event.source.value,
-            'status': event.status.value,
-            'operation_id': event.operation_id,
-            'error_message': event.error_message,
-            'files': [
-                {
-                    'filepath': f.filepath,
-                    'timestamp': f.timestamp.isoformat(),
-                    'status': f.status.value,
-                    'error_message': f.error_message
-                }
-                for f in event.files
-            ]
-        }
+            if operation_id in self.active_operations:
+                del self.active_operations[operation_id]
 
-    def add_event(self, event_type: str, event: HistoryEvent):
-        """Add or update an event in history"""
-        history = self.read_history(self.backup_history_file)
+        except sqlite3.Error as e:
+            logging.error(f"Failed to complete operation: {e}")
+
+    def _save_operation(self, operation: Operation):
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute("""
+                    INSERT INTO operations
+                    (operation_id, timestamp, source, status, operation_type, last_modified)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    operation.operation_id,
+                    operation.timestamp.isoformat(),
+                    operation.source.value,
+                    operation.status.value,
+                    operation.operation_type,
+                    datetime.now().isoformat()
+                ))
+        except sqlite3.Error as e:
+            logging.error(f"Failed to save operation: {e}")
         
-        # Convert event to dictionary
-        event_dict = self.event_to_dict(event)
-        
-        # Find and update existing entry if it exists
-        updated = False
-        for i, existing_event in enumerate(history):
-            if existing_event.get('operation_id') == event.operation_id:
-                history[i] = event_dict
-                updated = True
-                break
-                
-        # Add as new entry if it doesn't exist
-        if not updated:
-            history.append(event_dict)
-        
-        # Write back to file
-        self.write_history(self.backup_history_file, history)
-
 def should_backup(schedule, last_check_time, backup_state):
     """
     Enhanced backup check handling concurrent schedules and system time changes
