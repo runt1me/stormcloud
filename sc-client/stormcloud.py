@@ -186,12 +186,14 @@ class CoreHistoryManager:
         self.active_operations = {}
 
     def start_operation(self, source: InitiationSource) -> str:
+        # Create operation with standardized type
         operation = Operation(
             operation_id=datetime.now().strftime("%Y%m%d_%H%M%S_%f"),
             timestamp=datetime.now(),
             source=source,
             status=OperationStatus.IN_PROGRESS,
-            operation_type='backup'  # Explicitly set type for core operations
+            operation_type='backup',  # Standardized operation type
+            user_email='System'  # Explicitly set system attribution
         )
         self.active_operations[operation.operation_id] = operation
         self._save_operation(operation)
@@ -241,22 +243,26 @@ class CoreHistoryManager:
             logging.error(f"Failed to complete operation: {e}")
 
     def _save_operation(self, operation: Operation):
+        """Save operation with all required fields"""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 conn.execute("""
                     INSERT INTO operations
-                    (operation_id, timestamp, source, status, operation_type, last_modified)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    (operation_id, timestamp, source, status, operation_type, 
+                     user_email, error_message, last_modified)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     operation.operation_id,
                     operation.timestamp.isoformat(),
                     operation.source.value,
                     operation.status.value,
                     operation.operation_type,
+                    operation.user_email,
+                    operation.error_message,
                     datetime.now().isoformat()
                 ))
         except sqlite3.Error as e:
-            logging.error(f"Failed to save operation: {e}")
+            logging.error(f"Database error saving operation: {e}")
         
 def should_backup(schedule, last_check_time, backup_state):
     """
