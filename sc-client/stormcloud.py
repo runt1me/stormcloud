@@ -341,12 +341,7 @@ def main(settings_file_path,hash_db_file_path,ignore_hash_db):
 
     settings = read_yaml_settings_file(settings_file_path)
 
-    print("Running with hash db path: %s" % hash_db_file_path)
-    print("Running with settings: %s" % settings)
-
-    if int(settings['SEND_LOGS']):
-        logging_utils.send_logs_to_server(settings['API_KEY'],settings['AGENT_ID'])
-    
+    logging_utils.send_logs_to_server(settings['API_KEY'],settings['AGENT_ID'])
     logging_utils.initialize_logging(cwd=install_directory,uuid=settings['AGENT_ID'])
 
     hash_db_conn = get_or_create_hash_db(hash_db_file_path)
