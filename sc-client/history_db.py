@@ -1,4 +1,6 @@
 import sqlite3
+import os
+
 from datetime import datetime
 from enum import Enum
 from typing import Optional, List
@@ -35,6 +37,9 @@ class Operation:
     files: List[FileRecord] = None
 
 def init_db(db_path):
+    # Ensure the directory exists
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    
     with sqlite3.connect(db_path) as conn:
         conn.execute("""
         CREATE TABLE IF NOT EXISTS operations (
