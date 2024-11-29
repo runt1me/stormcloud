@@ -322,30 +322,32 @@ def should_backup(schedule, last_check_time, backup_state):
 
 def main(settings_file_path,hash_db_file_path,ignore_hash_db):
 
-    # Get hash db path from stable_settings.cfg
+    # install directory from stable_settings.cfg
+    install_directory = _get_install_directory()
+
+    if not install_directory:
+        logging.log(logging.ERROR, "Unable to locate install. Exiting!")
+        exit()        
+
+    # This path may or may not exist,
+    # depending if this is the first run of the application
     if hash_db_file_path == 'use_app_data':
-        hash_db_file_path = _get_hash_db_path_from_install()
+        hash_db_file_path = os.path.join(install_directory, 'schash.db')
 
-        if not hash_db_file_path:
-            logging.log(logging.ERROR, "Unable to find settings file. Exiting!")
-            exit()
-
-    # Get settings file path from stable_settings.cfg
+    # This path should exist by the time the application
+    # is running, as it should be written by the installer.
     if settings_file_path == 'use_app_data':
-        settings_file_path = _get_settings_path_from_install()
-        
-        if not settings_file_path:
-            logging.log(logging.ERROR, "Unable to find settings file. Exiting!")
-            exit()
+        settings_file_path = os.path.join(install_directory, 'settings.cfg')
 
     settings = read_yaml_settings_file(settings_file_path)
+
     print("Running with hash db path: %s" % hash_db_file_path)
     print("Running with settings: %s" % settings)
 
     if int(settings['SEND_LOGS']):
         logging_utils.send_logs_to_server(settings['API_KEY'],settings['AGENT_ID'])
     
-    logging_utils.initialize_logging(uuid=settings['AGENT_ID'])
+    logging_utils.initialize_logging(cwd=install_directory,uuid=settings['AGENT_ID'])
 
     hash_db_conn = get_or_create_hash_db(hash_db_file_path)
 
@@ -696,42 +698,16 @@ def parse_schedule(settings):
     return schedule
 
 def read_yaml_settings_file(fn):
+    if not os.path.exists(fn):
+        logging.log(logging.ERROR, "Unable to locate settings file. Exiting!")
+        exit()
+
     with open(fn, 'r') as settings_file:
         return yaml.safe_load(settings_file)
 
-def _get_hash_db_path_from_install():
+def _get_install_directory():
     """
-        Parses stable_settings.cfg to get install directory.
-        Returns path: <install directory> + 'schash.db'.
-    """
-    success = False
-
-    # Get installation path from settings
-    appdata_path = os.getenv('APPDATA')
-    stable_settings_path = os.path.join(appdata_path, 'Stormcloud', 'stable_settings.cfg')
-
-    try:
-        with open(stable_settings_path, 'r') as f:
-            stable_settings = json.load(f)
-        install_path = stable_settings.get('install_path', '')
-            
-        # By default, should be named settings.cfg in install directory.
-        hash_db_path = os.path.join(install_path, 'schash.db')
-        success = True
-
-    except Exception as e:
-        print(traceback.format_exc())
-        pass
-    finally:
-        if success:
-            return hash_db_path
-        else:
-            return None
-
-def _get_settings_path_from_install():
-    """
-        Parses stable_settings.cfg to get install directory.
-        Returns path: <install directory> + 'settings.cfg'.
+        Parses stable_settings.cfg to get install directory.    
     """
     success = False
 
@@ -743,9 +719,6 @@ def _get_settings_path_from_install():
         with open(stable_settings_path, 'r') as f:
             stable_settings = json.load(f)
         install_path = stable_settings.get('install_path', '')
-            
-        # By default, should be named settings.cfg in install directory.
-        settings_file_path = os.path.join(install_path, 'settings.cfg')
         success = True
 
     except Exception as e:
@@ -753,7 +726,7 @@ def _get_settings_path_from_install():
         pass
     finally:
         if success:
-            return settings_file_path
+            return install_path
         else:
             return None
 
@@ -793,7 +766,7 @@ if __name__ == "__main__":
     description += 'Welcome to Stormcloud, the best backup system!'
     parser = argparse.ArgumentParser(description=description, formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("-s", "--settings-file",type=str,default="use_app_data",help="Path to settings file (default=<install directory>/settings.cfg)")
-    parser.add_argument("-d", "--hash-db", type=str, default="use_app_data", help="Path to hash db file (default=./schash.db")
+    parser.add_argument("-d", "--hash-db", type=str, default="use_app_data", help="Path to hash db file (default=<install directory>/schash.db")
     parser.add_argument("-o", "--ignore-hash-db", action="store_true", help="override the hash db, to backup files even if they haven't changed")
 
     args = parser.parse_args()

@@ -21,9 +21,18 @@ def send_logs_to_server(api_key,agent_id):
 def get_logfiles(uuid):
     return glob.glob("%s*.log" % uuid)
 
-def initialize_logging(uuid):
+def initialize_logging(cwd, uuid):
+    log_file_directory = cwd
+    log_file_name = '%s_%s.log' % (uuid,datetime.now().strftime("%Y-%m-%d"))
+
+    # Ensure log_file_directory ends with \\
+    if not log_file_directory.endswith("\\"):
+        log_file_directory += "\\"
+
+    log_file_path = log_file_directory + log_file_name
+
     logging.basicConfig(
-        filename='%s_%s.log' % (uuid,datetime.now().strftime("%Y-%m-%d")),
+        filename=log_file_path,
         filemode='a',
         format='%(asctime)s %(levelname)-8s %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S',
