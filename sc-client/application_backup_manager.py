@@ -766,27 +766,71 @@ class OperationHistoryPanel(QWidget):
         self.theme_manager = theme_manager
         self.user_expanded_states = {}
         self.scroll_position = 0
+        self.custom_style = CustomTreeCarrot(self.theme_manager)
+        
+        # Track current filter state
+        self.current_filters = {
+            'search_text': '',
+            'date_range': 'All Time',
+            'status': 'All Statuses'
+        }
+        
         self.init_ui()
         
         # Set up refresh timer
         self.refresh_timer = QTimer()
         self.refresh_timer.timeout.connect(self.check_and_refresh_history)
-        self.refresh_timer.start(2000)  # Check every 2 seconds
+        self.refresh_timer.start(2000)
 
     def init_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
 
-        # Header section with title and dropdown
-        header_layout = QHBoxLayout()
+        # Create a single row for all filters and controls
+        filter_layout = QHBoxLayout()
+        filter_layout.setSpacing(10)  # Consistent spacing between elements
+
+        # Search box with flexible width
+        self.search_box = QLineEdit()
+        self.search_box.setObjectName("SearchBox")
+        self.search_box.setPlaceholderText("Search history...")
+        self.search_box.textChanged.connect(self.filter_operations)
+        filter_layout.addWidget(self.search_box, 1)  # Give search box expanded width
         
+        # Add some spacing between history type and search
+        filter_layout.addSpacing(20)
+        
+        # History Type dropdown with label
+        history_type_layout = QHBoxLayout()
+        history_type_label = QLabel("History Type:")
+        history_type_label.setObjectName("filter-label")
         self.history_type_combo = QComboBox()
-        self.history_type_combo.addItems(["Backup History", "Restore History"])
-        self.history_type_combo.currentTextChanged.connect(self.on_history_type_changed)
+        self.history_type_combo.addItems(["Backup", "Restore"])
         self.history_type_combo.setFixedWidth(150)
-        header_layout.addWidget(self.history_type_combo)
-        header_layout.addStretch()
-        layout.addLayout(header_layout)
+        self.history_type_combo.currentTextChanged.connect(self.on_history_type_changed)
+        history_type_layout.addWidget(history_type_label)
+        history_type_layout.addWidget(self.history_type_combo)
+        filter_layout.addLayout(history_type_layout)
+        
+        # Date Range filter
+        date_label = QLabel("Date Range:")
+        date_label.setObjectName("filter-label")
+        self.date_range = QComboBox()
+        self.date_range.addItems(["All Time", "Last 24 Hours", "Last 7 Days", "Last 30 Days"])
+        self.date_range.currentTextChanged.connect(self.filter_operations)
+        filter_layout.addWidget(date_label)
+        filter_layout.addWidget(self.date_range)
+        
+        # Status filter
+        status_label = QLabel("Status:")
+        status_label.setObjectName("filter-label")
+        self.status_filter = QComboBox()
+        self.status_filter.addItems(["All Statuses", "Success", "Failed", "In Progress"])
+        self.status_filter.currentTextChanged.connect(self.filter_operations)
+        filter_layout.addWidget(status_label)
+        filter_layout.addWidget(self.status_filter)
+        
+        layout.addLayout(filter_layout)
 
         # Divider
         divider = QFrame()
@@ -794,22 +838,17 @@ class OperationHistoryPanel(QWidget):
         divider.setObjectName("HorizontalDivider")
         layout.addWidget(divider)
 
-        # Create tree widget for history display
+        # Tree widget setup remains the same
         self.tree = QTreeWidget()
         self.tree.setObjectName("HistoryTree")
-        
-        # Use the CustomTreeCarrot from FileExplorer
-        self.custom_style = CustomTreeCarrot(self.theme_manager)
         self.tree.setStyle(self.custom_style)
-        
         self.tree.setHeaderLabels([
             "Time",
             "Source",
             "Status",
-            "User",  # New column
+            "User",
             "Details"
         ])
-        self.tree.setAlternatingRowColors(False)
         self.tree.itemDoubleClicked.connect(self.on_item_double_clicked)
         self.tree.itemExpanded.connect(self.on_item_expanded)
         self.tree.itemCollapsed.connect(self.on_item_collapsed)
@@ -818,7 +857,7 @@ class OperationHistoryPanel(QWidget):
         self.tree.sortByColumn(0, Qt.DescendingOrder)
 
         for i in range(5):
-           self.tree.header().setSectionResizeMode(i, QHeaderView.ResizeToContents)
+            self.tree.header().setSectionResizeMode(i, QHeaderView.ResizeToContents)
 
         layout.addWidget(self.tree)
        
@@ -899,57 +938,58 @@ class OperationHistoryPanel(QWidget):
             self.tree.resizeColumnToContents(i)
 
     def refresh_history_with_events(self, events):
-        """Refresh history with provided events while preserving user preferences"""
-        # Store current expansion states before refresh
-        expanded_states = {}
-        for i in range(self.tree.topLevelItemCount()):
-            item = self.tree.topLevelItem(i)
-            op_id = item.data(0, Qt.UserRole)
-            if op_id:
-                expanded_states[op_id] = item.isExpanded()
-
-        # Clear and rebuild tree
+        """Refresh history while preserving expansion and filter states"""
         self.tree.clear()
         current_ops = set()
 
         for event in events:
             current_ops.add(event.operation_id)
-            
-            # Create operation summary item
             summary_item = self.create_operation_summary_item(event)
             
-            # Add file details as child items
+            # Add file details as child items, passing the parent's source
             for file_record in sorted(event.files, key=lambda x: x.timestamp, reverse=True):
-                file_item = self.create_file_item(file_record, event.source.value)  # Pass the source
+                file_item = self.create_file_item(file_record, event.source.value)
                 summary_item.addChild(file_item)
             
             self.tree.addTopLevelItem(summary_item)
             
-            # Set expansion state
-            should_expand = expanded_states.get(event.operation_id, False)
-            summary_item.setExpanded(should_expand)
-            
-            # Store the state for future refreshes
-            if should_expand:
+            # Restore expansion state
+            should_expand = False
+            if event.operation_id in self.user_expanded_states:
+                should_expand = self.user_expanded_states[event.operation_id]
+            elif event.status == OperationStatus.IN_PROGRESS:
+                should_expand = True
                 self.user_expanded_states[event.operation_id] = True
+            
+            summary_item.setExpanded(should_expand)
+
+        # Clean up tracking for removed operations
+        self.user_expanded_states = {
+            op_id: state 
+            for op_id, state in self.user_expanded_states.items() 
+            if op_id in current_ops
+        }
 
         # Resize columns to content
         for i in range(self.tree.columnCount()):
             self.tree.resizeColumnToContents(i)
+            
+        # Reapply current filters after refresh
+        self.apply_current_filters()
 
     def check_and_refresh_history(self):
         """Check for changes before refreshing"""
-        # Save current scroll position
         self.save_scroll_position()
         
-        # Get history and check if there are changes
-        events = self.history_manager.get_history(self.event_type)
-        
-        if events:  # Only refresh if there are changes
-            self.refresh_history_with_events(events)
+        if self.history_manager.has_changes(self.event_type):
+            events = self.history_manager.get_history(self.event_type)
+            if events:
+                self.refresh_history_with_events(events)
             
-        # Restore scroll position
         self.restore_scroll_position()
+        
+        # Reapply current filters after refresh
+        self.apply_current_filters()
 
     def create_operation_summary_item(self, event: HistoryEvent) -> QTreeWidgetItem:
         status_counts = {
@@ -998,30 +1038,42 @@ class OperationHistoryPanel(QWidget):
     def create_file_item(self, file_record: FileOperationRecord, parent_source: str) -> QTreeWidgetItem:
         """Create a tree item for a file record with its individual timestamp"""
         item = QTreeWidgetItem([
-            file_record.timestamp.strftime("%I:%M:%S %p"),
-            parent_source,  # Use the parent operation's source
-            file_record.status.value,
-            file_record.filepath
+            file_record.timestamp.strftime("%I:%M:%S %p"),  # Time
+            parent_source,                                   # Source (inherited from parent)
+            file_record.status.value,                       # Status
+            "",                                             # User (blank for file items)
+            file_record.filepath                            # File path
         ])
         
-        # Store file data
+        # Store file data for reference
         item.setData(0, Qt.UserRole, file_record.filepath)
         
-        # Set colors based on status
+        # Set status-based styling
         self.set_item_status_color(item, file_record.status)
         
-        # Add error message if present
+        # Add error message as a child item if present
         if file_record.error_message:
             error_item = QTreeWidgetItem([
-                "",
-                parent_source,  # Keep consistent with parent
-                "",
-                file_record.error_message
+                "",                 # Time
+                "",                 # Source
+                "",                 # Status
+                "",                 # User
+                f"Error: {file_record.error_message}"  # Error message
             ])
-            error_item.setForeground(3, QColor("#DC3545"))  # Red for errors
+            error_item.setForeground(4, QColor("#DC3545"))  # Red color for errors
             item.addChild(error_item)
         
         return item
+
+    def filter_operations(self):
+        """Store and apply new filter criteria"""
+        # Update stored filter state
+        self.current_filters['search_text'] = self.search_box.text().lower()
+        self.current_filters['date_range'] = self.date_range.currentText()
+        self.current_filters['status'] = self.status_filter.currentText()
+        
+        # Apply the filters
+        self.apply_current_filters()
 
     def apply_filters(self):
         """Apply all filters to the history tree"""
@@ -1062,6 +1114,75 @@ class OperationHistoryPanel(QWidget):
             
             top_item.setHidden(not show_item)
 
+    def apply_current_filters(self):
+        """Apply stored filters to the current tree"""
+        search_text = self.current_filters['search_text']
+        date_filter = self.current_filters['date_range']
+        status_filter = self.current_filters['status']
+        
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            show_item = True
+            
+            # Build searchable text from all columns
+            item_text = ' '.join([
+                item.text(col) for col in range(item.columnCount())
+            ]).lower()
+            
+            # Include child items in search
+            child_matches = []
+            for j in range(item.childCount()):
+                child = item.child(j)
+                child_text = ' '.join([
+                    child.text(col) for col in range(child.columnCount())
+                ]).lower()
+                item_text += ' ' + child_text
+                
+                # Store whether each child matches the search text
+                child_matches.append(not search_text or search_text in child_text)
+            
+            # Apply text filter
+            if search_text and search_text not in item_text:
+                show_item = False
+            
+            # Apply status filter
+            if status_filter != "All Statuses":
+                if item.text(2) != status_filter:
+                    show_item = False
+                    
+            # Apply date filter
+            if show_item and date_filter != "All Time":
+                try:
+                    item_date = datetime.strptime(item.text(0), "%Y-%m-%d %H:%M")
+                    now = datetime.now()
+                    
+                    date_visible = True
+                    if date_filter == "Last 24 Hours":
+                        date_visible = item_date >= now - timedelta(days=1)
+                    elif date_filter == "Last 7 Days":
+                        date_visible = item_date >= now - timedelta(days=7)
+                    elif date_filter == "Last 30 Days":
+                        date_visible = item_date >= now - timedelta(days=30)
+                    
+                    if not date_visible:
+                        show_item = False
+                except ValueError:
+                    logging.error(f"Failed to parse date: {item.text(0)}")
+            
+            # Show/hide the item and its children
+            item.setHidden(not show_item)
+            
+            if show_item:
+                # Only show children that match the search text if parent is visible
+                for j in range(item.childCount()):
+                    child = item.child(j)
+                    child.setHidden(not child_matches[j])
+            else:
+                # Hide all children if parent is hidden
+                for j in range(item.childCount()):
+                    child = item.child(j)
+                    child.setHidden(True)
+
     def on_item_expanded(self, item: QTreeWidgetItem):
         """Handle item expansion"""
         # Resize columns to content when expanded
@@ -1083,8 +1204,8 @@ class OperationHistoryPanel(QWidget):
     def on_history_type_changed(self, history_type: str):
         """Handle history type selection change"""
         history_type_map = {
-            "Backup History": "backup",
-            "Restore History": "restore"
+            "Backup": "backup",
+            "Restore": "restore"
         }
         self.event_type = history_type_map[history_type]
         # Force a refresh when switching history types
@@ -1112,6 +1233,64 @@ class OperationHistoryPanel(QWidget):
         scrollbar = self.tree.verticalScrollBar()
         if scrollbar:
             scrollbar.setValue(self.scroll_position)
+
+    def apply_theme(self):
+        """Apply theme to all widgets"""
+        theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
+        
+        # Style for labels
+        label_style = f"""
+            QLabel#filter-label {{
+                color: {theme['text_primary']};
+                margin-right: 4px;
+            }}
+        """
+        
+        # Style for search box
+        search_style = f"""
+            QLineEdit {{
+                background-color: {theme['input_background']};
+                color: {theme['text_primary']};
+                border: 1px solid {theme['input_border']};
+                border-radius: 4px;
+                padding: 5px 8px;
+                min-height: 20px;
+            }}
+            QLineEdit:focus {{
+                border-color: {theme['accent_color']};
+            }}
+        """
+        
+        # Style for combo boxes
+        combo_style = f"""
+            QComboBox {{
+                background-color: {theme['input_background']};
+                color: {theme['text_primary']};
+                border: 1px solid {theme['input_border']};
+                border-radius: 4px;
+                padding: 4px 8px;
+                min-height: 20px;
+            }}
+            QComboBox:hover {{
+                border-color: {theme['accent_color']};
+            }}
+            QComboBox::drop-down {{
+                border: none;
+                padding-right: 4px;
+            }}
+            QComboBox::down-arrow {{
+                image: url(down-arrow-{self.theme_manager.current_theme.lower()}.png);
+            }}
+        """
+        
+        # Apply styles
+        for label in self.findChildren(QLabel, "filter-label"):
+            label.setStyleSheet(label_style)
+        
+        self.search_box.setStyleSheet(search_style)
+        
+        for combo in [self.date_range, self.status_filter, self.history_type_combo]:
+            combo.setStyleSheet(combo_style)
 
 class BackgroundOperation:
     """Handles background processing for backup/restore operations"""
