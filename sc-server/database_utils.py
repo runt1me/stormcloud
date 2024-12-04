@@ -245,6 +245,31 @@ def add_file_to_restore_queue(agent_id, file_path):
         __teardown__(cursor,cnx)
         return affected
 
+def add_new_build_request(version, environment, software, pin):
+    # IN version varchar(64),
+    # IN environment varchar(64),
+    # IN software varchar(64),
+    # IN pin varchar(32)
+    ret = []
+
+    cnx = __connect_to_db__()
+    cursor = cnx.cursor(buffered=True)
+
+    affected = 0
+    try:
+        __logger__().info("CALL add_new_build_request('%s','%s','%s','%s');" % (version,environment,software,pin))
+        cursor.callproc('add_new_build_request',
+            (version,environment,software,pin)
+        )
+
+        affected = cursor.rowcount
+    except Exception as e:
+        __logger__().error(traceback.format_exc())
+    finally:
+        cnx.commit()
+        __teardown__(cursor,cnx)
+        return affected
+
 def get_list_of_files_to_restore(device_id):
     # IN device_id INT
     ret = []

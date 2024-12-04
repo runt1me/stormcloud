@@ -343,6 +343,26 @@ def create_customer():
     else:
         return RESPONSE_400_BAD_REQUEST
 
+@app.route('/api/build-software', methods=['POST'])
+def build_software():
+    logger.info(flask.request)
+    if flask.request.headers['Content-Type'] != 'application/json':
+        return RESPONSE_400_MUST_BE_JSON
+
+    data = flask.request.get_json()
+    if data:
+        result, response = validate_request_generic(data, agent_id_required=False)
+        if not result:
+            return response
+
+        if not validate_request_admin(data):
+            return RESPONSE_401_BAD_REQUEST
+
+        ret_code, response_data = generic_handlers.handle_build_software_request(data)
+        return response_data, ret_code, {'Content-Type': 'application/json'}
+    else:
+        return RESPONSE_400_BAD_REQUEST
+
 @app.route('/api/fetch-backup-folders', methods=['POST'])
 def fetch_backup_folders():
     data = request.json
