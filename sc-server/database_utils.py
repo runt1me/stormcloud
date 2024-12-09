@@ -293,6 +293,48 @@ def get_list_of_files_to_restore(device_id):
         __teardown__(cursor,cnx)
         return ret[0]
 
+def get_pending_builds():
+    ret = []
+
+    cnx = __connect_to_db__()
+    cursor = cnx.cursor(buffered=True)
+
+    try:
+        cursor.callproc('get_pending_builds')
+
+        for result in cursor.stored_results():
+            row = result.fetchall()
+            ret.append(row)
+
+        if not ret:
+            return []
+
+    except Exception as e:
+        __logger__().error("Got exception in get_pending_builds: %s" %traceback.format_exc())
+    finally:
+        __teardown__(cursor,cnx)
+        return ret[0]
+
+def mark_build_complete(build_id):
+  # IN SoftwareBuildID INT
+  ret = []
+
+  cnx = __connect_to_db__()
+  cursor = cnx.cursor(buffered=True)
+
+  try:
+    cursor.callproc('mark_build_complete', (build_id,))
+    affected = cursor.rowcount
+
+    __logger__().info("Rows affected: %s" % affected)
+
+  except Exception as e:
+    __logger__().error("Got exception in mark_build_complete: %s" %traceback.format_exc())
+  finally:
+    cnx.commit()
+    __teardown__(cursor,cnx)
+    return ret
+
 def get_server_path_for_file(device_id, file_path):
   # IN device_id INT
   # IN file_path varchar(255)
