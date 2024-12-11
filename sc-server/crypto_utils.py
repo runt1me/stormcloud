@@ -64,6 +64,9 @@ def generate_customer_guid():
 
     return token
 
+def generate_build_guid():
+    return generate_customer_guid()
+
 def decrypt_msg(path_to_device_secret_key,raw_msg,decode):
     f = get_fernet(path_to_device_secret_key)
 

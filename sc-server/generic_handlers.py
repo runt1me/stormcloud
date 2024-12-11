@@ -1,7 +1,9 @@
 import json
+import base64
 
 import database_utils as db
 import logging_utils
+import crypto_utils
 
 def __logger__():
     return logging_utils.logger
@@ -23,6 +25,27 @@ def handle_validate_api_key_request(request):
 
     return 200, json.dumps({'validate_api_key-response': 'Valid API key.'})
 
+def handle_update_build_result_request(request):
+    __logger__().info("Server handling update build result request.")
+
+    required_fields = ['build_guid', 'result', 'message']
+    for f in required_fields:
+      if f not in request.keys():
+        return 401,json.dumps({'response': 'Bad request.'})
+
+    build_msg    = base64.b64decode(request['message']).decode("utf-8")
+    build_guid   = request['build_guid']
+    build_result = request['result']
+
+    db.mark_build_complete(build_guid, build_result, build_msg)
+    __logger__().info("Marked build %s as complete." % build_guid)
+
+    response_data = json.dumps({
+      'update_build_result-response': 'Thanks for the update.',
+    })
+
+    return 200, response_data
+
 def handle_get_builds_request(request):
     __logger__().info("Server handling get builds request.")
 
@@ -42,13 +65,9 @@ def handle_get_builds_request(request):
       build_dict['version']     = b[2]
       build_dict['environment'] = b[3]
       build_dict['signing_pin'] = b[4]
+      build_dict['build_guid']  = b[5]
 
       builds.append(build_dict)
-
-      # TODO: currently just marking it as complete here,
-      # in theory I could have the build service fire off
-      # an API request to hit this when it is done
-      db.mark_build_complete(build_id)
 
     response_data = json.dumps({
       'get_builds-response': 'Heres a build or two for ya',
@@ -72,6 +91,8 @@ def handle_build_software_request(request):
         env      = str(request['environment']).lower()
         software = str(request['software']).lower()
 
+        guid     = crypto_utils.generate_build_guid()
+
         if env not in ['dev', 'prod', 'all']:
             raise Exception("Invalid environment parameter.")
 
@@ -87,7 +108,8 @@ def handle_build_software_request(request):
           request['version'],
           env,
           software,
-          pin
+          pin,
+          guid
       )
 
       __logger__().info("Database returned: %d" % success)

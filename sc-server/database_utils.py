@@ -245,11 +245,12 @@ def add_file_to_restore_queue(agent_id, file_path):
         __teardown__(cursor,cnx)
         return affected
 
-def add_new_build_request(version, environment, software, pin):
+def add_new_build_request(version, environment, software, pin, guid):
     # IN version varchar(64),
     # IN environment varchar(64),
     # IN software varchar(64),
-    # IN pin varchar(32)
+    # IN pin varchar(32),
+    # IN guid varchar(64)
     ret = []
 
     cnx = __connect_to_db__()
@@ -257,9 +258,9 @@ def add_new_build_request(version, environment, software, pin):
 
     affected = 0
     try:
-        __logger__().info("CALL add_new_build_request('%s','%s','%s','%s');" % (version,environment,software,pin))
+        __logger__().info("CALL add_new_build_request('%s','%s','%s','%s','%s');" % (version,environment,software,pin,guid))
         cursor.callproc('add_new_build_request',
-            (version,environment,software,pin)
+            (version,environment,software,pin,guid)
         )
 
         affected = cursor.rowcount
@@ -315,15 +316,17 @@ def get_pending_builds():
         __teardown__(cursor,cnx)
         return ret[0]
 
-def mark_build_complete(build_id):
-  # IN SoftwareBuildID INT
+def mark_build_complete(build_guid, build_result, build_msg):
+  # IN guid VARCHAR(64),
+  # IN result VARCHAR(64),
+  # IN message VARCHAR(1024)
   ret = []
 
   cnx = __connect_to_db__()
   cursor = cnx.cursor(buffered=True)
 
   try:
-    cursor.callproc('mark_build_complete', (build_id,))
+    cursor.callproc('mark_build_complete', (build_guid,build_result,build_msg))
     affected = cursor.rowcount
 
     __logger__().info("Rows affected: %s" % affected)
