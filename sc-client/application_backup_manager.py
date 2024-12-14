@@ -1,4 +1,3 @@
-import csv
 import json
 import logging
 import os
@@ -8,7 +7,6 @@ import pytz
 import signal
 import smtplib
 import sqlite3
-import stripe
 import subprocess
 import sys
 import time
@@ -20,8 +18,6 @@ import yaml
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from enum import Enum
 from infi.systray import SysTrayIcon
 from multiprocessing import Process, Queue, Manager
@@ -266,7 +262,8 @@ class LoginDialog(QDialog):
         self.settings_path = settings_path
         self.api_key = None
         self.user_info = None
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)  # Remove ? button
+        self.auth_tokens = None  # Add storage for auth tokens
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self.init_ui()
         self.apply_theme()
         self.setWindowIcon(self.get_app_icon())
@@ -490,8 +487,7 @@ class LoginDialog(QDialog):
         self.login_button.setEnabled(True)
 
     def attempt_login(self):
-        """Handle login attempt"""
-        
+        """Handle login attempt with enhanced authentication storage"""
         logging.info("Starting login attempt")
         self.error_label.hide()
         self.login_button.setEnabled(False)
@@ -501,28 +497,25 @@ class LoginDialog(QDialog):
         email = self.email_input.text().strip()
         password = self.password_input.text()
         
-        logging.info(f"Validating input fields - Email provided: {'Yes' if email else 'No'}, Password provided: {'Yes' if password else 'No'}")
-        
         if not email or not password:
             logging.warning("Login attempt failed: Missing email or password")
             self.show_error("Please enter both email and password.")
             return
         
         try:
-            # Use stored settings path
-            logging.info(f"Using settings path: {self.settings_path}")
-            
-            logging.info("Making authentication request to server")
             response = network_utils.authenticate_user(email, password, self.settings_path)
             
-            logging.info(f"Server response received - Success: {response.get('success', False)}")
-            
             if response.get('success'):
-                logging.info("Authentication successful - storing credentials")
                 self.user_info = {
-                    'email': email,  # Make sure we store the email used to log in
+                    'email': email,
                     'verified': response['data']['user_info'].get('verified', False),
                     'mfa_enabled': response['data']['user_info'].get('mfa_enabled', False)
+                }
+                # Store complete auth data
+                self.auth_tokens = {
+                    'access_token': response['data'].get('access_token'),
+                    'refresh_token': response['data'].get('refresh_token'),
+                    'session_id': response['data'].get('session_id')
                 }
                 logging.info(f"Login successful for email: {email}")
                 self.accept()
@@ -1397,20 +1390,18 @@ class BackgroundOperation:
     def __init__(self, operation_type, paths, settings):
         self.operation_type = operation_type
         self.paths = paths if isinstance(paths, list) else [paths]
-        self.settings = settings.copy()  # Make a copy to avoid modifying original
+        self.settings = settings.copy()
         self.queue = Queue()
         self.process = None
         self.total_files = 0
         self.processed_files = 0
         self.manager = Manager()
         self.should_stop = self.manager.Value('b', False)
-        self.user_email = settings.get('user_email')  # Add user email from settings
+        self.user_email = settings.get('user_email')
+        self.auth_tokens = settings.get('auth_tokens')  # Get auth tokens from settings
 
-        # Generate operation ID ONCE at initialization
         self.operation_id = self.settings.get('operation_id') or datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         self.settings['operation_id'] = self.operation_id
-        
-        # Set the operation start time
         self.start_time = datetime.now()
         self.settings['operation_start_time'] = self.start_time
 
@@ -1487,10 +1478,17 @@ class BackgroundOperation:
 
     @staticmethod
     def _backup_worker(paths, settings, queue, should_stop):
-        """Worker process for backup operations"""
+        """Worker process with authentication handling"""
         try:
-            # Use operation_id from settings consistently
             operation_id = settings['operation_id']
+            
+            # Initialize authentication context
+            backup_utils.initialize_auth_context(
+                api_key=settings['API_KEY'],
+                agent_id=settings['AGENT_ID'],
+                auth_tokens=settings.get('auth_tokens')
+            )
+            
             total_files = 0
             success_count = 0
             fail_count = 0
@@ -2040,8 +2038,11 @@ class StormcloudApp(QMainWindow):
         super().__init__()
         self.theme_manager = ThemeManager()
         self.user_email = None
+        self.auth_tokens = None  # Add auth tokens storage
         self.setWindowTitle('Stormcloud Backup Manager')
-        # self.setGeometry(100, 100, 800, 600)
+        
+        # Initialize auth file path
+        self.auth_file = os.path.join(os.getenv('APPDATA'), 'Stormcloud', 'auth.dat')
         
         # Add json_directory initialization
         appdata_path = os.getenv('APPDATA')
@@ -2127,11 +2128,70 @@ class StormcloudApp(QMainWindow):
             if dialog.user_info:
                 self.user_info = dialog.user_info
                 self.user_email = dialog.user_info['email']
+                self.auth_tokens = dialog.auth_tokens  # Store auth tokens
+                
+                # Save auth data securely
+                self.save_auth_data()
+                
                 logging.info(f"StormcloudApp stored user email: {self.user_email}")
-                
                 return True
-                
             return False
+
+    def save_auth_data(self):
+        """Save authentication data securely"""
+        try:
+            from cryptography.fernet import Fernet
+            from base64 import b64encode
+            
+            # Generate key from machine-specific data
+            machine_id = win32api.GetComputerName() + win32api.GetUserName()
+            key = b64encode(machine_id.encode()[:32].ljust(32, b'0'))
+            cipher_suite = Fernet(key)
+            
+            auth_data = {
+                'user_email': self.user_email,
+                'auth_tokens': self.auth_tokens,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            encrypted_data = cipher_suite.encrypt(json.dumps(auth_data).encode())
+            
+            with open(self.auth_file, 'wb') as f:
+                f.write(encrypted_data)
+                
+            logging.info("Authentication data saved successfully")
+            
+        except Exception as e:
+            logging.error(f"Failed to save authentication data: {e}")
+
+    def load_auth_data(self):
+        """Load saved authentication data"""
+        try:
+            if not os.path.exists(self.auth_file):
+                return None
+                
+            from cryptography.fernet import Fernet
+            from base64 import b64encode
+            
+            machine_id = win32api.GetComputerName() + win32api.GetUserName()
+            key = b64encode(machine_id.encode()[:32].ljust(32, b'0'))
+            cipher_suite = Fernet(key)
+            
+            with open(self.auth_file, 'rb') as f:
+                encrypted_data = f.read()
+                
+            decrypted_data = json.loads(cipher_suite.decrypt(encrypted_data))
+            
+            # Verify timestamp is within last 24 hours
+            saved_time = datetime.fromisoformat(decrypted_data['timestamp'])
+            if datetime.now() - saved_time > timedelta(hours=24):
+                return None
+                
+            return decrypted_data
+            
+        except Exception as e:
+            logging.error(f"Failed to load authentication data: {e}")
+            return None
 
     def get_install_path(self):
         """Get Stormcloud installation path from stable settings"""
