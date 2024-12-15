@@ -12,6 +12,43 @@ import traceback
 BACKUP_STATUS_NO_CHANGE = 0
 BACKUP_STATUS_CHANGE    = 1
 
+class AuthContext:
+    _instance = None
+    
+    def __init__(self):
+        self.auth_tokens = None
+        self.api_key = None
+        self.agent_id = None
+        
+    @classmethod
+    def get_instance(cls):
+        if not cls._instance:
+            cls._instance = AuthContext()
+        return cls._instance
+        
+    def initialize(self, api_key, agent_id, auth_tokens=None):
+        """Initialize context with required credentials"""
+        self.api_key = api_key
+        self.agent_id = agent_id
+        self.auth_tokens = auth_tokens
+        
+    def get_credentials(self):
+        """Get current authentication credentials"""
+        return {
+            'api_key': self.api_key,
+            'agent_id': self.agent_id,
+            'auth_tokens': self.auth_tokens
+        }
+
+def initialize_auth_context(api_key, agent_id, auth_tokens=None):
+    """Initialize the authentication context for the current process"""
+    auth_context = AuthContext.get_instance()
+    auth_context.initialize(api_key, agent_id, auth_tokens)
+
+def get_auth_context():
+    """Get the current authentication context"""
+    return AuthContext.get_instance()
+
 def perform_backup(paths, paths_recursive, api_key, agent_id, dbconn, ignore_hash, systray):
     """Enhanced backup function with better error handling"""
     logging.info("Beginning backup!")
