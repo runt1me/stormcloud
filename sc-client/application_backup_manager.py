@@ -11,19 +11,27 @@ import subprocess
 import sys
 import time
 import traceback
+import queue
 import win32api
-import win32gui
 import win32con
+import win32event
+import win32file
+import win32gui
 import yaml
 
+import concurrent.futures
+
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from infi.systray import SysTrayIcon
-from multiprocessing import Process, Queue, Manager
-from queue import Empty
-from typing import Optional, List, Dict
+from multiprocessing import Process, Queue, Manager, Event
 from pathlib import Path
+from queue import Empty
+from threading import Thread, Lock
+from typing import Optional, Set, List, Dict
+
 
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QMenu,
                              QLabel, QPushButton, QToolButton, QListWidget, QListWidgetItem,
@@ -33,31 +41,31 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QTreeView, QHeaderView, QStyle, QStyledItemDelegate, QLineEdit,
                              QAbstractItemView, QSplitter, QTreeWidget, QTreeWidgetItem, QDialog,
                              QTextEdit, QProxyStyle, QTabWidget, QTableWidget, QTableWidgetItem, QToolBar,
-                             QDialogButtonBox, QProgressBar)
-from PyQt5.QtCore import Qt, QUrl, QPoint, QDate, QTime, pyqtSignal, QRect, QSize, QModelIndex, QObject, QTimer, QPropertyAnimation, QEasingCurve, pyqtProperty, QRectF
+                             QDialogButtonBox, QProgressBar, QFileIconProvider)
+from PyQt5.QtCore import Qt, QUrl, QPoint, QDate, QTime, pyqtSignal, QRect, QSize, QModelIndex, QObject, QTimer, QPropertyAnimation, QEasingCurve, pyqtProperty, QRectF, QDir, QEvent, QDateTime, QThread
 from PyQt5.QtGui import (QDesktopServices, QFont, QIcon, QColor,
                          QPalette, QPainter, QPixmap, QTextCharFormat,
-                         QStandardItemModel, QStandardItem, QPen, QPolygon, QPainterPath)
+                         QStandardItemModel, QStandardItem, QPen, QPolygon, QPainterPath, QBrush)
 from PyQt5.QtWinExtras import QtWin
 
-
-# Stormcloud imports
-#   Core imports
+# stormcloud imports
+#   core imports
+# -----------
 import restore_utils
 import backup_utils
 import network_utils
 
 from client_db_utils import get_or_create_hash_db
+from stormcloud import save_file_metadata, read_yaml_settings_file
+# -----------
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', 
+# logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', 
+                    # filename='stormcloud_app.log', filemode='a')
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s', 
                     filename='stormcloud_app.log', filemode='a')
 
-def ordinal(n):
-    if 10 <= n % 100 <= 20:
-        suffix = 'th'
-    else:
-        suffix = {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
-    return f"{n}{suffix}"
+# dataclasses/helper classes
+# -----------
 
 class InitiationSource(Enum):
     REALTIME = "Realtime"
@@ -85,6 +93,17 @@ class FileRecord:
    operation_id: Optional[str] = None
 
 @dataclass
+class HistoryEvent:
+    timestamp: datetime
+    source: InitiationSource
+    status: OperationStatus
+    operation_type: Optional[str] = None  # Add operation_type field
+    operation_id: str = field(default_factory=lambda: datetime.now().strftime("%Y%m%d_%H%M%S_%f"))
+    files: List[FileOperationRecord] = field(default_factory=list)
+    error_message: Optional[str] = None
+    user_email: Optional[str] = None
+
+@dataclass
 class Operation:
     operation_id: str
     timestamp: datetime
@@ -105,17 +124,6 @@ class Operation:
             self.user_email = "System"
 
 @dataclass
-class HistoryEvent:
-    timestamp: datetime
-    source: InitiationSource
-    status: OperationStatus
-    operation_type: Optional[str] = None  # Add operation_type field
-    operation_id: str = field(default_factory=lambda: datetime.now().strftime("%Y%m%d_%H%M%S_%f"))
-    files: List[FileOperationRecord] = field(default_factory=list)
-    error_message: Optional[str] = None
-    user_email: Optional[str] = None
-    
-@dataclass
 class OperationEvent:
     """Base class for any file operation (backup or restore)"""
     timestamp: datetime
@@ -125,6 +133,25 @@ class OperationEvent:
     operation_id: str = field(default_factory=lambda: datetime.now().strftime("%Y%m%d_%H%M%S_%f"))
     files: List[FileOperationRecord] = field(default_factory=list)
     error_message: Optional[str] = None
+
+@dataclass
+class SearchProgress:
+    folders_searched: int
+    files_found: int
+    current_path: str
+    is_complete: bool
+
+# -----------
+
+# standalone functions
+# -----------
+
+def ordinal(n):
+    if 10 <= n % 100 <= 20:
+        suffix = 'th'
+    else:
+        suffix = {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
+    return f"{n}{suffix}"
 
 def init_db(db_path):
    with sqlite3.connect(db_path) as conn:
@@ -150,6 +177,419 @@ def init_db(db_path):
            error_message TEXT,
            FOREIGN KEY (operation_id) REFERENCES operations(operation_id)
        )""")
+
+# -----------
+
+# workers
+# -----------
+class LocalSearchWorker(QObject):
+    finished = pyqtSignal()
+    results_ready = pyqtSignal(list, bool, dict)  # Added stats parameter
+    
+    def __init__(self, search_text, filesystem_index):
+        super().__init__()
+        self.search_text = search_text
+        self.filesystem_index = filesystem_index
+    
+    def run(self):
+        try:
+            results, truncated, stats = self.filesystem_index.search(self.search_text)
+            self.results_ready.emit(results, truncated, stats)
+        except Exception as e:
+            logging.error(f"Search error: {e}")
+            self.results_ready.emit([], False, {'total_files': 0, 'total_folders': 0})
+        finally:
+            self.finished.emit()
+
+class RemoteSearchWorker(QObject):
+    finished = pyqtSignal()
+    results_ready = pyqtSignal(list)
+    
+    def __init__(self, search_text, model):
+        super().__init__()
+        self.search_text = search_text.lower()
+        self.model = model
+        self.results = []
+
+    def run(self):
+        def search_recursive(parent):
+            for row in range(parent.rowCount()):
+                item = parent.child(row)
+                if self.search_text in item.text().lower():
+                    self.results.append(item.text())
+                if item.hasChildren():
+                    search_recursive(item)
+
+        search_recursive(self.model.invisibleRootItem())
+        self.results_ready.emit(self.results)
+        self.finished.emit()
+        
+class HistoryWorker(QObject):
+    batch_ready = pyqtSignal(object)  # Single operation ready
+    error_occurred = pyqtSignal(str)
+    finished = pyqtSignal()
+    
+    def __init__(self, history_manager, operation_type):
+        super().__init__()
+        self.history_manager = history_manager
+        self.operation_type = operation_type
+        
+    def run(self):
+        try:
+            with sqlite3.connect(self.history_manager.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # Get top 20 operations
+                cursor.execute("""
+                    SELECT operation_id, timestamp, source, status, operation_type, user_email, error_message
+                    FROM operations 
+                    WHERE operation_type = ?
+                    ORDER BY timestamp DESC
+                    LIMIT 20
+                """, (self.operation_type,))
+                
+                # Process each operation individually
+                for row in cursor.fetchall():
+                    op_id = row[0]
+                    operation = Operation(
+                        operation_id=op_id,
+                        timestamp=datetime.fromisoformat(row[1]),
+                        source=InitiationSource(row[2]),
+                        status=OperationStatus(row[3]),
+                        operation_type=row[4],
+                        user_email=row[5],
+                        error_message=row[6],
+                        files=[]
+                    )
+                    
+                    # Get files for this operation
+                    cursor.execute("""
+                        SELECT filepath, timestamp, status, error_message
+                        FROM file_records
+                        WHERE operation_id = ?
+                        ORDER BY timestamp DESC
+                    """, (op_id,))
+                    
+                    for file_row in cursor.fetchall():
+                        operation.files.append(FileRecord(
+                            filepath=file_row[0],
+                            timestamp=datetime.fromisoformat(file_row[1]),
+                            status=OperationStatus(file_row[2]),
+                            error_message=file_row[3],
+                            operation_id=op_id
+                        ))
+                    
+                    # Emit each operation as it's ready
+                    self.batch_ready.emit(operation)
+                    
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+        finally:
+            self.finished.emit()
+# -----------
+
+
+class PathCache:
+    """Thread-safe LRU cache for frequently accessed paths"""
+    def __init__(self, max_size: int = 10000):
+        self.cache: OrderedDict[str, dict] = OrderedDict()
+        self.max_size = max_size
+        self._lock = Lock()
+
+    def get(self, path: str) -> Optional[dict]:
+        with self._lock:
+            if path in self.cache:
+                self.cache.move_to_end(path)
+                return self.cache[path]
+            return None
+
+    def put(self, path: str, data: dict):
+        with self._lock:
+            if path in self.cache:
+                self.cache.move_to_end(path)
+            else:
+                if len(self.cache) >= self.max_size:
+                    self.cache.popitem(last=False)
+            self.cache[path] = data
+
+class FilesystemIndexer(Process):
+    def __init__(self, db_path: str, status_queue: Queue, shutdown_event: Event):
+        super().__init__()
+        self.db_path = db_path
+        self.status_queue = status_queue
+        self.shutdown_event = shutdown_event
+        self.batch_size = 10000
+        
+    def run(self):
+        """Run the indexer process with logging focus"""
+        try:
+            logging.info("Starting filesystem indexer process")
+            self._init_db()
+            self._sync_filesystem()
+        except Exception as e:
+            logging.error(f"Indexer process error: {e}")
+            self.status_queue.put(('error', str(e)))
+        finally:
+            logging.info("Filesystem indexer process completed")
+            self.status_queue.put(('complete', None))
+
+    def _init_db(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS filesystem_index (
+                    id INTEGER PRIMARY KEY,
+                    path TEXT NOT NULL UNIQUE
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_path ON filesystem_index(path)")
+
+    def _sync_filesystem(self):
+        """Synchronize filesystem state with database using batch processing."""
+        try:
+            # Scan filesystem
+            current_paths = set()
+            total_items = 0
+            
+            for drive in self._get_local_drives():
+                if self.shutdown_event.is_set():
+                    return
+                    
+                try:
+                    for item in Path(drive).rglob('*'):
+                        if self.shutdown_event.is_set():
+                            return
+                            
+                        try:
+                            current_paths.add(str(item.absolute()))
+                            total_items += 1
+                            
+                            if total_items % self.batch_size == 0:
+                                self.status_queue.put(('progress', {
+                                    'items_scanned': total_items,
+                                    'current_path': str(item)
+                                }))
+                                
+                        except PermissionError:
+                            continue
+                        except Exception as e:
+                            logging.error(f"Error processing {item}: {e}")
+                            
+                except Exception as e:
+                    logging.error(f"Error scanning drive {drive}: {e}")
+
+            # Get existing database entries
+            with sqlite3.connect(self.db_path) as conn:
+                existing_paths = set(row[0] for row in conn.execute("SELECT path FROM filesystem_index"))
+
+            # Calculate differences
+            paths_to_add = current_paths - existing_paths
+            paths_to_remove = existing_paths - current_paths
+
+            # Update database in batches
+            with sqlite3.connect(self.db_path) as conn:
+                # Add new paths
+                for i in range(0, len(paths_to_add), self.batch_size):
+                    batch = list(paths_to_add)[i:i + self.batch_size]
+                    conn.executemany(
+                        "INSERT INTO filesystem_index (path) VALUES (?)",
+                        [(path,) for path in batch]
+                    )
+                    conn.commit()
+                    logging.info(f"Added {i + len(batch):,} of {len(paths_to_add):,} new paths")
+                    self.status_queue.put(('batch_progress', {
+                        'operation': 'add',
+                        'processed': i + len(batch),
+                        'total': len(paths_to_add)
+                    }))
+
+                # Remove deleted paths
+                for i in range(0, len(paths_to_remove), self.batch_size):
+                    batch = list(paths_to_remove)[i:i + self.batch_size]
+                    placeholders = ','.join('?' * len(batch))
+                    conn.execute(
+                        f"DELETE FROM filesystem_index WHERE path IN ({placeholders})",
+                        batch
+                    )
+                    conn.commit()
+                    logging.info(f"Removed {i + len(batch):,} of {len(paths_to_remove):,} deleted paths")
+                    self.status_queue.put(('batch_progress', {
+                        'operation': 'remove',
+                        'processed': i + len(batch),
+                        'total': len(paths_to_remove)
+                    }))
+
+            self.status_queue.put(('sync_complete', {
+                'total_items': total_items,
+                'added_items': len(paths_to_add),
+                'removed_items': len(paths_to_remove)
+            }))
+
+        except Exception as e:
+            logging.error(f"Sync error: {e}")
+            self.status_queue.put(('error', str(e)))
+
+    def _get_local_drives(self) -> List[str]:
+        """Get list of local drive letters."""
+        drives = []
+        bitmask = win32api.GetLogicalDrives()
+        for letter in range(65, 91):
+            if bitmask & (1 << (letter - 65)):
+                drive = f"{chr(letter)}:\\"
+                if win32file.GetDriveType(drive) in (win32file.DRIVE_FIXED, win32file.DRIVE_REMOVABLE):
+                    drives.append(drive)
+        return drives
+
+    def _add_to_index(self, conn, path: Path):
+        try:
+            stats = path.stat()
+            conn.execute("""
+                INSERT OR REPLACE INTO filesystem_index 
+                (path, name, parent_path, is_directory, last_modified, created, indexed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                str(path),
+                path.name,
+                str(path.parent),
+                path.is_dir(),
+                datetime.fromtimestamp(stats.st_mtime),
+                datetime.fromtimestamp(stats.st_ctime),
+                datetime.now()
+            ))
+        except Exception as e:
+            logging.error(f"Error adding {path} to index: {e}")
+
+class FilesystemIndex:
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        self.status_queue = Queue()
+        self.shutdown_event = Event()
+        self.indexer = None
+        self._start_indexer()
+
+    def _start_indexer(self):
+        """Start the indexer process."""
+        self.indexer = FilesystemIndexer(self.db_path, self.status_queue, self.shutdown_event)
+        self.indexer.start()
+
+    def search(self, query: str, max_results: int = 100) -> tuple[list, bool]:
+        query = query.lower()
+        results = []
+        truncated = False
+        stats = {'total_files': 0, 'total_folders': 0, 'matches_found': 0}
+        
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                # Get total counts for searched items
+                cursor = conn.execute("""
+                    SELECT COUNT(*) 
+                    FROM filesystem_index 
+                    WHERE LOWER(path) LIKE ?
+                """, (f"%{query}%",))
+                stats['matches_found'] = cursor.fetchone()[0]
+
+                # Get total searchable items
+                cursor = conn.execute("""
+                    SELECT 
+                        COUNT(*) FILTER (WHERE path LIKE '%.%') as file_count,
+                        COUNT(*) FILTER (WHERE path NOT LIKE '%.%') as folder_count
+                    FROM filesystem_index
+                """)
+                stats['total_files'], stats['total_folders'] = cursor.fetchone()
+                
+                # Get paginated results
+                cursor = conn.execute("""
+                    SELECT path FROM filesystem_index 
+                    WHERE LOWER(path) LIKE ?
+                    LIMIT ?
+                """, (f"%{query}%", max_results + 1))
+                
+                for i, row in enumerate(cursor):
+                    if i < max_results:
+                        path = Path(row[0])
+                        results.append({
+                            'path': str(path),
+                            'is_directory': path.is_dir()
+                        })
+                    else:
+                        truncated = True
+                        break
+                        
+                return results, truncated, stats
+                    
+        except sqlite3.Error as e:
+            logging.error(f"Database error during search: {e}")
+            return [], False, {'total_files': 0, 'total_folders': 0, 'matches_found': 0}
+
+    def get_indexing_status(self) -> tuple:
+        """Get current indexing status."""
+        try:
+            return self.status_queue.get_nowait()
+        except Empty:
+            return None, None
+        except Exception as e:
+            logging.error(f"Error getting indexer status: {e}")
+            return None, None
+
+    def shutdown(self):
+        """Clean shutdown of indexer process."""
+        if self.indexer and self.indexer.is_alive():
+            self.shutdown_event.set()
+            self.indexer.join(timeout=5)
+            if self.indexer.is_alive():
+                self.indexer.terminate()
+
+class FileSearchWorker(Process):
+    def __init__(self, root_path: str, search_term: str, progress_queue: Queue):
+        super().__init__()
+        self.root_path = root_path
+        self.search_term = search_term.lower()
+        self.progress_queue = progress_queue
+        self.results: List[str] = []
+        self.folders_searched = 0
+        
+    def run(self):
+        try:
+            self._search_directory(Path(self.root_path))
+            # Signal completion
+            self.progress_queue.put(SearchProgress(
+                self.folders_searched,
+                len(self.results),
+                "",
+                True
+            ))
+        except Exception as e:
+            logging.error(f"Search worker failed: {e}")
+            self.progress_queue.put(SearchProgress(
+                self.folders_searched,
+                len(self.results),
+                str(e),
+                True
+            ))
+
+    def _search_directory(self, directory: Path):
+        try:
+            for item in directory.iterdir():
+                try:
+                    if item.name.lower().find(self.search_term) != -1:
+                        self.results.append(str(item))
+                    
+                    if item.is_dir():
+                        self.folders_searched += 1
+                        if self.folders_searched % 10 == 0:  # Update progress periodically
+                            self.progress_queue.put(SearchProgress(
+                                self.folders_searched,
+                                len(self.results),
+                                str(item),
+                                False
+                            ))
+                        self._search_directory(item)
+                except PermissionError:
+                    continue
+                except Exception as e:
+                    logging.error(f"Error searching {item}: {e}")
+                    continue
+        except Exception as e:
+            logging.error(f"Error accessing directory {directory}: {e}")
 
 class AnimatedButton(QPushButton):
     def __init__(self, *args, **kwargs):
@@ -530,13 +970,24 @@ class LoginDialog(QDialog):
             self.show_error("Connection error. Please try again.")
 
 class HistoryManager:
-    def __init__(self, install_path):
-        self.db_path = Path(install_path) / 'history' / 'history.db'
-        self.db_path.parent.mkdir(exist_ok=True)
+    def __init__(self, db_path):
+        """Initialize the history manager with the database path
+        
+        Args:
+            db_path (str): Path to the history database file
+        """
+        self.db_path = Path(db_path)
+        
+        # Create parent directory if it doesn't exist
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Initialize database
         init_db(self.db_path)
+        
         self._current_user_email = None
         self.active_operations = {}
         self.last_checks = {'backup': datetime.min, 'restore': datetime.min}
+        self.page_size = 100
 
     @property
     def current_user_email(self) -> Optional[str]:
@@ -567,66 +1018,61 @@ class HistoryManager:
             logging.error(f"Database error checking changes: {e}")
             return False
 
-    def get_history(self, operation_type: str, limit: int = None, force_refresh: bool = False):
-        """Get history events with robust user attribution handling"""
+    def get_history(self, operation_type: str, page: int = 1) -> List[Operation]:
+        """Get paginated history of operations
+        
+        Args:
+            operation_type (str): Type of operation ('backup' or 'restore')
+            page (int, optional): Page number to retrieve. Defaults to 1.
+        
+        Returns:
+            List[Operation]: List of operations for the requested page
+        """
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
-                
-                # Add logging to track what we're loading
-                logging.info(f"Loading history for operation type: {operation_type}")
-                
-                query = """
-                    SELECT o.*, f.filepath, f.timestamp, f.status, f.error_message
-                    FROM operations o
-                    LEFT JOIN file_records f ON o.operation_id = f.operation_id
-                    WHERE o.operation_type = ?
-                    ORDER BY o.timestamp DESC
-                """
-                params = [operation_type]
-                
-                if limit:
-                    query += " LIMIT ?"
-                    params.append(limit)
-                
-                cursor.execute(query, params)
-                rows = cursor.fetchall()
-
-                # Group by operation_id
-                operations = {}
-                for row in rows:
-                    op_id = row[0]
-                    if op_id not in operations:
-                        # Get the source and user email from the database
-                        source = InitiationSource(row[2])
-                        user_email = row[5]
-                        
-                        # Log what we found in the database
-                        logging.info(f"Loading operation {op_id} - Source: {source}, User: {user_email}")
-                        
-                        try:
-                            operations[op_id] = Operation(
-                                operation_id=op_id,
-                                timestamp=datetime.fromisoformat(row[1]),
-                                source=source,
-                                status=OperationStatus(row[3]),
-                                operation_type=row[4],
-                                user_email=user_email,
-                                error_message=row[6],
-                                files=[]
-                            )
-                        except Exception as e:
-                            logging.error(f"Error creating operation object for {op_id}: {e}")
-                            # Skip this operation and continue with others
-                            continue
+                offset = (page - 1) * self.page_size
                     
-                    # Add file record if it exists
-                    if row[8]:  # filepath column
+                # First get limited operations
+                cursor.execute("""
+                    SELECT operation_id, timestamp, source, status, operation_type, user_email, error_message
+                    FROM operations 
+                    WHERE operation_type = ?
+                    ORDER BY timestamp DESC
+                    LIMIT ? OFFSET ?
+                """, (operation_type, self.page_size, offset))
+                    
+                operation_rows = cursor.fetchall()
+                operations = {}
+                    
+                # Then get files for these operations
+                for row in operation_rows:
+                    op_id = row[0]
+                    operations[op_id] = Operation(
+                        operation_id=op_id,
+                        timestamp=datetime.fromisoformat(row[1]),
+                        source=InitiationSource(row[2]),
+                        status=OperationStatus(row[3]),
+                        operation_type=row[4],
+                        user_email=row[5],
+                        error_message=row[6],
+                        files=[]
+                    )
+                        
+                    # Get files for this operation
+                    cursor.execute("""
+                        SELECT filepath, timestamp, status, error_message
+                        FROM file_records
+                        WHERE operation_id = ?
+                        ORDER BY timestamp DESC
+                    """, (op_id,))
+                        
+                    for file_row in cursor.fetchall():
                         operations[op_id].files.append(FileRecord(
-                            filepath=row[8],
-                            timestamp=datetime.fromisoformat(row[9]),
-                            status=OperationStatus(row[10]),
-                            error_message=row[11],
+                            filepath=file_row[0],
+                            timestamp=datetime.fromisoformat(file_row[1]),
+                            status=OperationStatus(file_row[2]),
+                            error_message=file_row[3],
                             operation_id=op_id
                         ))
 
@@ -858,8 +1304,14 @@ class OperationHistoryPanel(QWidget):
         self.history_manager = history_manager
         self.theme_manager = theme_manager
         self.user_expanded_states = {}
+        self.current_page = 1
         self.scroll_position = 0
         self.custom_style = CustomTreeCarrot(self.theme_manager)
+        self.current_offset = 0
+        self.is_loading = False
+        self.batch_size = 0
+        self.thread = None
+        self.worker = None        
         
         # Track current filter state
         self.current_filters = {
@@ -869,6 +1321,7 @@ class OperationHistoryPanel(QWidget):
         }
         
         self.init_ui()
+        self.load_history()
         
         # Set up refresh timer
         self.refresh_timer = QTimer()
@@ -877,34 +1330,44 @@ class OperationHistoryPanel(QWidget):
 
     def init_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setContentsMargins(0, 0, 0, 0)  # Remove panel margins since we're adding a header
 
-        # Create a single row for all filters and controls
+        # Add header
+        header = QLabel("Device History")
+        header.setObjectName("HeaderLabel")
+        header.setAlignment(Qt.AlignCenter)
+        layout.addWidget(header)
+
+        # Main content widget with proper margins
+        content = QWidget()
+        content.setObjectName("ContentWidget")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(10, 10, 10, 10)
+
+        # Create filter layout
         filter_layout = QHBoxLayout()
-        filter_layout.setSpacing(10)  # Consistent spacing between elements
+        filter_layout.setSpacing(10)
 
-        # Search box with flexible width
+        # Search box
         self.search_box = QLineEdit()
         self.search_box.setObjectName("SearchBox")
         self.search_box.setPlaceholderText("Search history...")
         self.search_box.textChanged.connect(self.filter_operations)
-        filter_layout.addWidget(self.search_box, 1)  # Give search box expanded width
-        
-        # Add some spacing between history type and search
+        filter_layout.addWidget(self.search_box, 1)
+
+        # Add some spacing between search and filters
         filter_layout.addSpacing(20)
-        
+
         # History Type dropdown with label
-        history_type_layout = QHBoxLayout()
         history_type_label = QLabel("History Type:")
         history_type_label.setObjectName("filter-label")
         self.history_type_combo = QComboBox()
         self.history_type_combo.addItems(["Backup", "Restore"])
         self.history_type_combo.setFixedWidth(150)
         self.history_type_combo.currentTextChanged.connect(self.on_history_type_changed)
-        history_type_layout.addWidget(history_type_label)
-        history_type_layout.addWidget(self.history_type_combo)
-        filter_layout.addLayout(history_type_layout)
-        
+        filter_layout.addWidget(history_type_label)
+        filter_layout.addWidget(self.history_type_combo)
+
         # Date Range filter
         date_label = QLabel("Date Range:")
         date_label.setObjectName("filter-label")
@@ -913,7 +1376,7 @@ class OperationHistoryPanel(QWidget):
         self.date_range.currentTextChanged.connect(self.filter_operations)
         filter_layout.addWidget(date_label)
         filter_layout.addWidget(self.date_range)
-        
+
         # Status filter
         status_label = QLabel("Status:")
         status_label.setObjectName("filter-label")
@@ -922,16 +1385,10 @@ class OperationHistoryPanel(QWidget):
         self.status_filter.currentTextChanged.connect(self.filter_operations)
         filter_layout.addWidget(status_label)
         filter_layout.addWidget(self.status_filter)
-        
-        layout.addLayout(filter_layout)
 
-        # Divider
-        divider = QFrame()
-        divider.setFrameShape(QFrame.HLine)
-        divider.setObjectName("HorizontalDivider")
-        layout.addWidget(divider)
+        content_layout.addLayout(filter_layout)
 
-        # Tree widget setup remains the same
+        # Tree widget setup with proper column headers
         self.tree = QTreeWidget()
         self.tree.setObjectName("HistoryTree")
         self.tree.setStyle(self.custom_style)
@@ -949,11 +1406,113 @@ class OperationHistoryPanel(QWidget):
         self.tree.setSortingEnabled(True)
         self.tree.sortByColumn(0, Qt.DescendingOrder)
 
+        # Set column sizing
         for i in range(5):
             self.tree.header().setSectionResizeMode(i, QHeaderView.ResizeToContents)
 
-        layout.addWidget(self.tree)
-       
+        content_layout.addWidget(self.tree)
+
+        # Load More button (hidden by default)
+        self.load_more_btn = QPushButton("Load More")
+        self.load_more_btn.clicked.connect(self.load_more)
+        self.load_more_btn.hide()
+        content_layout.addWidget(self.load_more_btn)
+
+        # Add content widget to main layout
+        layout.addWidget(content)
+
+    def set_history_manager(self, manager):
+        """Set history manager after initialization"""
+        self.history_manager = manager
+
+    def show_loading(self):
+        """Show loading indicator"""
+        self.tree.clear()
+        loading_item = QTreeWidgetItem(["Loading history..."])
+        self.tree.addTopLevelItem(loading_item)
+
+    def init_load_timer(self):
+        self.load_timer = QTimer(self)
+        self.load_timer.timeout.connect(self.load_next_batch)
+        
+    def load_data(self):
+        if not self.is_loading:
+            self.is_loading = True
+            self.current_offset = 0
+            self.tree.clear()
+            self.load_next_batch()
+
+    def load_next_batch(self):
+        events = self.history_manager.get_history(
+            self.event_type, 
+            limit=self.batch_size, 
+            offset=self.current_offset
+        )
+        
+        if events:
+            for event in events:
+                self.add_operation_to_tree(event)
+            self.current_offset += len(events)
+            
+            if len(events) == self.batch_size:
+                QTimer.singleShot(10, self.load_next_batch)
+            else:
+                self.is_loading = False
+        else:
+            self.is_loading = False
+        
+        QApplication.processEvents()
+
+    def load_history(self):
+        """Start asynchronous history loading"""
+        if not self.history_manager:
+            self.show_error("History manager not initialized")
+            return
+            
+        self.thread = QThread()
+        self.worker = HistoryWorker(self.history_manager, self.event_type)
+        self.worker.moveToThread(self.thread)
+        
+        # Connect signals
+        self.thread.started.connect(self.worker.run)
+        self.worker.batch_ready.connect(self.on_batch_ready)
+        self.worker.error_occurred.connect(self.on_error)
+        self.worker.finished.connect(self.on_history_complete)
+        self.worker.finished.connect(self.thread.quit)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.thread.finished.connect(self.thread.deleteLater)
+        
+        self.thread.start()
+
+    def on_batch_ready(self, operation):
+        if self.tree.topLevelItemCount() == 1 and self.tree.topLevelItem(0).text(0) == "Loading history...":
+            self.tree.clear()
+        self.add_operation_to_tree(operation)
+
+    def on_history_loaded(self, events):
+        self.tree.clear()
+        for event in events:
+            self.add_operation_to_tree(event)
+
+    def on_history_complete(self):
+        if self.tree.topLevelItemCount() == 0:
+            no_history = QTreeWidgetItem(["No history found"])
+            self.tree.addTopLevelItem(no_history)
+
+    def add_operation_to_tree(self, event):
+        summary_item = self.create_operation_summary_item(event)
+        
+        for file_record in sorted(event.files, key=lambda x: x.timestamp, reverse=True):
+            file_item = self.create_file_item(file_record, event.source.value)
+            summary_item.addChild(file_item)
+        
+        self.tree.addTopLevelItem(summary_item)
+        
+        # Apply expansion state
+        should_expand = (event.operation_id in self.user_expanded_states and 
+                        self.user_expanded_states[event.operation_id]) or event.status == OperationStatus.IN_PROGRESS
+        summary_item.setExpanded(should_expand)
+
     def on_item_expanded(self, item):
         """Track when user expands an item"""
         op_id = item.data(0, Qt.UserRole)
@@ -969,66 +1528,27 @@ class OperationHistoryPanel(QWidget):
             self.tree.setUpdatesEnabled(False)
             item.setExpanded(False)
             self.tree.setUpdatesEnabled(True)
-            
-    def refresh_history(self):
-        """Refresh history while preserving user expansion preferences"""
-        # Store current expansion states before refresh
-        expanded_states = {}
-        for i in range(self.tree.topLevelItemCount()):
-            item = self.tree.topLevelItem(i)
-            op_id = item.data(0, Qt.UserRole)
-            if op_id:
-                # If item is expanded OR user has previously set it to be expanded
-                expanded_states[op_id] = (
-                    item.isExpanded() or 
-                    self.user_expanded_states.get(op_id, False)
-                )
 
-        # Clear and rebuild tree
+    def on_error(self, error_msg):
         self.tree.clear()
-        events = self.history_manager.get_history(self.event_type)
-        current_ops = set()
+        error_item = QTreeWidgetItem([f"Error loading history: {error_msg}"])
+        error_item.setForeground(0, QColor("#DC3545"))
+        self.tree.addTopLevelItem(error_item)
 
-        for event in events:
-            current_ops.add(event.operation_id)
+    def refresh_history(self):
+        """Refresh the history display"""
+        self.current_page = 1
+        self.tree.clear()
+        events = self.history_manager.get_history(self.event_type, self.current_page)
+        
+        if events:
+            for event in events:
+                self.add_operation_to_tree(event)
             
-            # Create operation summary item
-            summary_item = self.create_operation_summary_item(event)
-            
-            # Add file details as child items
-            for file_record in sorted(event.files, key=lambda x: x.timestamp, reverse=True):
-                file_item = self.create_file_item(file_record)
-                summary_item.addChild(file_item)
-            
-            self.tree.addTopLevelItem(summary_item)
-            
-            # Determine if item should be expanded
-            should_expand = False
-            
-            # First check if we have a stored state
-            if event.operation_id in expanded_states:
-                should_expand = expanded_states[event.operation_id]
-            # For new in-progress operations, expand by default
-            elif event.status == OperationStatus.IN_PROGRESS:
-                should_expand = True
-                self.user_expanded_states[event.operation_id] = True
-            
-            summary_item.setExpanded(should_expand)
-            
-            # Store the state for future refreshes
-            if should_expand:
-                self.user_expanded_states[event.operation_id] = True
-
-        # Clean up tracking for operations that no longer exist
-        self.user_expanded_states = {
-            op_id: state 
-            for op_id, state in self.user_expanded_states.items() 
-            if op_id in current_ops
-        }
-
-        # Resize columns to content
-        for i in range(self.tree.columnCount()):
-            self.tree.resizeColumnToContents(i)
+            if len(events) == self.history_manager.page_size:
+                self.load_more_btn.show()
+            else:
+                self.load_more_btn.hide()
 
     def refresh_history_with_events(self, events):
         """Refresh history while preserving expansion and filter states"""
@@ -1083,6 +1603,29 @@ class OperationHistoryPanel(QWidget):
         
         # Reapply current filters after refresh
         self.apply_current_filters()
+
+    def check_scroll_position(self, value):
+        scrollbar = self.tree.verticalScrollBar()
+        if scrollbar.value() == scrollbar.maximum() and self.load_more_btn.isVisible():
+            self.load_more()
+
+    def load_more(self):
+        if not self.is_loading_more:
+            self.is_loading_more = True
+            self.current_page += 1
+            
+            events = self.history_manager.get_history(self.event_type, self.current_page)
+            
+            if events:
+                for event in events:
+                    self.add_operation_to_tree(event)
+                
+                if len(events) < self.history_manager.page_size:
+                    self.load_more_btn.hide()
+            else:
+                self.load_more_btn.hide()
+            
+            self.is_loading_more = False
 
     def create_operation_summary_item(self, event: HistoryEvent) -> QTreeWidgetItem:
         status_counts = {
@@ -1301,10 +1844,12 @@ class OperationHistoryPanel(QWidget):
             "Restore": "restore"
         }
         self.event_type = history_type_map[history_type]
+        
         # Force a refresh when switching history types
-        events = self.history_manager.get_history(self.event_type, force_refresh=True)
-        # Always refresh UI, even with empty list
-        self.refresh_history_with_events(events)
+        if self.history_manager:
+            events = self.history_manager.get_history(self.event_type)
+            # Always refresh UI, even with empty list
+            self.refresh_history_with_events(events)
 
     def set_item_status_color(self, item: QTreeWidgetItem, status: OperationStatus):
         """Set the color of an item based on its status"""
@@ -2038,56 +2583,53 @@ class StormcloudApp(QMainWindow):
         super().__init__()
         self.theme_manager = ThemeManager()
         self.user_email = None
-        self.auth_tokens = None  # Add auth tokens storage
+        self.auth_tokens = None
+        
+        # Set window title and initial theme
         self.setWindowTitle('Stormcloud Backup Manager')
+        self.apply_base_theme()
         
-        # Initialize auth file path
-        self.auth_file = os.path.join(os.getenv('APPDATA'), 'Stormcloud', 'auth.dat')
+        logging.info("Application session initiated. Attempting user authentication.")
         
-        # Add json_directory initialization
-        appdata_path = os.getenv('APPDATA')
-        self.json_directory = os.path.join(appdata_path, 'Stormcloud')
-        os.makedirs(self.json_directory, exist_ok=True)
-        
-        self.backup_schedule = {'weekly': {}, 'monthly': {}}
-        
-        # Create systray at initialization
-        systray_menu_options = (("Backup now", None, 
-            lambda x: logging.info("User clicked 'Backup now'")),)
-        self.systray = SysTrayIcon("stormcloud.ico", 
-            "Stormcloud Backup Engine", systray_menu_options)
-        self.systray.start()
-        
-        # Load settings first
-        self.load_settings()
-        self.install_path = self.get_install_path()
-        
-        # Initialize history manager after install path is set and pass user_email
-        self.history_manager = HistoryManager(self.install_path)
+        # Initialize paths first
+        self.init_paths()
         
         # Attempt login before initializing UI
         if not self.authenticate_user():
+            logging.info("Authentication failed.")
             sys.exit(0)
-            
-        # Update history manager with authenticated user
-        self.history_manager.current_user_email = self.user_email
         
-        # Then initialize UI and other components
+        logging.info("Authentication succeeded. User: {}".format(self.user_email))
+        
+        # Initialize core services
+        self.init_core_services()
+        
+        # Update history manager with authenticated user
+        if hasattr(self, 'history_manager'):
+            self.history_manager.current_user_email = self.user_email
+        
+        # Initialize UI
         self.set_app_icon()
         self.create_spinbox_arrow_icons()
         self.init_ui()
-        self.update_status()
-        self.load_backup_paths()
-        self.load_properties()
-        self.apply_backup_mode()
+        
+        # Apply theme to all widgets
         self.apply_theme()
+        
+        # Initialize metadata refresh timer
+        self.init_metadata_refresh()
+        
+        # Check initial backup engine status
+        self.update_status()
+        
+        # Start deferred loading of heavy components
+        QTimer.singleShot(0, self.init_components)
 
     def init_ui(self):
-        central_widget = QWidget(self)
-        central_widget.setObjectName("centralWidget")
-        self.setCentralWidget(central_widget)
-        main_layout = QVBoxLayout(central_widget)
-
+        """Initialize the user interface"""
+        # Get theme for styling
+        theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
+        
         # Create toolbar
         toolbar = QToolBar()
         toolbar.setObjectName("mainToolBar")
@@ -2095,6 +2637,7 @@ class StormcloudApp(QMainWindow):
         
         # Add theme selection to toolbar
         theme_label = QLabel("Theme:")
+        theme_label.setStyleSheet(f"color: {theme['text_primary']};")
         toolbar.addWidget(theme_label)
 
         self.theme_combo = QComboBox()
@@ -2105,6 +2648,10 @@ class StormcloudApp(QMainWindow):
         self.theme_combo.setCursor(Qt.PointingHandCursor)
         toolbar.addWidget(self.theme_combo)
 
+        # Main layout
+        main_layout = QVBoxLayout(self.centralWidget())
+        main_layout.setContentsMargins(10, 10, 10, 10)
+
         # Create tab widget
         self.tab_widget = QTabWidget()
         self.tab_widget.setTabPosition(QTabWidget.South)
@@ -2113,6 +2660,140 @@ class StormcloudApp(QMainWindow):
         # Create and add tabs
         self.backup_tab = self.create_backup_tab()
         self.tab_widget.addTab(self.backup_tab, "💾 Backup")
+
+    def init_components(self):
+        """Initialize heavy components after UI is shown"""
+        try:
+            # Initialize filesystem index
+            self.filesystem_index = FilesystemIndex(self.filesystem_db_path)
+            
+            # Initialize UI components that depend on filesystem index
+            if hasattr(self, 'file_explorer'):
+                self.file_explorer.set_filesystem_index(self.filesystem_index)
+            
+            # Load backup paths and properties
+            self.load_backup_paths()
+            self.load_properties()
+            self.apply_backup_mode()
+            
+            # Start background data loading
+            QTimer.singleShot(0, self.load_initial_data)
+
+        except Exception as e:
+            logging.error(f"Failed to initialize components: {e}")
+            StormcloudMessageBox.critical(self, "Error", 
+                "Failed to initialize application components. Please restart the application.")
+
+    def init_paths(self):
+        """Initialize all application paths"""
+        # Base paths
+        self.appdata_path = os.getenv('APPDATA')
+        self.app_dir = os.path.join(self.appdata_path, 'Stormcloud')
+        os.makedirs(self.app_dir, exist_ok=True)
+        
+        # Auth file
+        self.auth_file = os.path.join(self.app_dir, 'auth.dat')
+        
+        # Get installation path
+        self.install_path = self.get_install_path()
+        if not self.install_path:
+            raise RuntimeError("Could not determine installation path")
+            
+        # Database directory
+        self.db_dir = os.path.join(self.install_path, 'db')
+        os.makedirs(self.db_dir, exist_ok=True)
+        
+        # Database paths - store just the file paths, not directories
+        self.filesystem_db_path = os.path.join(self.db_dir, 'filesystem.db')
+        self.history_db_path = os.path.join(self.db_dir, 'history.db')
+        
+        # Settings path
+        self.settings_cfg_path = os.path.join(self.install_path, 'settings.cfg')
+        
+        # JSON directory
+        self.json_directory = self.app_dir
+        
+    def init_core_services(self):
+        """Initialize core services without heavy loading"""
+        try:
+            # Ensure database directory exists
+            os.makedirs(os.path.dirname(self.history_db_path), exist_ok=True)
+            
+            # Initialize history manager
+            self.history_manager = HistoryManager(self.history_db_path)
+            
+            # Initialize backup schedule
+            self.backup_schedule = {'weekly': {}, 'monthly': {}}
+            
+            # Create systray
+            systray_menu_options = (("Backup now", None, 
+                lambda x: logging.info("User clicked 'Backup now'")),)
+            self.systray = SysTrayIcon("stormcloud.ico", 
+                "Stormcloud Backup Engine", systray_menu_options)
+            self.systray.start()
+            
+            # Load settings
+            self.load_settings()
+            
+        except Exception as e:
+            logging.error(f"Failed to initialize core services: {e}")
+            raise
+
+    def init_metadata_refresh(self):
+        """Initialize metadata refresh timer"""
+        self.metadata_timer = QTimer(self)
+        self.metadata_timer.timeout.connect(self.refresh_metadata)
+        self.metadata_timer.start(10000)  # 10 second interval
+        
+        # Perform initial metadata refresh
+        QTimer.singleShot(0, self.refresh_metadata)
+
+    def refresh_metadata(self):
+        """Refresh file metadata from API"""
+        try:
+            if not hasattr(self, 'settings_cfg_path') or not self.settings_cfg_path:
+                logging.error("Settings path not configured")
+                return
+
+            settings = read_yaml_settings_file(self.settings_cfg_path)
+            if not settings:
+                logging.error("Failed to read settings file")
+                return
+
+            save_file_metadata(settings)
+            logging.info("Metadata refresh completed successfully")
+            
+            # If we have a file explorer, trigger a refresh of the remote files view
+            if hasattr(self, 'file_explorer'):
+                self.file_explorer.refresh_remote_files()
+                
+        except Exception as e:
+            logging.error(f"Error refreshing metadata: {e}")
+
+    def apply_base_theme(self):
+        """Apply initial theme to the main window"""
+        theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
+        self.setStyleSheet(theme["stylesheet"])
+        
+        # Create a central widget with proper background
+        central_widget = QWidget()
+        central_widget.setObjectName("centralWidget")
+        central_widget.setStyleSheet(f"QWidget#centralWidget {{ background-color: {theme['app_background']}; }}")
+        self.setCentralWidget(central_widget)
+
+    def load_initial_data(self):
+        """Load initial data asynchronously"""
+        try:
+            # Start filesystem indexing
+            if hasattr(self, 'filesystem_index'):
+                self.filesystem_index.start_indexing()
+            
+            # Load history data if manager is available
+            if hasattr(self, 'history_panel'):
+                self.history_panel.load_history()
+                
+        except Exception as e:
+            logging.error(f"Error loading initial data: {e}")
 
     def authenticate_user(self) -> bool:
         while True:
@@ -2379,21 +3060,44 @@ class StormcloudApp(QMainWindow):
         return header_widget
 
     def apply_theme(self):
+        """Apply theme to all widgets"""
         theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
+        
+        # Apply main stylesheet
         self.setStyleSheet(theme["stylesheet"])
         
-        # Apply specific styles that might not be covered by the general stylesheet
-        self.status_value_text.setStyleSheet(f"color: {theme['status_running'] if self.is_backup_engine_running() else theme['status_not_running']};")
+        # Update central widget background
+        if self.centralWidget():
+            self.centralWidget().setStyleSheet(
+                f"QWidget#centralWidget {{ background-color: {theme['app_background']}; }}"
+            )
         
-        # Update arrow icons for spinboxes
-        self.create_spinbox_arrow_icons()
+        # Update toolbar style
+        if hasattr(self, 'theme_combo'):
+            self.theme_combo.setStyleSheet(theme.get("combobox_style", ""))
         
-        # Refresh the UI to ensure all widgets update their appearance
-        self.repaint()
+        # Update all panels
+        if hasattr(self, 'backup_tab'):
+            self.backup_tab.setStyleSheet(theme.get("tab_style", ""))
+            
+        # Apply theme to specific components
+        panels = [
+            'file_explorer',
+            'history_panel',
+            'progress_widget'
+        ]
+        
+        for panel_name in panels:
+            if hasattr(self, panel_name):
+                panel = getattr(self, panel_name)
+                if hasattr(panel, 'apply_theme'):
+                    panel.apply_theme()
 
     def change_theme(self, theme_name):
+        """Change the application theme"""
         self.theme_manager.set_theme(theme_name)
         self.apply_theme()
+        self.create_spinbox_arrow_icons()  # Recreate icons for the new theme
 
     def on_backup_versions_changed(self, value):
         print(f"Number of backup versions changed to: {value}")
@@ -2425,17 +3129,10 @@ class StormcloudApp(QMainWindow):
         self.grid_layout.setRowStretch(1, 1)
 
     def create_bottom_right_panel(self):
-        """Create the operation history panel with dropdown selector"""
-        content = QWidget()
-        content.setObjectName("ContentWidget")
-        main_layout = QVBoxLayout(content)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-
-        # Create single history panel that can switch between backup/restore
+        """Create the operation history panel without extra wrapping"""
+        # Create history panel without wrapping it in another panel
         self.history_panel = OperationHistoryPanel('backup', self.history_manager, self.theme_manager)
-        main_layout.addWidget(self.history_panel)
-
-        return self.create_panel('Device History', content)
+        return self.history_panel
 
     def create_file_explorer_panel(self):
         """Create the file explorer panel"""
@@ -2658,10 +3355,9 @@ class StormcloudApp(QMainWindow):
         return panel
 
     def create_settings_section(self):
-        """Create settings section of the stacked panel"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(10, 10, 10, 10)  # Consistent padding
+        layout.setContentsMargins(10, 10, 10, 10)
 
         # Subpanel header
         header = QLabel("Settings")
@@ -2674,13 +3370,18 @@ class StormcloudApp(QMainWindow):
         horizontal_line.setObjectName("HorizontalDivider")
         layout.addWidget(horizontal_line)
 
-        # Status
-        self.status_value_text = QLabel('Unknown')
+        # Status with proper styling
         status_layout = QHBoxLayout()
-        status_layout.addWidget(QLabel('Backup Engine Status:'))
+        status_label = QLabel('Backup Engine Status:')
+        self.status_value_text = QLabel()
+        
+        status_layout.addWidget(status_label)
         status_layout.addWidget(self.status_value_text)
         layout.addLayout(status_layout)
-
+        
+        # Update initial status immediately
+        self.update_status()
+        
         # Backup mode
         self.backup_mode_dropdown = QComboBox()
         self.backup_mode_dropdown.addItems(['Realtime', 'Scheduled'])
@@ -2948,8 +3649,6 @@ class StormcloudApp(QMainWindow):
             self.update_settings_file()
 
     def create_backup_tab(self):
-        """Create and return the backup tab with its complete layout"""
-        logging.info(f"Creating backup tab with user email: {self.user_email}")
         tab = QWidget()
         layout = QVBoxLayout(tab)
         
@@ -2961,34 +3660,19 @@ class StormcloudApp(QMainWindow):
         grid_widget = QWidget()
         self.grid_layout = QGridLayout(grid_widget)
         
-        # Create file explorer with user email
-        self.file_explorer = FileExplorerPanel(
-            json_directory=self.json_directory,
-            theme_manager=self.theme_manager,
-            settings_cfg_path=self.settings_cfg_path,
-            systray=self.systray,
-            history_manager=self.history_manager,
-            user_email=self.user_email
-        )
-        
-        # Top-left panel (Configuration Dashboard)
+        # Create all panels
         config_dashboard = self.create_configuration_dashboard()
-        self.grid_layout.addWidget(config_dashboard, 0, 0)
-
-        # Top-right panel (Backup Schedule)
         backup_schedule = self.create_backup_schedule_panel()
+        file_explorer = self.create_file_browser_panel()
+        operation_history = self.create_bottom_right_panel()
+        
+        # Add panels to grid
+        self.grid_layout.addWidget(config_dashboard, 0, 0)
         self.grid_layout.addWidget(backup_schedule, 0, 1)
-
-        # Bottom-left panel (File Explorer)
-        self.file_explorer = self.create_file_explorer_panel()  # Updated method name
-        self.grid_layout.addWidget(self.file_explorer, 1, 0)
-
-        # Bottom-right panel (Operation History)
-        if not hasattr(self, 'operation_history_panel'):
-            self.operation_history_panel = self.create_bottom_right_panel()
-        self.grid_layout.addWidget(self.operation_history_panel, 1, 1)
-
-        # Set equal column and row stretches
+        self.grid_layout.addWidget(file_explorer, 1, 0)
+        self.grid_layout.addWidget(operation_history, 1, 1)
+        
+        # Set equal stretches
         self.grid_layout.setColumnStretch(0, 1)
         self.grid_layout.setColumnStretch(1, 1)
         self.grid_layout.setRowStretch(0, 1)
@@ -2996,6 +3680,24 @@ class StormcloudApp(QMainWindow):
         
         layout.addWidget(grid_widget)
         return tab
+
+    def create_file_browser_panel(self):  # New method name
+        """Create the file browser panel without recursion"""
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        
+        # Create single FileExplorerPanel instance
+        file_explorer = FileExplorerPanel(
+            self.json_directory,
+            self.theme_manager,
+            self.settings_cfg_path,
+            self.systray,
+            self.history_manager,
+            self.user_email
+        )
+        layout.addWidget(file_explorer)
+        
+        return self.create_panel('File Explorer', panel)
 
     def create_backed_up_folders_subpanel(self):
         subpanel = QWidget()
@@ -3390,46 +4092,67 @@ class StormcloudApp(QMainWindow):
             self.add_folder_to_list(path, True)
 
     def update_status(self):
+        """Update backup engine status display"""
         theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
-        running = self.is_backup_engine_running()
+        running_state = self.is_backup_engine_running()
         
-        # Update the status text and color
-        self.status_value_text.setText('Running' if running else 'Not Running')
-        self.status_value_text.setStyleSheet(
-            f"color: {theme['status_running'] if running else theme['status_not_running']};"
-        )
+        if running_state is None:
+            status_text = 'Unknown'
+            color = theme['status_unknown']
+        else:
+            status_text = 'Running' if running_state else 'Not Running'
+            color = theme['status_running'] if running_state else theme['status_not_running']
+
+        if hasattr(self, 'status_value_text'):
+            self.status_value_text.setText(status_text)
+            self.status_value_text.setStyleSheet(f"color: {color};")
         
-        # Update the button text and state
-        self.start_button.setRunning(running)
-        self.start_button.setText('Stop Backup Engine' if running else 'Start Backup Engine')
+        if hasattr(self, 'start_button'):
+            self.start_button.setRunning(bool(running_state))
+            button_text = 'Stop Backup Engine' if running_state else 'Start Backup Engine'
+            self.start_button.setText(button_text)
     
     def toggle_backup_engine(self):
+        """Toggle the backup engine between running and stopped states"""
         if self.is_backup_engine_running():
             self.stop_backup_engine()
         else:
             self.start_backup_engine()
-
+        
     def is_backup_engine_running(self):
-        return any(proc.info['name'] == 'stormcloud.exe' for proc in psutil.process_iter(['name']))
+        """Check if backup engine is currently running"""
+        try:
+            return any(proc.info['name'] == 'stormcloud.exe' 
+                      for proc in psutil.process_iter(['name']))
+        except Exception as e:
+            logging.error(f"Error checking backup engine status: {e}")
+            return None
 
     def start_backup_engine(self):
+        """Start the backup engine and record the operation"""
         if self.is_backup_engine_running():
             StormcloudMessageBox.information(self, 'Info', 'Backup engine is already running.')
             return
 
         try:
+            # Get the executable path
             exe_path = os.path.join(os.path.dirname(self.settings_cfg_path), 'stormcloud.exe').replace('\\', '/')
+            
+            # Start the process
             subprocess.Popen([exe_path], shell=True, cwd=os.path.dirname(self.settings_cfg_path))
             logging.info('Backup engine started successfully at %s', exe_path)
             
-            if self.backup_mode == 'Realtime':
-                self.history_manager.add_event('backup', HistoryEvent(
-                    timestamp=dt.datetime.now(),
-                    source=InitiationSource.REALTIME,
-                    status=OperationStatus.IN_PROGRESS
-                ))
+            # Record operation in history if in realtime mode
+            if hasattr(self, 'backup_mode') and self.backup_mode == 'Realtime' and hasattr(self, 'history_manager'):
+                operation_id = self.history_manager.start_operation(
+                    'backup',
+                    InitiationSource.REALTIME,
+                    self.user_email
+                )
+                logging.info(f'Started backup operation with ID: {operation_id}')
             
             StormcloudMessageBox.information(self, 'Info', 'Backup engine started successfully.')
+            
         except Exception as e:
             logging.error('Failed to start backup engine: %s', e)
             StormcloudMessageBox.critical(self, 'Error', f'Failed to start backup engine: {e}')
@@ -3437,32 +4160,69 @@ class StormcloudApp(QMainWindow):
             self.update_status()
         
     def stop_backup_engine(self):
+        """Stop the backup engine and update history"""
         if not self.is_backup_engine_running():
             StormcloudMessageBox.information(self, 'Info', 'Backup engine is not running.')
             return
 
         try:
-            for proc in psutil.process_iter(['name']):
-                if proc.info['name'] == 'stormcloud.exe':
+            # Find all stormcloud processes
+            stormcloud_processes = [proc for proc in psutil.process_iter(['name', 'pid'])
+                                  if proc.info['name'] == 'stormcloud.exe']
+            
+            if not stormcloud_processes:
+                logging.info('No stormcloud processes found to stop')
+                return
+                
+            # Terminate all processes
+            for proc in stormcloud_processes:
+                try:
+                    logging.info(f'Attempting to terminate stormcloud process {proc.info["pid"]}')
                     proc.terminate()
                     proc.wait(timeout=10)
                     if proc.is_running():
+                        logging.info(f'Process {proc.info["pid"]} still running after terminate, attempting kill')
                         proc.kill()
-                    logging.info('Backup engine stopped successfully.')
-                    StormcloudMessageBox.information(self, 'Info', 'Backup engine stopped successfully.')
-                    break
+                except psutil.NoSuchProcess:
+                    logging.info(f'Process {proc.info["pid"]} already terminated')
+                except Exception as e:
+                    logging.error(f'Error terminating process {proc.info["pid"]}: {e}')
+            
+            # Double check all processes are stopped
+            remaining_processes = [proc for proc in psutil.process_iter(['name']) 
+                                 if proc.info['name'] == 'stormcloud.exe']
+            if remaining_processes:
+                logging.warning(f'Found {len(remaining_processes)} remaining stormcloud processes')
+                for proc in remaining_processes:
+                    try:
+                        proc.kill()
+                    except:
+                        pass
+            
+            # Update any active operations in history
+            if hasattr(self, 'history_manager'):
+                # Create a list copy of operation IDs to avoid modification during iteration
+                active_op_ids = list(self.history_manager.active_operations.keys())
+                for op_id in active_op_ids:
+                    try:
+                        self.history_manager.complete_operation(
+                            op_id,
+                            OperationStatus.FAILED,
+                            "Backup engine stopped by user",
+                            self.user_email
+                        )
+                    except Exception as e:
+                        logging.error(f'Failed to complete operation {op_id}: {e}')
+            
+            logging.info('All stormcloud processes stopped successfully.')
+            StormcloudMessageBox.information(self, 'Info', 'Backup engine stopped successfully.')
+                    
         except Exception as e:
             logging.error('Failed to stop backup engine: %s', e)
             StormcloudMessageBox.critical(self, 'Error', f'Failed to stop backup engine: {e}')
         finally:
             self.update_status()
-        
-    def closeEvent(self, event):
-        """Handle cleanup when the application closes"""
-        if hasattr(self, 'systray'):
-            self.systray.shutdown()
-        super().closeEvent(event)
-
+            
 # Calendar Widget
 # ---------------
 
@@ -3974,6 +4734,7 @@ class CustomArrowButton(QPushButton):
 
     def on_theme_changed(self):
         self.update()  # Force repaint when theme changes
+
 # ---------------
 
 class SearchResultDelegate(QStyledItemDelegate):
@@ -3986,52 +4747,75 @@ class SearchResultDelegate(QStyledItemDelegate):
         
         painter.save()
         
-        # Handle backgrounds
+        # Draw background
         if option.state & QStyle.State_Selected:
             painter.fillRect(option.rect, QColor(theme["list_item_selected"]))
         elif option.state & QStyle.State_MouseOver:
             painter.fillRect(option.rect, QColor(theme["list_item_hover"]))
         else:
             painter.fillRect(option.rect, QColor(theme["panel_background"]))
-        
-        # Set text color based on item type
-        if index.parent().isValid():
-            text_color = QColor(theme["text_primary"])
+
+        # Set text color based on search result type
+        result_type = index.data(Qt.UserRole)
+        if result_type == "found":
+            text_color = QColor(theme["search_results_found"])
+        elif result_type == "not_found":
+            text_color = QColor(theme["search_results_not_found"])
         else:
-            result_type = index.data(Qt.UserRole)
-            if result_type == "found":
-                text_color = QColor(theme["search_results_found"]) 
-            elif result_type == "not_found":
-                text_color = QColor(theme["search_results_not_found"])
-            else:
-                text_color = QColor(theme["text_primary"])
+            text_color = QColor(theme["text_primary"])
         
+        # Draw text
         painter.setPen(text_color)
         text = index.data(Qt.DisplayRole)
-        painter.drawText(option.rect, Qt.AlignVCenter | Qt.AlignLeft, text)
+        font = option.font
+        if not index.parent().isValid():  # Make root items bold
+            font.setBold(True)
+            painter.setFont(font)
+        
+        # Add padding to text rectangle
+        text_rect = option.rect
+        text_rect.setLeft(text_rect.left() + 5)
+        painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, text)
         
         painter.restore()
 
     def sizeHint(self, option, index):
         size = super().sizeHint(option, index)
-        size.setHeight(size.height() + 5)  # Add some vertical padding
+        size.setHeight(size.height() + 5)
         return size
 
+# File Explorer Widget
+# ---------------
+
 class FileExplorerPanel(QWidget):
-    def __init__(self, json_directory, theme_manager, settings_cfg_path=None, systray=None, history_manager=None, user_email=None):
+    def __init__(self, json_directory, theme_manager, settings_cfg_path=None, 
+                 systray=None, history_manager=None, user_email=None):
         super().__init__()
         self.setObjectName("FileExplorerPanel")
+
+        self._drag_source_item = None
+        self._drag_source_path = None
+
         self.theme_manager = theme_manager
         self.settings_path = settings_cfg_path
         self.systray = systray
         self.history_manager = history_manager
         self._user_email = user_email
-        logging.info(f"FileExplorerPanel initialized with user email: {user_email}")
+        self.custom_style = CustomTreeCarrot(self.theme_manager)
+
+        # Initialize filesystem index
+        index_db = os.path.join(json_directory, 'filesystem_index.db')
+        self.filesystem_index = FilesystemIndex(index_db)
         
-        # Update metadata directory path
+        # Status checking timer
+        self.status_timer = QTimer()
+        self.status_timer.timeout.connect(self.check_indexing_status)
+        self.status_timer.start(1000)  # Check every second
+        
         self.install_path = self.get_install_path()
-        self.metadata_dir = os.path.join(self.install_path, 'file_explorer', 'manifest')
-        os.makedirs(self.metadata_dir, exist_ok=True)
+        if self.install_path:
+            self.metadata_dir = os.path.join(self.install_path, 'file_explorer', 'manifest')
+            os.makedirs(self.metadata_dir, exist_ok=True)
         
         self.search_history = []
         
@@ -4042,13 +4826,13 @@ class FileExplorerPanel(QWidget):
         self.progress_widget.user_email = self._user_email
         self.progress_widget.operation_completed.connect(self.on_operation_completed)
         
-        # Initialize UI components
+        self.init_models()
         self.init_ui()
-        self.load_data()
-        self.apply_theme()
         
         # Add theme change connection
         self.theme_manager.theme_changed.connect(self.on_theme_changed)
+        
+        QTimer.singleShot(100, self.load_data)
 
     @property
     def user_email(self) -> Optional[str]:
@@ -4062,67 +4846,766 @@ class FileExplorerPanel(QWidget):
         logging.info(f"FileExplorerPanel user_email updated to: {email}")
 
     def init_ui(self):
-        self.setObjectName("FileExplorerPanel")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
 
-        # Add search box
-        self.search_box = QLineEdit()
-        self.search_box.setObjectName("SearchBox")
-        self.search_box.setPlaceholderText("Search for file or folder...")
-        self.search_box.returnPressed.connect(self.search_item)
-        layout.addWidget(self.search_box)
+        main_splitter = QSplitter(Qt.Horizontal)
+        main_splitter.setHandleWidth(3)
+        layout.addWidget(main_splitter)
 
-        # Main splitter
-        self.main_splitter = QSplitter(Qt.Vertical)
-        layout.addWidget(self.main_splitter)
+        # Local files panel
+        local_panel = QWidget()
+        local_layout = QVBoxLayout(local_panel)
+        local_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Tree view
-        self.tree_view = QTreeView()
-        self.tree_view.setObjectName("FileTreeView")
-        self.custom_style = CustomTreeCarrot(self.theme_manager)
-        self.tree_view.setStyle(self.custom_style)
-        self.main_splitter.addWidget(self.tree_view)
-
-        # Results panel
+        # Add results panel initialization here
         self.results_panel = QTreeWidget()
         self.results_panel.setObjectName("ResultsPanel")
         self.results_panel.setHeaderHidden(True)
-        self.results_panel.itemClicked.connect(self.navigate_to_result)
-        self.results_panel.setVisible(False)
         self.results_panel.setItemDelegate(SearchResultDelegate(self.theme_manager))
+        self.results_panel.setVisible(False)
+        local_layout.addWidget(self.results_panel)
+
+        # Local header
+        local_header = QLabel("Local Files")
+        local_header.setObjectName("SubpanelHeader")
+        local_layout.addWidget(local_header)
+
+        local_line = QFrame()
+        local_line.setFrameShape(QFrame.HLine)
+        local_line.setObjectName("HorizontalDivider")
+        local_layout.addWidget(local_line)
+
+        # Local search
+        self.local_search = QLineEdit()
+        self.local_search.setObjectName("SearchBox")
+        self.local_search.setPlaceholderText("Search local files...")
+        self.local_search.returnPressed.connect(self.search_local)
+        local_layout.addWidget(self.local_search)
+
+        # Add progress bars with custom styling
+        progress_style = """
+            QProgressBar {
+                background-color: #666666;
+                border: none;
+                border-radius: 2px;
+                height: 4px;
+            }
+            QProgressBar::chunk {
+                background-color: #4285F4;
+                width: 10px;
+                margin: 0px;
+            }
+        """
         
-        # Add the custom carrot style
-        self.results_panel.setStyle(self.custom_style)
+        # Local progress bar
+        self.local_progress = QProgressBar()
+        self.local_progress.setVisible(False)
+        self.local_progress.setTextVisible(False)
+        self.local_progress.setStyleSheet(progress_style)
+        local_layout.addWidget(self.local_progress)
+
+        # Local vertical splitter
+        self.local_splitter = QSplitter(Qt.Vertical)
+        self.local_splitter.setHandleWidth(3)
+        local_layout.addWidget(self.local_splitter)
+
+        # Local tree
+        self.local_tree = QTreeView()
+        self.local_tree.setObjectName("LocalTree")
+        self.local_tree.setModel(self.local_model)
+        self.local_tree.setHeaderHidden(True)
+        self.local_tree.expanded.connect(self.on_item_expanded)
+        self.local_tree.clicked.connect(self.on_item_clicked)
+        self.local_tree.setIndentation(20)
+        self.local_tree.setStyle(self.custom_style)
+        self.local_tree.setDragEnabled(True)
+        self.local_tree.setAcceptDrops(True)
+        self.local_tree.setDropIndicatorShown(False)
+        self.local_tree.setDragDropMode(QTreeView.InternalMove)
+        self.local_tree.viewport().installEventFilter(self)
+        self.local_splitter.addWidget(self.local_tree)
+
+        # Local search results
+        self.local_results = QTreeWidget()
+        self.local_results.setObjectName("ResultsPanel")
+        self.local_results.setHeaderHidden(True)
+        self.local_results.itemClicked.connect(self.navigate_to_local_result)
+        self.local_results.setVisible(False)
+        self.local_results.setStyle(self.custom_style)
+        self.local_splitter.addWidget(self.local_results)
+
+        main_splitter.addWidget(local_panel)
+
+        # Remote files panel
+        remote_panel = QWidget()
+        remote_layout = QVBoxLayout(remote_panel)
+        remote_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Remote header
+        remote_header = QLabel("Remote Files")
+        remote_header.setObjectName("SubpanelHeader")
+        remote_layout.addWidget(remote_header)
+
+        remote_line = QFrame()
+        remote_line.setFrameShape(QFrame.HLine)
+        remote_line.setObjectName("HorizontalDivider")
+        remote_layout.addWidget(remote_line)
+
+        # Remote search
+        self.remote_search = QLineEdit()
+        self.remote_search.setObjectName("SearchBox")
+        self.remote_search.setPlaceholderText("Search remote files...")
+        self.remote_search.returnPressed.connect(self.search_remote)
+        remote_layout.addWidget(self.remote_search)
+
+        # Remote progress bar with same styling
+        self.remote_progress = QProgressBar()
+        self.remote_progress.setVisible(False)
+        self.remote_progress.setTextVisible(False)
+        self.remote_progress.setStyleSheet(progress_style)
+        remote_layout.addWidget(self.remote_progress)
+
+        # Remote vertical splitter
+        self.remote_splitter = QSplitter(Qt.Vertical)
+        self.remote_splitter.setHandleWidth(3)
+        remote_layout.addWidget(self.remote_splitter)
+
+        # Remote tree
+        self.remote_tree = QTreeView()
+        self.remote_tree.setObjectName("RemoteTree")
+        self.remote_tree.setModel(self.remote_model)
+        self.remote_tree.setHeaderHidden(True)
+        self.remote_tree.setStyle(CustomTreeCarrot(self.theme_manager))
+        self.remote_tree.setDragEnabled(True)
+        self.remote_tree.setAcceptDrops(True)
+        self.remote_tree.setDropIndicatorShown(False)
+        self.remote_tree.setDragDropMode(QTreeView.InternalMove)
+        self.remote_tree.viewport().installEventFilter(self)
+        self.remote_splitter.addWidget(self.remote_tree)
+
+        # Remote results
+        self.remote_results = QTreeWidget()
+        self.remote_results.setObjectName("ResultsPanel")
+        self.remote_results.setHeaderHidden(True)
+        self.remote_results.itemClicked.connect(self.navigate_to_remote_result)
+        self.remote_results.setVisible(False)
+        self.remote_results.setStyle(CustomTreeCarrot(self.theme_manager))
+        self.remote_splitter.addWidget(self.remote_results)
+
+        main_splitter.addWidget(remote_panel)
         
-        self.main_splitter.addWidget(self.results_panel)
+        # Style all splitters
+        splitter_style = """
+            QSplitter::handle {
+                margin: 4px;
+                background-color: #666;
+            }
+            QSplitter::handle:hover {
+                background-color: #4285F4;
+            }
+        """
+        main_splitter.setStyleSheet(splitter_style)
+        self.local_splitter.setStyleSheet(splitter_style)
+        self.remote_splitter.setStyleSheet(splitter_style)
 
-        self.model = FileSystemModel()
-        self.tree_view.setModel(self.model)
-
-        # Hide all columns except the file/directory names
-        for i in range(1, self.model.columnCount()):
-            self.tree_view.hideColumn(i)
-
-        self.tree_view.header().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.tree_view.setAnimated(True)
-        self.tree_view.setIndentation(20)
-        self.tree_view.setSortingEnabled(True)
-
-        # Update TreeView
-        self.tree_view.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.tree_view.customContextMenuRequested.connect(self.show_context_menu)
-        self.tree_view.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.tree_view.doubleClicked.connect(self.show_metadata)
-        
-        # Progress widget with history manager
+        # Progress widget
         layout.addWidget(self.progress_widget)
+
+    def eventFilter(self, source, event):
+        if event.type() == QEvent.DragEnter:
+            logging.debug("=== Drag Enter Event ===")
+            if source == self.local_tree.viewport():
+                index = self.local_tree.indexAt(event.pos())
+                if index.isValid():
+                    item = self.local_model.itemFromIndex(index)
+                    logging.debug(f"Drag source path: {item.data(Qt.UserRole)}")
+                    self._log_tree_state("Before drag")
+            event.accept()
+            return True
+        elif event.type() == QEvent.Drop:
+            logging.debug("=== Drop Event ===")
+            self._log_tree_state("Before drop handling")
+            result = self.handleDrop(source, event)
+            self._log_tree_state("After drop handling")
+            return result
+        return super().eventFilter(source, event)
+    
+    def _log_tree_state(self, context):
+        """Log the current state of the local file tree"""
+        def log_item_state(item, depth=0):
+            path = item.data(Qt.UserRole)
+            has_placeholder = item.rowCount() == 1 and item.child(0).text() == ""
+            # logging.debug(f"{'  ' * depth}Path: {path}")
+            # logging.debug(f"{'  ' * depth}  rowCount: {item.rowCount()}")
+            # logging.debug(f"{'  ' * depth}  hasPlaceholder: {has_placeholder}")
+            
+            for row in range(item.rowCount()):
+                log_item_state(item.child(row), depth + 1)
+
+        logging.debug(f"=== Tree State {context} ===")
+        root = self.local_model.invisibleRootItem()
+        for row in range(root.rowCount()):
+            log_item_state(root.child(row))
+
+    def handleDrop(self, target, event):
+        try:
+            if target.objectName() == "qt_scrollarea_viewport":
+                target = target.parent()
+                logging.info(f"Adjusted target to parent tree: {target.objectName()}")
+
+            source_widget = event.source()
+            source_index = source_widget.currentIndex()
+            logging.debug(f"Drop event - Source widget type: {type(source_widget).__name__}")
+            logging.debug(f"Source index valid: {source_index.isValid()}")
+            
+            if source_widget == self.local_tree:
+                source_item = self.local_model.itemFromIndex(source_index)
+                source_path = source_item.data(Qt.UserRole)
+                logging.info(f"Local drag source path: {source_path}")
+            else:
+                source_item = self.remote_model.itemFromIndex(source_index)
+                metadata = source_item.data(Qt.UserRole)
+                if metadata and isinstance(metadata, dict) and 'ClientFullNameAndPathAsPosix' in metadata:
+                    source_path = metadata['ClientFullNameAndPathAsPosix']
+                else:
+                    path_parts = []
+                    current_item = source_item
+                    while current_item:
+                        path_parts.insert(0, current_item.text())
+                        current_item = current_item.parent()
+                    source_path = '/'.join(path_parts)
+                logging.info(f"Remote drag source path: {source_path}")
+
+            if not source_path:
+                logging.error("Invalid source path")
+                return False
+            
+            if source_widget == self.local_tree and (target == self.remote_tree or target == self.remote_tree.viewport()):
+                logging.info(f"Initiating backup operation for: {source_path}")
+                settings = self.read_settings()
+                if settings:
+                    settings['user_email'] = self.user_email
+                    settings['settings_path'] = self.settings_path
+                    if self.history_manager:
+                        operation_id = self.history_manager.start_operation(
+                            'backup', InitiationSource.USER, self.user_email
+                        )
+                        settings['operation_id'] = operation_id
+                    self.progress_widget.start_operation('backup', source_path, settings)
+                    
+                    # After starting backup, completely reset the local tree
+                    QTimer.singleShot(100, self.complete_tree_reset)
+                    
+            elif source_widget == self.remote_tree and (target == self.local_tree or target == self.local_tree.viewport()):
+                logging.info(f"Initiating restore operation for: {source_path}")
+                settings = self.read_settings()
+                if settings:
+                    settings['user_email'] = self.user_email
+                    settings['settings_path'] = self.settings_path
+                    if self.history_manager:
+                        operation_id = self.history_manager.start_operation(
+                            'restore', InitiationSource.USER, self.user_email
+                        )
+                        settings['operation_id'] = operation_id
+                    self.progress_widget.start_operation('restore', source_path, settings)
+            
+            logging.debug("Drop operation completed successfully")
+            event.accept()
+            return True
+
+        except Exception as e:
+            logging.error(f"Error handling drop event: {e}", exc_info=True)
+            return False
+
+    def complete_tree_reset(self):
+        """Completely reset and reinitialize the local file tree"""
+        logging.info("Performing complete reset of local file tree")
+        try:
+            # Create new model instance
+            self.local_model = LocalFileSystemModel()
+            
+            # Disconnect old model and set new one
+            self.local_tree.setModel(None)  # Explicitly remove old model
+            self.local_tree.setModel(self.local_model)
+            
+            # Re-establish connections
+            self.local_tree.expanded.connect(self.on_item_expanded)
+            self.local_tree.clicked.connect(self.on_item_clicked)
+            
+            # Reset tree view properties
+            self.local_tree.setHeaderHidden(True)
+            self.local_tree.setIndentation(20)
+            self.local_tree.setStyle(self.custom_style)
+            self.local_tree.setDragEnabled(True)
+            self.local_tree.setAcceptDrops(True)
+            self.local_tree.setDropIndicatorShown(False)
+            self.local_tree.setDragDropMode(QTreeView.InternalMove)
+            
+            # Force model to load top-level drives
+            self.local_model.load_top_level_dirs()
+            
+            logging.info("Local file tree reset completed successfully")
+            
+        except Exception as e:
+            logging.error(f"Error during complete tree reset: {e}", exc_info=True)
+            # In case of error, try one more time with basic initialization
+            try:
+                self.local_model = LocalFileSystemModel()
+                self.local_tree.setModel(self.local_model)
+                self.local_model.load_top_level_dirs()
+            except Exception as e2:
+                logging.error(f"Fallback initialization also failed: {e2}")
+
+    def reload_local_tree(self):
+        """Reload the local file system tree from scratch"""
+        logging.info("Reloading local file system tree")
+        try:
+            # Store the current expanded items and scroll position
+            expanded_paths = []
+            current_scroll = self.local_tree.verticalScrollBar().value()
+            
+            def store_expanded_items(parent=QModelIndex()):
+                for row in range(self.local_model.rowCount(parent)):
+                    idx = self.local_model.index(row, 0, parent)
+                    if self.local_tree.isExpanded(idx):
+                        item = self.local_model.itemFromIndex(idx)
+                        path = item.data(Qt.UserRole)
+                        expanded_paths.append(path)
+                        store_expanded_items(idx)
+            
+            # Store currently expanded items
+            store_expanded_items()
+            
+            # Reload the model
+            self.local_model = LocalFileSystemModel()
+            self.local_tree.setModel(self.local_model)
+            
+            # Restore expanded state
+            def restore_expanded_items(parent=QModelIndex()):
+                for row in range(self.local_model.rowCount(parent)):
+                    idx = self.local_model.index(row, 0, parent)
+                    item = self.local_model.itemFromIndex(idx)
+                    path = item.data(Qt.UserRole)
+                    if path in expanded_paths:
+                        self.local_tree.setExpanded(idx, True)
+                        restore_expanded_items(idx)
+            
+            # Restore expansion state and scroll position
+            restore_expanded_items()
+            self.local_tree.verticalScrollBar().setValue(current_scroll)
+            
+            logging.info("Local file system tree reloaded successfully")
+            
+        except Exception as e:
+            logging.error(f"Error reloading local tree: {e}", exc_info=True)
+
+    def check_indexing_status(self):
+        """Monitor and update indexing status."""
+        status_type, data = self.filesystem_index.get_indexing_status()
         
-        footnote = QLabel("Tip: Right-click a file or folder for backup and restore options. Double-click a file for more information.")
-        footnote.setObjectName("FootnoteLabel")
-        footnote.setWordWrap(True)
-        layout.addWidget(footnote)
+        if status_type == 'progress':
+            pass
+            
+        elif status_type == 'batch_progress':
+            operation = "Adding" if data['operation'] == 'add' else "Removing"
+            logging.info(f"{operation} files... {data['processed']:,}/{data['total']:,}")
+            
+        elif status_type == 'sync_complete':
+            message = (
+                f"Filesystem sync complete. "
+                f"Processed {data['total_items']:,} items "
+                f"(Added: {data['added_items']:,}, "
+                f"Removed: {data['removed_items']:,})"
+            )
+            logging.info(message)
+            
+        elif status_type == 'error':
+            error_msg = f"Sync error: {data}"
+            logging.error(error_msg)
+
+    def search_local(self):
+        search_text = self.local_search.text().strip()
+        if not search_text:
+            self.local_results.setVisible(False)
+            return
+
+        self.local_progress.setVisible(True)
+        self.local_progress.setRange(0, 0)  # Indeterminate progress
+        
+        # Create search worker thread
+        self.search_thread = QThread()
+        self.search_worker = LocalSearchWorker(search_text, self.filesystem_index)
+        self.search_worker.moveToThread(self.search_thread)
+        
+        # Connect signals
+        self.search_thread.started.connect(self.search_worker.run)
+        self.search_worker.finished.connect(self.search_thread.quit)
+        self.search_worker.finished.connect(self.search_worker.deleteLater)
+        self.search_thread.finished.connect(self.search_thread.deleteLater)
+        self.search_worker.results_ready.connect(lambda results, truncated, stats: 
+            self.handle_local_search_results(results, truncated, stats))
+        
+        self.search_thread.start()
+
+    def handle_local_search_results(self, results, truncated, stats):
+        search_text = self.local_search.text()
+        self.local_progress.setVisible(False)
+        self.local_results.setVisible(True)
+        
+        parent_item = QTreeWidgetItem()
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        parent_item.setData(0, Qt.UserRole + 1, timestamp)
+        
+        folders = [r for r in results if r['is_directory']]
+        files = [r for r in results if not r['is_directory']]
+        
+        if results:
+            result_text = (f"{stats['matches_found']} matches for '{search_text}' "
+                          f"({len(results)} shown) in {stats['total_files']} "
+                          f"files ({stats['total_folders']} folders)")
+            parent_item.setData(0, Qt.UserRole, "found")
+        else:
+            result_text = (f"0 matches for '{search_text}' in "
+                          f"{stats['total_files']} files "
+                          f"({stats['total_folders']} folders)")
+            parent_item.setData(0, Qt.UserRole, "not_found")
+        
+        parent_item.setText(0, result_text)
+        parent_item.setToolTip(0, f"Search performed at {timestamp}")
+        
+        if results:
+            if folders:
+                folder_group = QTreeWidgetItem(parent_item)
+                folder_group.setText(0, f"Folders ({len(folders)})")
+                for folder in folders:
+                    item = QTreeWidgetItem(folder_group)
+                    item.setText(0, folder['path'])
+                    item.setData(0, Qt.UserRole, "found")
+                    item.setToolTip(0, f"Found at {timestamp}")
+            
+            if files:
+                file_group = QTreeWidgetItem(parent_item)
+                file_group.setText(0, f"Files ({len(files)})")
+                for file in files:
+                    item = QTreeWidgetItem(file_group)
+                    item.setText(0, file['path'])
+                    item.setData(0, Qt.UserRole, "found")
+                    item.setToolTip(0, f"Found at {timestamp}")
+        
+        parent_item.setExpanded(True)
+        
+        theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
+        color = QColor(theme['search_results_found'] if results else theme['search_results_not_found'])
+        parent_item.setForeground(0, color)
+        
+        self.local_results.insertTopLevelItem(0, parent_item)
+        
+        while self.local_results.topLevelItemCount() > 20:
+            self.local_results.takeTopLevelItem(self.local_results.topLevelItemCount() - 1)
+
+    def search_remote(self):
+        search_text = self.remote_search.text().strip()
+        if not search_text:
+            self.remote_results.setVisible(False)
+            return
+
+        self.remote_progress.setVisible(True)
+        self.remote_progress.setRange(0, 0)
+        
+        # Create search worker thread
+        self.remote_search_thread = QThread()
+        self.remote_search_worker = RemoteSearchWorker(search_text, self.remote_model)
+        self.remote_search_worker.moveToThread(self.remote_search_thread)
+        
+        # Connect signals
+        self.remote_search_thread.started.connect(self.remote_search_worker.run)
+        self.remote_search_worker.finished.connect(self.remote_search_thread.quit)
+        self.remote_search_worker.finished.connect(self.remote_search_worker.deleteLater)
+        self.remote_search_thread.finished.connect(self.remote_search_thread.deleteLater)
+        self.remote_search_worker.results_ready.connect(self.handle_remote_search_results)
+        
+        self.remote_search_thread.start()
+
+    def handle_remote_search_results(self, results):
+        search_text = self.remote_search.text()
+        self.remote_progress.setVisible(False)
+        self.remote_results.setVisible(True)
+        
+        # Create parent item for new search
+        parent_item = QTreeWidgetItem()
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        parent_item.setData(0, Qt.UserRole + 1, timestamp)
+        
+        # Group results by type
+        file_paths = set(results)  # Convert to set for unique paths
+        folders = {os.path.dirname(path) for path in file_paths if path}
+        
+        # Construct result text
+        if results:
+            result_text = f"Found {len(results)} matches for '{search_text}' in {len(file_paths)} files ({len(folders)} folders)"
+            parent_item.setData(0, Qt.UserRole, "found")
+            
+            # Add folder groups
+            if folders:
+                for folder in sorted(folders):
+                    folder_group = QTreeWidgetItem(parent_item)
+                    folder_files = [f for f in file_paths if os.path.dirname(f) == folder]
+                    folder_group.setText(0, f"{folder} Files ({len(folder_files)})")
+                    
+                    for file_path in sorted(folder_files):
+                        item = QTreeWidgetItem(folder_group)
+                        item.setText(0, os.path.basename(file_path))
+                        item.setData(0, Qt.UserRole, "found")
+        else:
+            result_text = f"No matches found for '{search_text}'"
+            parent_item.setData(0, Qt.UserRole, "not_found")
+
+        parent_item.setText(0, result_text)
+        parent_item.setToolTip(0, f"Search performed at {timestamp}")
+        parent_item.setExpanded(True)
+        
+        # Apply color based on result status
+        color = QColor("#34A853") if results else QColor("#EA4335")
+        parent_item.setForeground(0, color)
+        
+        # Insert at the beginning of the list
+        self.remote_results.insertTopLevelItem(0, parent_item)
+        
+        # Limit history to last 20 searches
+        while self.remote_results.topLevelItemCount() > 20:
+            self.remote_results.takeTopLevelItem(self.remote_results.topLevelItemCount() - 1)
+
+    def update_search_progress(self, workers: List[Process]):
+        try:
+            while True:
+                try:
+                    progress = self.progress_queue.get_nowait()
+                    self.local_results.clear()
+                    
+                    if progress.is_complete and all(not w.is_alive() for w in workers):
+                        self.search_timer.stop()
+                        self.search_progress.hide()
+                        if progress.files_found > 0:
+                            root = QTreeWidgetItem([f"Found {progress.files_found} matches in {progress.folders_searched} folders"])
+                            root.setData(0, Qt.UserRole, "found")
+                            self.local_results.addTopLevelItem(root)
+                        else:
+                            self.local_results.addTopLevelItem(QTreeWidgetItem(["No matches found"]))
+                        break
+                    else:
+                        status = f"Searching... ({progress.folders_searched} folders scanned, {progress.files_found} matches)"
+                        if progress.current_path:
+                            status += f"\nCurrent: {progress.current_path}"
+                        self.local_results.addTopLevelItem(QTreeWidgetItem([status]))
+                        
+                except Empty:
+                    break
+                    
+        except Exception as e:
+            logging.error(f"Error updating search progress: {e}")
+            self.search_timer.stop()
+            self.search_progress.hide()
+
+    def find_matches(self, search_text, model):
+        matches = []
+        
+        def search_recursive(parent):
+            for row in range(parent.rowCount()):
+                item = parent.child(row)
+                if search_text.lower() in item.text().lower():
+                    matches.append((item.text(), model.indexFromItem(item)))
+                if item.hasChildren():
+                    search_recursive(item)
+
+        search_recursive(model.invisibleRootItem())
+        return matches
+
+    def show_matches(self, matches, results_widget):
+        results_widget.clear()
+        root = QTreeWidgetItem([f"Found {len(matches)} matches"])
+        root.setData(0, Qt.UserRole, "found")
+        
+        for name, _ in matches:
+            child = QTreeWidgetItem([name])
+            root.addChild(child)
+        
+        results_widget.addTopLevelItem(root)
+        root.setExpanded(True)
+        results_widget.setVisible(True)
+
+    def navigate_to_local_result(self, item, column):
+        if not item.parent() or not item.parent().parent():  # Skip root and category items
+            return
+            
+        path = item.text(0)
+        model = self.local_tree.model()
+        self.expand_to_path(path, self.local_tree, model)
+
+    def navigate_to_remote_result(self, item, column):
+        """Navigate to clicked search result in remote tree"""
+        if not item.parent() or not item.parent().parent():  # Skip root and category items
+            return
+
+        # We need to find both the root drive and the target item
+        current_index = QModelIndex()
+        model = self.remote_tree.model()
+
+        # First, find the root drive ('C:')
+        drive_index = None
+        for row in range(model.rowCount(current_index)):
+            child_index = model.index(row, 0, current_index)
+            if model.data(child_index, Qt.DisplayRole) == "C:":
+                drive_index = child_index
+                break
+
+        if not drive_index:
+            logging.error("Could not find root drive")
+            return
+
+        # Get the clicked item's name and parent type
+        item_name = item.text(0)
+        parent_text = item.parent().text(0)
+        
+        logging.debug(f"Navigating to: {item_name} from {parent_text}")
+
+        # Start from the drive and step through each level
+        current_index = drive_index
+        self.remote_tree.expand(current_index)
+
+        # If we're looking for 'Users', we know it's under C:
+        if item_name == "Users":
+            # Look for Users directory under C:
+            for row in range(model.rowCount(current_index)):
+                child_index = model.index(row, 0, current_index)
+                if model.data(child_index, Qt.DisplayRole) == "Users":
+                    current_index = child_index
+                    break
+        else:
+            # For other items, we need to traverse the full path
+            parts = ["Users", "Tyler", "Documents", "Dark_Age"]
+            for part in parts:
+                found = False
+                for row in range(model.rowCount(current_index)):
+                    child_index = model.index(row, 0, current_index)
+                    if model.data(child_index, Qt.DisplayRole) == part:
+                        current_index = child_index
+                        self.remote_tree.expand(current_index)
+                        found = True
+                        break
+                if not found:
+                    break
+
+        if current_index.isValid():
+            self.remote_tree.setCurrentIndex(current_index)
+            self.remote_tree.scrollTo(current_index)
+            self.remote_tree.setFocus()
+            
+    def expand_to_path(self, path: str, tree_view: QTreeView, model: QStandardItemModel):
+        path_parts = Path(path).parts
+        current_index = model.index(0, 0, QModelIndex())
+        
+        for part in path_parts:
+            while current_index.isValid():
+                item = model.itemFromIndex(current_index)
+                if item.text() == part:
+                    tree_view.expand(current_index)
+                    tree_view.setCurrentIndex(current_index)
+                    tree_view.scrollTo(current_index)
+                    current_index = model.index(0, 0, current_index)
+                    break
+                current_index = current_index.siblingAtRow(current_index.row() + 1)
+
+    def navigate_to_result(self, item, column):
+        if item.parent() is None:  # This is a root item (search summary)
+            item.setExpanded(not item.isExpanded())
+        else:  # This is a child item (actual result)
+            full_path = item.text(0)
+            for _, index in self.find_partial_matches(full_path)[0]:
+                if self.get_full_path(self.model.itemFromIndex(index)) == full_path:
+                    self.navigate_to_index(index)
+                    break
+
+    def navigate_to_index(self, index, tree_view):
+        tree_view.setCurrentIndex(index)
+        tree_view.scrollTo(index)
+        parent = index.parent()
+        while parent.isValid():
+            tree_view.expand(parent)
+            parent = parent.parent()
+
+    def init_models(self):
+        self.local_model = LocalFileSystemModel()
+        self.remote_model = RemoteFileSystemModel()
+
+    def load_initial_data(self):
+        """Load initial directory data after UI is fully initialized"""
+        logging.info("Beginning initial data load")
+        try:
+            self.local_model.load_directory(QDir.homePath())
+            if hasattr(self, 'metadata_dir'):
+                self.remote_model.load_data(self.metadata_dir)
+            logging.info("Initial data load complete")
+        except Exception as e:
+            logging.error(f"Error loading initial data: {e}")
+
+    def on_item_clicked(self, index):
+        item = self.local_model.itemFromIndex(index)
+        if item and item.hasChildren():
+            self.local_model.fetchMore(index)
+
+    def on_local_item_clicked(self, index):
+        item = self.local_model.itemFromIndex(index)
+        filepath = item.data(Qt.UserRole)
+        if os.path.isdir(filepath):
+            self.local_model.load_directory(filepath)
+
+    def on_remote_item_clicked(self, index):
+        item = self.remote_model.itemFromIndex(index)
+        metadata = item.data(Qt.UserRole)
+        if metadata:
+            dialog = MetadataDialog(metadata, self)
+            dialog.exec_()
+
+    def show_local_context_menu(self, position):
+        index = self.local_tree.indexAt(position)
+        if not index.isValid():
+            return
+            
+        item = self.local_model.itemFromIndex(index)
+        filepath = item.data(Qt.UserRole)
+        
+        menu = QMenu(self)
+        backup_action = menu.addAction("Backup")
+        
+        action = menu.exec_(self.local_tree.viewport().mapToGlobal(position))
+        if action == backup_action:
+            self.backup_item(filepath)
+
+    def show_remote_context_menu(self, position):
+        index = self.remote_tree.indexAt(position)
+        if not index.isValid():
+            return
+            
+        item = self.remote_model.itemFromIndex(index)
+        metadata = item.data(Qt.UserRole)
+        
+        menu = QMenu(self)
+        restore_action = menu.addAction("Restore")
+        
+        if metadata and 'versions' in metadata:
+            versions_menu = menu.addMenu("Versions")
+            for version in metadata['versions']:
+                timestamp = version.get('timestamp', 'Unknown')
+                version_action = versions_menu.addAction(f"Restore version from {timestamp}")
+                version_action.setData(version)
+        
+        action = menu.exec_(self.remote_tree.viewport().mapToGlobal(position))
+        if action == restore_action:
+            self.restore_item(metadata['ClientFullNameAndPathAsPosix'])
+        elif action and action.parent() == versions_menu:
+            version_data = action.data()
+            self.restore_file_version(metadata['ClientFullNameAndPathAsPosix'], version_data)
 
     def apply_theme(self):
         theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
@@ -4132,8 +5615,13 @@ class FileExplorerPanel(QWidget):
     def on_theme_changed(self):
         self.apply_theme()
 
+    def on_item_expanded(self, index):
+        if index.model() == self.local_model:
+            self.local_model.fetchMore(index)
+
     def show_metadata(self, index):
-        item = self.model.itemFromIndex(index)
+        """Show metadata dialog for selected remote file"""
+        item = self.remote_model.itemFromIndex(index)
         metadata = item.data(Qt.UserRole)
         if metadata:
             dialog = MetadataDialog(metadata, self)
@@ -4161,20 +5649,19 @@ class FileExplorerPanel(QWidget):
             self.results_panel.addTopLevelItem(QTreeWidgetItem(["No matching items found."]))
             self.results_panel.setVisible(True)
 
-    def find_exact_match(self, search_text):
+    def find_exact_match(self, search_text, model):
         def search_recursive(parent):
             for row in range(parent.rowCount()):
                 item = parent.child(row)
-                full_path = self.get_full_path(item)
-                if full_path.lower() == search_text.lower():
-                    return self.model.indexFromItem(item)
+                if item.text().lower() == search_text.lower():
+                    return model.indexFromItem(item)
                 if item.hasChildren():
                     result = search_recursive(item)
                     if result.isValid():
                         return result
             return QModelIndex()
 
-        return search_recursive(self.model.invisibleRootItem())
+        return search_recursive(model.invisibleRootItem())
 
     def find_partial_matches(self, search_text):
         matches = []
@@ -4359,21 +5846,6 @@ class FileExplorerPanel(QWidget):
             
         self.results_panel.setVisible(True)
 
-    def navigate_to_result(self, item, column):
-        if item.parent() is None:  # This is a root item (search summary)
-            item.setExpanded(not item.isExpanded())
-        else:  # This is a child item (actual result)
-            full_path = item.text(0)
-            for _, index in self.find_partial_matches(full_path)[0]:
-                if self.get_full_path(self.model.itemFromIndex(index)) == full_path:
-                    self.navigate_to_index(index)
-                    break
-
-    def navigate_to_index(self, index):
-        self.tree_view.setCurrentIndex(index)
-        self.tree_view.scrollTo(index, QAbstractItemView.PositionAtCenter)
-        self.expand_to_index(index)
-
     def expand_to_index(self, index):
         parent = index.parent()
         if parent.isValid():
@@ -4431,54 +5903,39 @@ class FileExplorerPanel(QWidget):
         branch_end.save('branch-end.png')
 
     def add_file(self, path, metadata):
+        """Add a file to the remote tree with proper path handling"""
         parts = path.strip('/').split('/')
-        parent = self.model.invisibleRootItem()
-
-        for i, part in enumerate(parts):
-            if i == len(parts) - 1:  # This is a file
-                item = QStandardItem(part)
-                item.setData(metadata, Qt.UserRole)
-                item.setIcon(self.get_file_icon(part))
-                parent.appendRow(item)
-            else:  # This is a directory
-                found = False
-                for row in range(parent.rowCount()):
-                    if parent.child(row).text() == part:
-                        parent = parent.child(row)
-                        found = True
-                        break
-                if not found:
-                    new_dir = QStandardItem(part)
-                    new_dir.setIcon(self.get_folder_icon())
-                    parent.appendRow(new_dir)
-                    parent = new_dir
+        parent = self.root
+        
+        # Build the path one component at a time
+        for i, part in enumerate(parts[:-1]):  # Process directory components
+            found = None
+            for row in range(parent.rowCount()):
+                if parent.child(row).text() == part:
+                    found = parent.child(row)
+                    break
+                    
+            if not found:
+                found = QStandardItem(part)
+                found.setIcon(self.get_folder_icon())
+                # Store full path up to this point in metadata
+                dir_metadata = {
+                    'ClientFullNameAndPathAsPosix': '/'.join(parts[:i+1])
+                }
+                found.setData(dir_metadata, Qt.UserRole)
+                parent.appendRow(found)
+            parent = found
+            
+        # Add the file itself
+        file_item = QStandardItem(parts[-1])
+        file_item.setData(metadata, Qt.UserRole)
+        file_item.setIcon(self.get_file_icon(parts[-1]))
+        parent.appendRow(file_item)
 
     def load_data(self):
-        """Load file metadata from most recent JSON file"""
-        metadata_files = self.get_metadata_files()
-        
-        if not metadata_files:
-            logging.warning("No metadata files found")
-            return
-
-        # Use most recent file
-        latest_file = metadata_files[0]
-        json_path = os.path.join(self.metadata_dir, latest_file)
-        
-        try:
-            with open(json_path, 'r') as file:
-                data = json.load(file)
-                for item in data:
-                    self.model.add_file(item['ClientFullNameAndPathAsPosix'], item)
-            
-            logging.info(f"Loaded metadata from {latest_file}")
-            
-            # Cleanup old files
-            self.cleanup_old_metadata()
-            
-        except Exception as e:
-            logging.error(f"Error loading metadata: {str(e)}", exc_info=True)
-            StormcloudMessageBox.critical(self, "Error", f"Failed to load file metadata: {str(e)}")
+        self.local_model.load_top_level_dirs()
+        if hasattr(self, 'metadata_dir'):
+            self.remote_model.load_data(self.metadata_dir)
 
     def read_settings(self):
         """Read current settings from file with detailed logging"""
@@ -4774,17 +6231,12 @@ class FileExplorerPanel(QWidget):
             # Refresh file metadata after successful operation
             self.load_data()
 
-    def start_operation(self, operation_type: str):
-        if not self.current_path:
-            return
-            
+    def start_operation(self, operation_type: str, path: str):
         settings = self.read_settings()
         if not settings:
             return
             
-        # Ensure user attribution is properly set
         settings['user_email'] = self.user_email
-        logging.info(f"Starting {operation_type} operation with user: {self.user_email}")
         
         if self.history_manager:
             try:
@@ -4800,9 +6252,14 @@ class FileExplorerPanel(QWidget):
                 return
             
         settings['settings_path'] = self.settings_path
-        
-        self.progress_widget.start_operation(operation_type, self.current_path, settings)
-    
+        self.progress_widget.start_operation(operation_type, path, settings)
+
+    def closeEvent(self, event):
+        """Handle clean shutdown."""
+        if hasattr(self, 'filesystem_index'):
+            self.filesystem_index.shutdown()
+        super().closeEvent(event)
+
 class FileSystemModel(QStandardItemModel):
     def __init__(self):
         super().__init__()
@@ -4810,27 +6267,34 @@ class FileSystemModel(QStandardItemModel):
         self.root = self.invisibleRootItem()
 
     def add_file(self, path, metadata):
+        """Add a file to the remote tree with proper path handling"""
         parts = path.strip('/').split('/')
         parent = self.root
-
-        for i, part in enumerate(parts):
-            if i == len(parts) - 1:  # This is a file
-                item = QStandardItem(part)
-                item.setData(metadata, Qt.UserRole)
-                item.setIcon(self.get_file_icon(part))
-                parent.appendRow(item)
-            else:  # This is a directory
-                found = False
-                for row in range(parent.rowCount()):
-                    if parent.child(row).text() == part:
-                        parent = parent.child(row)
-                        found = True
-                        break
-                if not found:
-                    new_dir = QStandardItem(part)
-                    new_dir.setIcon(self.get_folder_icon())
-                    parent.appendRow(new_dir)
-                    parent = new_dir
+        
+        # Build the path one component at a time
+        for i, part in enumerate(parts[:-1]):  # Process directory components
+            found = None
+            for row in range(parent.rowCount()):
+                if parent.child(row).text() == part:
+                    found = parent.child(row)
+                    break
+                    
+            if not found:
+                found = QStandardItem(part)
+                found.setIcon(self.get_folder_icon())
+                # Store full path up to this point in metadata
+                dir_metadata = {
+                    'ClientFullNameAndPathAsPosix': '/'.join(parts[:i+1])
+                }
+                found.setData(dir_metadata, Qt.UserRole)
+                parent.appendRow(found)
+            parent = found
+            
+        # Add the file itself
+        file_item = QStandardItem(parts[-1])
+        file_item.setData(metadata, Qt.UserRole)
+        file_item.setIcon(self.get_file_icon(parts[-1]))
+        parent.appendRow(file_item)
 
     def get_file_icon(self, filename):
         # Implement logic to return appropriate file icon based on file type
@@ -4840,6 +6304,382 @@ class FileSystemModel(QStandardItemModel):
     def get_folder_icon(self):
         # Return a folder icon
         return QIcon.fromTheme("folder")
+
+class LocalFileSystemModel(QStandardItemModel):
+    def __init__(self):
+        super().__init__()
+        self.setHorizontalHeaderLabels(['Local Files'])
+        self._is_loading = False
+        self.invisibleRootItem().setData("root", Qt.UserRole)
+        self._init_icons()
+        self._processed_paths = set()
+        self._drag_in_progress = False
+        self.load_top_level_dirs()
+
+    def _init_icons(self):
+        icon_provider = QFileIconProvider()
+        self.folder_icon = icon_provider.icon(QFileIconProvider.Folder)
+        self.drive_icon = icon_provider.icon(QFileIconProvider.Drive)
+        self.file_icon = icon_provider.icon(QFileIconProvider.File)
+
+    def load_top_level_dirs(self):
+        """Single method to initialize drive listing"""
+        if self._is_loading:
+            logging.debug("Skipping load_top_level_dirs - already loading")
+            return
+
+        try:
+            self._is_loading = True
+            logging.debug("Beginning load_top_level_dirs")
+            self.beginResetModel()
+            self.clear()
+            self.setHorizontalHeaderLabels(['Local Files'])
+            
+            added_drives = set()
+            bitmask = win32api.GetLogicalDrives()
+            
+            for letter in range(65, 91):
+                if bitmask & (1 << (letter - 65)):
+                    drive = f"{chr(letter)}:\\"
+                    if (drive not in added_drives and 
+                        win32file.GetDriveType(drive) in (win32file.DRIVE_FIXED, win32file.DRIVE_REMOVABLE)):
+                        logging.debug(f"Processing drive {drive}")
+                        item = QStandardItem(drive)
+                        item.setData(drive, Qt.UserRole)
+                        item.setIcon(self.drive_icon)
+                        if QDir(drive).isReadable():
+                            logging.debug(f"Drive {drive} is readable, adding placeholder")
+                            item.appendRow(QStandardItem(""))
+                        self.invisibleRootItem().appendRow(item)
+                        added_drives.add(drive)
+                        logging.debug(f"Added drive {drive} to model")
+                QApplication.processEvents()
+                
+        except Exception as e:
+            logging.error(f"Error loading drives: {e}")
+        finally:
+            logging.debug("Completing load_top_level_dirs")
+            self.endResetModel()
+            self._is_loading = False
+
+    def init_drives(self):
+        QTimer.singleShot(0, self._async_load_drives)
+
+    def itemFlags(self, index):
+        return Qt.ItemIsEnabled | Qt.ItemIsSelectable
+
+    def load_data(self):
+        if self._is_loading:
+            return
+            
+        self._is_loading = True
+        try:
+            self.beginResetModel()
+            self.clear()
+            self.setHorizontalHeaderLabels(['Local Files'])
+            
+            added_drives = set()  # Track added drives to prevent duplicates
+            bitmask = win32api.GetLogicalDrives()
+            
+            for letter in range(65, 91):
+                if bitmask & (1 << (letter - 65)):
+                    drive = f"{chr(letter)}:\\"
+                    if (drive not in added_drives and 
+                        win32file.GetDriveType(drive) in (win32file.DRIVE_FIXED, win32file.DRIVE_REMOVABLE)):
+                        item = QStandardItem(drive)
+                        item.setData(drive, Qt.UserRole)
+                        item.setIcon(self.drive_icon)
+                        if QDir(drive).isReadable():
+                            item.appendRow(QStandardItem(""))
+                        self.invisibleRootItem().appendRow(item)
+                        added_drives.add(drive)
+                        logging.info(f"Added drive {drive}")
+                QApplication.processEvents()
+                
+        except Exception as e:
+            logging.error(f"Error loading drives: {e}")
+        finally:
+            self.endResetModel()
+            self._is_loading = False
+
+    def _async_load_drives(self):
+        try:
+            self.beginResetModel()
+            self.clear()
+            self.setHorizontalHeaderLabels(['Local Files'])
+            
+            added_drives = set()
+            bitmask = win32api.GetLogicalDrives()
+            
+            for letter in range(65, 91):
+                if bitmask & (1 << (letter - 65)):
+                    drive = f"{chr(letter)}:\\"
+                    if (drive not in added_drives and 
+                        win32file.GetDriveType(drive) in (win32file.DRIVE_FIXED, win32file.DRIVE_REMOVABLE)):
+                        item = QStandardItem(drive)
+                        item.setData(drive, Qt.UserRole)
+                        item.setIcon(self.drive_icon)
+                        if QDir(drive).isReadable():
+                            item.appendRow(QStandardItem(""))
+                        self.invisibleRootItem().appendRow(item)
+                        added_drives.add(drive)
+                        logging.info(f"Added drive {drive}")
+                QApplication.processEvents()
+                
+        except Exception as e:
+            logging.error(f"Error loading drives: {e}")
+        finally:
+            self.endResetModel()
+
+    def fetchMore(self, parent):
+        if not parent.isValid():
+            return
+
+        item = self.itemFromIndex(parent)
+        path = item.data(Qt.UserRole)
+        
+        try:
+            if item.rowCount() == 1 and item.child(0).text() == "":
+                item.removeRow(0)
+            
+            dir = QDir(path)
+            dir.setFilter(QDir.AllEntries | QDir.Hidden | QDir.NoDotAndDotDot)
+            entries = dir.entryInfoList()
+            
+            batch_size = 50
+            for i in range(0, len(entries), batch_size):
+                batch = entries[i:i + batch_size]
+                for entry in batch:
+                    abs_path = entry.absoluteFilePath()
+                    if abs_path not in self._processed_paths:
+                        self._processed_paths.add(abs_path)
+                        child = QStandardItem(entry.fileName())
+                        child.setData(abs_path, Qt.UserRole)
+                        
+                        if entry.isDir():
+                            child.setIcon(self.folder_icon)
+                            if QDir(abs_path).isReadable():
+                                child.appendRow(QStandardItem(""))
+                        else:
+                            child.setIcon(self.file_icon)
+                            
+                        item.appendRow(child)
+                QApplication.processEvents()
+                
+        except Exception as e:
+            logging.error(f"Error in fetchMore for {path}: {e}")
+
+    def canFetchMore(self, parent):
+        if not parent.isValid():
+            return False
+        item = self.itemFromIndex(parent)
+        path = item.data(Qt.UserRole)
+        return item.rowCount() == 1 and item.child(0).text() == ""
+
+    def hasChildren(self, parent=QModelIndex()):
+        if not parent.isValid():
+            return True
+        item = self.itemFromIndex(parent)
+        path = item.data(Qt.UserRole)
+        
+        if item.rowCount() == 1:
+            readable = QDir(path).exists() and QDir(path).isReadable()
+            has_placeholder = item.child(0).text() == ""
+            return readable
+        
+        return item.rowCount() > 0
+
+    def mimeData(self, indexes):
+        logging.debug("=== mimeData called ===")
+        logging.debug(f"Creating mime data for {len(indexes)} indexes")
+        self._log_tree_state("During mimeData creation")
+        return super().mimeData(indexes)
+
+    def canDropMimeData(self, data, action, row, column, parent):
+        logging.debug("=== canDropMimeData called ===")
+        logging.debug(f"Action: {action}, Row: {row}, Column: {column}")
+        self._log_tree_state("During canDropMimeData")
+        return super().canDropMimeData(data, action, row, column, parent)
+
+    def dropMimeData(self, data, action, row, column, parent):
+        self._drag_in_progress = True
+        try:
+            return super().dropMimeData(data, action, row, column, parent)
+        finally:
+            self._drag_in_progress = False
+
+    def removeRows(self, row, count, parent=QModelIndex()):
+        """Override removeRows to preserve placeholder state"""
+        logging.debug(f"=== removeRows called ===")
+        logging.debug(f"Row: {row}, Count: {count}")
+        
+        if not parent.isValid():
+            return super().removeRows(row, count, parent)
+            
+        parent_item = self.itemFromIndex(parent)
+        if not parent_item:
+            return super().removeRows(row, count, parent)
+            
+        path = parent_item.data(Qt.UserRole)
+        needs_placeholder = False
+        
+        # Only restore placeholder if this is during drag-drop
+        if self._drag_in_progress and QDir(path).exists() and QDir(path).isReadable():
+            needs_placeholder = parent_item.rowCount() <= count
+            
+        result = super().removeRows(row, count, parent)
+        
+        # Restore placeholder if needed
+        if needs_placeholder and parent_item.rowCount() == 0:
+            parent_item.appendRow(QStandardItem(""))
+            logging.debug(f"Restored placeholder for {path}")
+            
+        return result
+
+    def _log_tree_state(self, context):
+        logging.debug(f"\n=== Tree State: {context} ===")
+        root = self.invisibleRootItem()
+        for row in range(root.rowCount()):
+            item = root.child(row)
+            self._log_item_state(item, depth=0, max_depth=1)
+
+    def _log_item_state(self, item, depth=0, max_depth=1):
+        path = item.data(Qt.UserRole)
+        indent = "  " * depth
+        
+        if depth < max_depth:
+            for row in range(item.rowCount()):
+                self._log_item_state(item.child(row), depth + 1, max_depth)
+    
+    def itemFromIndex(self, index):
+        item = super().itemFromIndex(index)
+        return item
+
+    def get_drive_icon(self):
+        if QIcon.fromTheme("drive-harddisk").isNull():
+            pixmap = QPixmap(16, 16)
+            pixmap.fill(Qt.transparent)
+            painter = QPainter(pixmap)
+            painter.setPen(QPen(Qt.darkGray))
+            painter.setBrush(QBrush(Qt.lightGray))
+            painter.drawRect(2, 2, 12, 12)
+            painter.end()
+            return QIcon(pixmap)
+        return QIcon.fromTheme("drive-harddisk")
+
+    def get_file_icon(self, filename):
+        try:
+            return QIcon.fromTheme("text-x-generic", QIcon())
+        except:
+            return QIcon()
+        
+    def get_folder_icon(self):
+        try:
+            return QIcon.fromTheme("folder", QIcon())
+        except:
+            return QIcon()
+
+class RemoteFileSystemModel(QStandardItemModel):
+    def __init__(self):
+        super().__init__()
+        self.setHorizontalHeaderLabels(['Remote Files'])
+        self.root = self.invisibleRootItem()
+        self._is_loading = False
+
+    def load_data(self, metadata_dir):
+        if self._is_loading:
+            return
+
+        try:
+            self._is_loading = True
+            self.beginResetModel()
+            
+            metadata_files = sorted(
+                [f for f in os.listdir(metadata_dir) 
+                 if f.startswith('file_metadata_') and f.endswith('.json')],
+                reverse=True
+            )
+            
+            if not metadata_files:
+                logging.info("No metadata files found")
+                return
+
+            json_path = os.path.join(metadata_dir, metadata_files[0])
+            with open(json_path, 'r') as file:
+                data = json.load(file)
+                
+                # Create directories first
+                directories = set()
+                for item in data:
+                    path = item['ClientFullNameAndPathAsPosix']
+                    parts = path.strip('/').split('/')
+                    current = ""
+                    for part in parts[:-1]:
+                        current = f"{current}/{part}" if current else part
+                        directories.add(current)
+                
+                for directory in sorted(directories):
+                    self._create_directory_path(directory)
+                
+                # Add files
+                for item in data:
+                    self._add_file(item['ClientFullNameAndPathAsPosix'], item)
+                    
+            logging.info(f"Loaded metadata from {metadata_files[0]}")
+
+        except Exception as e:
+            logging.error(f"Error loading metadata: {str(e)}")
+        finally:
+            self.endResetModel()
+            self._is_loading = False
+
+    def _create_directory_path(self, path):
+        parts = path.strip('/').split('/')
+        parent = self.root
+        
+        for part in parts:
+            found = None
+            for row in range(parent.rowCount()):
+                if parent.child(row).text() == part:
+                    found = parent.child(row)
+                    break
+                    
+            if not found:
+                new_dir = QStandardItem(part)
+                new_dir.setIcon(QIcon.fromTheme("folder"))
+                parent.appendRow(new_dir)
+                parent = new_dir
+            else:
+                parent = found
+
+    def _add_file(self, path, metadata):
+        parts = path.strip('/').split('/')
+        parent = self.root
+        
+        for part in parts[:-1]:
+            for row in range(parent.rowCount()):
+                if parent.child(row).text() == part:
+                    parent = parent.child(row)
+                    break
+                    
+        file_item = QStandardItem(parts[-1])
+        file_item.setData(metadata, Qt.UserRole)
+        file_item.setIcon(QIcon.fromTheme("text-x-generic"))
+        parent.appendRow(file_item)
+
+    def get_file_icon(self, filename):
+        try:
+            return QIcon.fromTheme("text-x-generic", QIcon())
+        except:
+            return QIcon()
+        
+    def get_folder_icon(self):
+        try:
+            return QIcon.fromTheme("folder", QIcon())
+        except:
+            return QIcon()
+
+# ---------------
 
 class MetadataDialog(QDialog):
     def __init__(self, metadata, parent=None):
@@ -4953,8 +6793,12 @@ class ThemeManager(QObject):
             "scroll_handle_hover": "#6a6a6a",
             "header_background": "#171717",
             "divider_color": "#666",
+            
+            
             "status_running": "#28A745",
             "status_not_running": "#DC3545",
+            "status_unknown": "#FFC107",  # Amber color for unknown state
+            
             "calendar_background": "#333",
             "calendar_text": "#e8eaed",
             "calendar_highlight": "#4285F4",
@@ -4969,6 +6813,8 @@ class ThemeManager(QObject):
             "carrot_foreground": "#FFFFFF",
             "search_results_found": "#34A853",
             "search_results_not_found": "#EA4335",
+            
+            
             
             "payment_success": "#28A745",
             "payment_success_hover": "#218838",
@@ -5475,8 +7321,13 @@ class ThemeManager(QObject):
             "scroll_handle_hover": "#bdc1c6",
             "header_background": "#f1f3f4",
             "divider_color": "#dadce0",
+            
             "status_running": "#34a853",
             "status_not_running": "#ea4335",
+            "status_unknown": "#FFC107",  # Amber color for unknown state
+            
+            "search_results_found": "#34A853",  # Green
+            "search_results_not_found": "#EA4335",  # Red
             
             "calendar_background": "#ffffff",
             "calendar_text": "#202124",
