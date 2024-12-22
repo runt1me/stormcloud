@@ -1,5 +1,6 @@
 import json
 import logging
+import multiprocessing
 import os
 import pathlib
 import psutil
@@ -323,6 +324,9 @@ class FilesystemIndexer(Process):
         
     def run(self):
         """Run the indexer process with logging focus"""
+        if __name__ == "__main__":
+            multiprocessing.freeze_support()
+            
         try:
             logging.info("Starting filesystem indexer process")
             self._init_db()
@@ -549,6 +553,8 @@ class FileSearchWorker(Process):
         self.folders_searched = 0
         
     def run(self):
+        if __name__ == "__main__":
+            multiprocessing.freeze_support()
         try:
             self._search_directory(Path(self.root_path))
             # Signal completion
@@ -1961,7 +1967,11 @@ class BackgroundOperation:
             self.process = Process(target=BackgroundOperation._restore_worker, 
                                  args=(self.paths, self.settings, self.queue, self.should_stop))
         
-        self.process.start()
+                # Ensure process starts safely
+        if __name__ == "__main__":
+            multiprocessing.freeze_support()
+            self.process.start()
+            
         return self.process.pid
 
     def stop(self):
@@ -2026,6 +2036,9 @@ class BackgroundOperation:
     @staticmethod
     def _backup_worker(paths, settings, queue, should_stop):
         """Worker process with authentication handling"""
+        if __name__ == "__main__":
+            multiprocessing.freeze_support()
+            
         try:
             operation_id = settings['operation_id']
             
@@ -2175,6 +2188,9 @@ class BackgroundOperation:
     @staticmethod
     def _restore_worker(paths, settings, queue, should_stop):
         """Worker process for restore operations"""
+        if __name__ == "__main__":
+            multiprocessing.freeze_support()
+        
         try:
             operation_id = settings['operation_id']
             total_files = 0
@@ -7797,7 +7813,16 @@ class ThemeManager(QObject):
             """
         }
 
-def check_single_instance():
+# Ensure spawn is used for multiprocessing
+multiprocessing.set_start_method("spawn", force=True)
+
+def main():
+    """Main entry point."""
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
+    # Multiprocessing freeze support for Windows
+    multiprocessing.freeze_support()
+
     """Ensure only one instance of the application is running."""
     mutex_name = "Global\\StormcloudAppMutex"
     try:
@@ -7814,21 +7839,11 @@ def check_single_instance():
         logging.exception("Exception occurred while creating mutex:")
         sys.exit(1)
 
-if __name__ == '__main__':
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler("stormcloud_app.log"),
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
-
-    # Check for single instance
-    check_single_instance()
-
     # Start the application
-    app = QApplication([])
+    app = QApplication(sys.argv)
     window = StormcloudApp()
     window.show()
     sys.exit(app.exec_())
+
+if __name__ == "__main__":
+    main()
