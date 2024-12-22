@@ -696,17 +696,31 @@ class AnimatedButton(QPushButton):
         super().leaveEvent(event)
         
 class LoginDialog(QDialog):
+    _instance = None  # Class variable to track instances
+
+    def __new__(cls, *args, **kwargs):
+        logging.info(f"LoginDialog.__new__ called. Instance exists: {cls._instance is not None}")
+        if cls._instance is None or not cls._instance.isVisible():
+            cls._instance = super(LoginDialog, cls).__new__(cls)
+            cls._instance._needs_init = True
+            logging.info("Created new LoginDialog instance")
+        return cls._instance
+    
     def __init__(self, theme_manager, settings_path, parent=None):
-        super().__init__(parent)
-        self.theme_manager = theme_manager
-        self.settings_path = settings_path
-        self.api_key = None
-        self.user_info = None
-        self.auth_tokens = None  # Add storage for auth tokens
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
-        self.init_ui()
-        self.apply_theme()
-        self.setWindowIcon(self.get_app_icon())
+        logging.info(f"LoginDialog.__init__ called. Needs init: {getattr(self, '_needs_init', True)}")
+        if hasattr(self, '_needs_init') and self._needs_init:
+            super().__init__(parent)
+            logging.info("Performing LoginDialog initialization")
+            self.theme_manager = theme_manager
+            self.settings_path = settings_path
+            self.api_key = None
+            self.user_info = None
+            self.auth_tokens = None
+            self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+            self.init_ui()
+            self.apply_theme()
+            self.setWindowIcon(self.get_app_icon())
+            self._needs_init = False
         
     def init_ui(self):
         self.setWindowTitle('Stormcloud Login')
@@ -968,6 +982,19 @@ class LoginDialog(QDialog):
             logging.error(f"Login attempt failed with exception: {str(e)}")
             logging.error(f"Exception traceback: {traceback.format_exc()}")
             self.show_error("Connection error. Please try again.")
+
+    def closeEvent(self, event):
+        # Hide instead of destroy to maintain singleton instance
+        self.hide()
+        event.accept()
+        
+    def exec_(self):
+        # Reset fields before showing dialog
+        self.user_info = None
+        self.auth_tokens = None
+        self.email_input.clear()
+        self.password_input.clear()
+        return super().exec_()
 
 class HistoryManager:
     def __init__(self, db_path):
@@ -2583,25 +2610,42 @@ class SingleApplication(QApplication):
         super().__init__(argv)
         self._auth_window = None
         self._main_window = None
+        self._auth_data = None  # Store auth data at application level
         
     def authenticate(self):
+        if self._auth_data:  # Return cached auth data if available
+            logging.info("Returning cached authentication data")
+            return self._auth_data
+            
         if not self._auth_window:
-            self._auth_window = LoginDialog(theme_manager=self._main_window.theme_manager,
-                                          settings_path=self._main_window.settings_cfg_path,
-                                          parent=self._main_window)
+            if not self._main_window:
+                logging.error("Main window not initialized")
+                return None
+                
+            self._auth_window = LoginDialog(
+                theme_manager=self._main_window.theme_manager,
+                settings_path=self._main_window.settings_cfg_path,
+                parent=self._main_window
+            )
         
         result = self._auth_window.exec_()
         if result == QDialog.Accepted:
-            auth_data = {
+            self._auth_data = {
                 'user_info': self._auth_window.user_info,
                 'auth_tokens': self._auth_window.auth_tokens
             }
             self._auth_window = None
-            return auth_data
+            return self._auth_data
+        
+        self._auth_window = None
         return None
 
 class StormcloudApp(QMainWindow):
     def __init__(self, application):
+        if hasattr(application, '_main_window') and application._main_window:
+            logging.warning("Attempted to create multiple StormcloudApp instances")
+            return
+    
         super().__init__()
         logging.info("StormcloudApp initialization started")
         self.app = application
@@ -2611,9 +2655,6 @@ class StormcloudApp(QMainWindow):
         # Initialize paths first
         self.init_paths()
         logging.info("Paths initialized")
-        
-        # Add auth state tracking
-        self._authenticated = False
         
         # Authenticate after initialization
         # if not self.authenticate_user():
@@ -2640,7 +2681,6 @@ class StormcloudApp(QMainWindow):
         self.show()
         
         logging.info(f"Successfully authenticated as: {self.user_email}")
-        self._authenticated = True
         
         # Initialize core services
         self.init_core_services()
@@ -7860,10 +7900,13 @@ def main():
     # Create main window
     window = StormcloudApp(app)
     
-    # Run app if window wasn't closed during init
-    if not window.isHidden():
-        return app.exec_()
-    return 1
+    # Check if window was properly initialized
+    if not window.isVisible():
+        logging.info("Application initialization failed")
+        return 1
+        
+    # Run application
+    return app.exec_()
 
 if __name__ == '__main__':
     sys.exit(main())
