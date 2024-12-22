@@ -2628,7 +2628,8 @@ class StormcloudApp(QMainWindow):
         # Attempt login before initializing UI
         if not self.authenticate_user():
             logging.info("Authentication failed.")
-            sys.exit(0)
+            sys.close()
+            return
         
         # Show window only after successful auth
         self.show()
