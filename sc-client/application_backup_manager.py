@@ -7797,18 +7797,15 @@ class ThemeManager(QObject):
             """
         }
 
-if __name__ == '__main__':
-    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s', 
-                        filename='stormcloud_app.log', filemode='a')
-
-    # Single-instance mutex logic
-    mutex_name = "Global\\StormcloudAppMutex"  # Replace with a unique name for your application
+def check_single_instance():
+    """Ensure only one instance of the application is running."""
+    mutex_name = "Global\\StormcloudAppMutex"
     try:
         logging.debug("Attempting to create single-instance mutex...")
         mutex = win32event.CreateMutex(None, False, mutex_name)
         last_error = win32api.GetLastError()
 
-        if last_error == winerror.ERROR_ALREADY_EXISTS:  # Use winerror instead
+        if last_error == winerror.ERROR_ALREADY_EXISTS:
             logging.error("Another instance of the application is already running.")
             sys.exit(1)
         else:
@@ -7817,7 +7814,21 @@ if __name__ == '__main__':
         logging.exception("Exception occurred while creating mutex:")
         sys.exit(1)
 
+if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler("stormcloud_app.log"),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+
+    # Check for single instance
+    check_single_instance()
+
+    # Start the application
     app = QApplication([])
     window = StormcloudApp()
     window.show()
-    app.exec_()
+    sys.exit(app.exec_())
