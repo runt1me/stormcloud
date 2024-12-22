@@ -1140,8 +1140,8 @@ class HistoryManager:
         if source == InitiationSource.USER:
             operation_user_email = user_email or self._current_user_email
             if not operation_user_email:
-                operation_user_email = "Unknown"
-                # raise ValueError("User email required for user-initiated operations")
+                # operation_user_email = "Unknown"
+                raise ValueError("User email required for user-initiated operations")
         else:
             operation_user_email = "System"
         
@@ -2601,7 +2601,7 @@ class StormcloudApp(QMainWindow):
         super().__init__()
         self.theme_manager = ThemeManager()
         self.user_email = None
-        self.auth_tokens = None
+        #self.auth_tokens = None
         
         # Set window title and initial theme
         self.setWindowTitle('Stormcloud Backup Manager')
@@ -2613,9 +2613,9 @@ class StormcloudApp(QMainWindow):
         self.init_paths()
         
         # Attempt login before initializing UI
-        # if not self.authenticate_user():
-            # logging.info("Authentication failed.")
-            # sys.exit(0)
+        if not self.authenticate_user():
+            logging.info("Authentication failed.")
+            sys.exit(0)
         
         logging.info("Authentication succeeded. User: {}".format(self.user_email))
         
