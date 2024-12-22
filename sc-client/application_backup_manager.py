@@ -1134,7 +1134,8 @@ class HistoryManager:
         if source == InitiationSource.USER:
             operation_user_email = user_email or self._current_user_email
             if not operation_user_email:
-                raise ValueError("User email required for user-initiated operations")
+                operation_user_email = "Unknown"
+                # raise ValueError("User email required for user-initiated operations")
         else:
             operation_user_email = "System"
         
