@@ -2577,13 +2577,44 @@ class Transaction:
     customer_name: str
     description: str
     payment_method: str
-      
+
+class SingleApplication(QApplication):
+    def __init__(self, argv):
+        super().__init__(argv)
+        self._auth_window = None
+        self._main_window = None
+        
+    def authenticate(self):
+        if not self._auth_window:
+            self._auth_window = LoginDialog(theme_manager=self._main_window.theme_manager,
+                                          settings_path=self._main_window.settings_cfg_path,
+                                          parent=self._main_window)
+        
+        result = self._auth_window.exec_()
+        if result == QDialog.Accepted:
+            auth_data = {
+                'user_info': self._auth_window.user_info,
+                'auth_tokens': self._auth_window.auth_tokens
+            }
+            self._auth_window = None
+            return auth_data
+        return None
+
 class StormcloudApp(QMainWindow):
-    def __init__(self):
+    def __init__(self, application):
         super().__init__()
+        self.app = application
+        self.app._main_window = self
         self.theme_manager = ThemeManager()
-        self.user_email = None
-        self.auth_tokens = None
+        
+        # Initialize paths first
+        self.init_paths()
+        
+        # Authenticate after initialization
+        # if not self.authenticate_user():
+            # If auth fails, app will exit through main()
+            # self.close()
+            # return
         
         # Set window title and initial theme
         self.setWindowTitle('Stormcloud Backup Manager')
@@ -2598,6 +2629,9 @@ class StormcloudApp(QMainWindow):
         if not self.authenticate_user():
             logging.info("Authentication failed.")
             sys.exit(0)
+        
+        # Show window only after successful auth
+        self.show()
         
         logging.info("Authentication succeeded. User: {}".format(self.user_email))
         
@@ -2624,6 +2658,24 @@ class StormcloudApp(QMainWindow):
         
         # Start deferred loading of heavy components
         QTimer.singleShot(0, self.init_components)
+
+    def authenticate_user(self):
+        """Handle authentication and return success state"""
+        auth_data = self.app.authenticate()
+        if auth_data:
+            self.user_info = auth_data['user_info']
+            self.user_email = self.user_info['email']
+            self.auth_tokens = auth_data['auth_tokens']
+            
+            # Save auth data
+            self.save_auth_data()
+            
+            # Update history manager with authenticated user
+            if hasattr(self, 'history_manager'):
+                self.history_manager.current_user_email = self.user_email
+                
+            return True
+        return False
 
     def init_ui(self):
         """Initialize the user interface"""
@@ -2785,8 +2837,8 @@ class StormcloudApp(QMainWindow):
         """Load initial data asynchronously"""
         try:
             # Start filesystem indexing
-            if hasattr(self, 'filesystem_index'):
-                self.filesystem_index.start_indexing()
+            # if hasattr(self, 'filesystem_index'):
+                # self.filesystem_index.start_indexing()
             
             # Load history data if manager is available
             if hasattr(self, 'history_panel'):
@@ -5014,39 +5066,16 @@ class FileExplorerPanel(QWidget):
 
     def eventFilter(self, source, event):
         if event.type() == QEvent.DragEnter:
-            logging.debug("=== Drag Enter Event ===")
             if source == self.local_tree.viewport():
                 index = self.local_tree.indexAt(event.pos())
                 if index.isValid():
                     item = self.local_model.itemFromIndex(index)
-                    logging.debug(f"Drag source path: {item.data(Qt.UserRole)}")
-                    self._log_tree_state("Before drag")
             event.accept()
             return True
         elif event.type() == QEvent.Drop:
-            logging.debug("=== Drop Event ===")
-            self._log_tree_state("Before drop handling")
             result = self.handleDrop(source, event)
-            self._log_tree_state("After drop handling")
             return result
         return super().eventFilter(source, event)
-    
-    def _log_tree_state(self, context):
-        """Log the current state of the local file tree"""
-        def log_item_state(item, depth=0):
-            path = item.data(Qt.UserRole)
-            has_placeholder = item.rowCount() == 1 and item.child(0).text() == ""
-            # logging.debug(f"{'  ' * depth}Path: {path}")
-            # logging.debug(f"{'  ' * depth}  rowCount: {item.rowCount()}")
-            # logging.debug(f"{'  ' * depth}  hasPlaceholder: {has_placeholder}")
-            
-            for row in range(item.rowCount()):
-                log_item_state(item.child(row), depth + 1)
-
-        logging.debug(f"=== Tree State {context} ===")
-        root = self.local_model.invisibleRootItem()
-        for row in range(root.rowCount()):
-            log_item_state(root.child(row))
 
     def handleDrop(self, target, event):
         try:
@@ -6236,8 +6265,14 @@ class FileExplorerPanel(QWidget):
         if not settings:
             return
             
-        settings['user_email'] = self.user_email
+        # Add auth tokens to settings
+        settings.update({
+            'user_email': self.user_email,
+            'auth_tokens': self.auth_tokens,
+            'settings_path': self.settings_path
+        })
         
+        # Start operation without triggering new auth
         if self.history_manager:
             try:
                 operation_id = self.history_manager.start_operation(
@@ -6250,8 +6285,7 @@ class FileExplorerPanel(QWidget):
                 logging.error(f"Failed to start operation: {e}")
                 StormcloudMessageBox.critical(self, "Error", str(e))
                 return
-            
-        settings['settings_path'] = self.settings_path
+                
         self.progress_widget.start_operation(operation_type, path, settings)
 
     def closeEvent(self, event):
@@ -6490,15 +6524,9 @@ class LocalFileSystemModel(QStandardItemModel):
         return item.rowCount() > 0
 
     def mimeData(self, indexes):
-        logging.debug("=== mimeData called ===")
-        logging.debug(f"Creating mime data for {len(indexes)} indexes")
-        self._log_tree_state("During mimeData creation")
         return super().mimeData(indexes)
 
     def canDropMimeData(self, data, action, row, column, parent):
-        logging.debug("=== canDropMimeData called ===")
-        logging.debug(f"Action: {action}, Row: {row}, Column: {column}")
-        self._log_tree_state("During canDropMimeData")
         return super().canDropMimeData(data, action, row, column, parent)
 
     def dropMimeData(self, data, action, row, column, parent):
@@ -6509,10 +6537,6 @@ class LocalFileSystemModel(QStandardItemModel):
             self._drag_in_progress = False
 
     def removeRows(self, row, count, parent=QModelIndex()):
-        """Override removeRows to preserve placeholder state"""
-        logging.debug(f"=== removeRows called ===")
-        logging.debug(f"Row: {row}, Count: {count}")
-        
         if not parent.isValid():
             return super().removeRows(row, count, parent)
             
@@ -6532,24 +6556,8 @@ class LocalFileSystemModel(QStandardItemModel):
         # Restore placeholder if needed
         if needs_placeholder and parent_item.rowCount() == 0:
             parent_item.appendRow(QStandardItem(""))
-            logging.debug(f"Restored placeholder for {path}")
             
         return result
-
-    def _log_tree_state(self, context):
-        logging.debug(f"\n=== Tree State: {context} ===")
-        root = self.invisibleRootItem()
-        for row in range(root.rowCount()):
-            item = root.child(row)
-            self._log_item_state(item, depth=0, max_depth=1)
-
-    def _log_item_state(self, item, depth=0, max_depth=1):
-        path = item.data(Qt.UserRole)
-        indent = "  " * depth
-        
-        if depth < max_depth:
-            for row in range(item.rowCount()):
-                self._log_item_state(item.child(row), depth + 1, max_depth)
     
     def itemFromIndex(self, index):
         item = super().itemFromIndex(index)
@@ -7795,8 +7803,16 @@ class ThemeManager(QObject):
             """
         }
 
+def main():
+    app = SingleApplication(sys.argv)
+    
+    # Create main window
+    window = StormcloudApp(app)
+    
+    # Run app if window wasn't closed during init
+    if not window.isHidden():
+        return app.exec_()
+    return 1
+
 if __name__ == '__main__':
-    app = QApplication([])
-    window = StormcloudApp()
-    window.show()
-    app.exec_()
+    sys.exit(main())
