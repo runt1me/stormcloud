@@ -721,6 +721,11 @@ class LoginDialog(QDialog):
             self.apply_theme()
             self.setWindowIcon(self.get_app_icon())
             self._needs_init = False
+
+    def show_login(self):
+        if not hasattr(self, '_login_dialog') or not self._login_dialog.isVisible():
+            self._login_dialog = LoginDialog(self.theme_manager, self.settings_path, parent=self)
+            self._login_dialog.exec_()
         
     def init_ui(self):
         self.setWindowTitle('Stormcloud Login')
@@ -949,6 +954,7 @@ class LoginDialog(QDialog):
         self.loading_indicator.setRange(0, 0)
         
         email = self.email_input.text().strip()
+        logging.debug("User email input: %s", email)
         password = self.password_input.text()
         
         if not email or not password:
@@ -957,9 +963,11 @@ class LoginDialog(QDialog):
             return
         
         try:
+            logging.info("Attempting authentication for email: %s", email)
             response = network_utils.authenticate_user(email, password, self.settings_path)
             
             if response.get('success'):
+                logging.info("Login successful for user: %s", email)
                 self.user_info = {
                     'email': email,
                     'verified': response['data']['user_info'].get('verified', False),
@@ -2611,6 +2619,7 @@ class SingleApplication(QApplication):
         self._auth_window = None
         self._main_window = None
         self._auth_data = None  # Store auth data at application level
+        self._initialized = False
         
     def authenticate(self):
         if self._auth_data:  # Return cached auth data if available
@@ -2640,13 +2649,29 @@ class SingleApplication(QApplication):
         self._auth_window = None
         return None
 
+    def create_main_window(self):
+        """Create main window if it doesn't exist"""
+        if not self._initialized:
+            self._main_window = StormcloudApp(self)
+            self._initialized = True
+        return self._main_window
+
 class StormcloudApp(QMainWindow):
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
     def __init__(self, application):
-        if hasattr(application, '_main_window') and application._main_window:
-            logging.warning("Attempted to create multiple StormcloudApp instances")
-            return
-    
         super().__init__()
+    
+        # Check if already initialized to prevent reinitialization
+        if getattr(self, '_initialized', False):
+            return
+            
+        self._initialized = True
         logging.info("StormcloudApp initialization started")
         self.app = application
         self.app._main_window = self
@@ -2706,6 +2731,9 @@ class StormcloudApp(QMainWindow):
         # Start deferred loading of heavy components
         QTimer.singleShot(0, self.init_components)
 
+    def __del__(self):
+        StormcloudApp._instance = None
+
     def authenticate_user(self):
         """Handle authentication and return success state"""
         logging.info("Starting authentication process")
@@ -2747,8 +2775,10 @@ class StormcloudApp(QMainWindow):
             
         logging.info("Authentication failed or cancelled")
         return False
+
     def init_ui(self):
         """Initialize the user interface"""
+        self.setWindowTitle("Stormcloud Application")
         # Get theme for styling
         theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
         
@@ -5170,6 +5200,7 @@ class FileExplorerPanel(QWidget):
 
             source_widget = event.source()
             source_index = source_widget.currentIndex()
+            logging.debug(f"Drop event info - User: {self._user_email}")
             logging.debug(f"Drop event - Source widget type: {type(source_widget).__name__}")
             logging.debug(f"Source index valid: {source_index.isValid()}")
             
@@ -7897,11 +7928,11 @@ class ThemeManager(QObject):
 def main():
     app = SingleApplication(sys.argv)
     
-    # Create main window
-    window = StormcloudApp(app)
+    # Create main window using controlled method
+    window = app.create_main_window()
     
     # Check if window was properly initialized
-    if not window.isVisible():
+    if not window or not window.isVisible():
         logging.info("Application initialization failed")
         return 1
         
