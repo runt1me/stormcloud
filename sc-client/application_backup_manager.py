@@ -17,6 +17,7 @@ import win32con
 import win32event
 import win32file
 import win32gui
+import winerror
 import yaml
 
 import concurrent.futures
@@ -61,8 +62,8 @@ from stormcloud import save_file_metadata, read_yaml_settings_file
 
 # logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', 
                     # filename='stormcloud_app.log', filemode='a')
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s', 
-                    filename='stormcloud_app.log', filemode='a')
+# logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s', 
+                    # filename='stormcloud_app.log', filemode='a')
 
 # dataclasses/helper classes
 # -----------
@@ -7796,6 +7797,25 @@ class ThemeManager(QObject):
         }
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s', 
+                        filename='stormcloud_app.log', filemode='a')
+
+    # Single-instance mutex logic
+    mutex_name = "Global\\StormcloudAppMutex"  # Replace with a unique name for your application
+    try:
+        logging.debug("Attempting to create single-instance mutex...")
+        mutex = win32event.CreateMutex(None, False, mutex_name)
+        last_error = win32api.GetLastError()
+
+        if last_error == winerror.ERROR_ALREADY_EXISTS:  # Use winerror instead
+            logging.error("Another instance of the application is already running.")
+            sys.exit(1)
+        else:
+            logging.info("No existing instance found. Continuing application startup.")
+    except Exception as e:
+        logging.exception("Exception occurred while creating mutex:")
+        sys.exit(1)
+
     app = QApplication([])
     window = StormcloudApp()
     window.show()
