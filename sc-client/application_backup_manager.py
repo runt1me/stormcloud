@@ -2603,12 +2603,17 @@ class SingleApplication(QApplication):
 class StormcloudApp(QMainWindow):
     def __init__(self, application):
         super().__init__()
+        logging.info("StormcloudApp initialization started")
         self.app = application
         self.app._main_window = self
         self.theme_manager = ThemeManager()
         
         # Initialize paths first
         self.init_paths()
+        logging.info("Paths initialized")
+        
+        # Add auth state tracking
+        self._authenticated = False
         
         # Authenticate after initialization
         # if not self.authenticate_user():
@@ -2627,14 +2632,15 @@ class StormcloudApp(QMainWindow):
         
         # Attempt login before initializing UI
         if not self.authenticate_user():
-            logging.info("Authentication failed.")
-            sys.close()
+            logging.info("Initial authentication failed")
+            self.close()
             return
         
         # Show window only after successful auth
         self.show()
         
-        logging.info("Authentication succeeded. User: {}".format(self.user_email))
+        logging.info(f"Successfully authenticated as: {self.user_email}")
+        self._authenticated = True
         
         # Initialize core services
         self.init_core_services()
@@ -2662,22 +2668,45 @@ class StormcloudApp(QMainWindow):
 
     def authenticate_user(self):
         """Handle authentication and return success state"""
+        logging.info("Starting authentication process")
+        
+        # First check if we already have valid auth data
+        if hasattr(self, '_authenticated') and self._authenticated:
+            logging.info("Already authenticated")
+            return True
+            
+        # Try to load saved auth data
+        saved_auth = self.load_auth_data()
+        if saved_auth:
+            logging.info("Found saved auth data")
+            self.user_info = saved_auth.get('user_info')
+            self.user_email = self.user_info['email']
+            self.auth_tokens = saved_auth.get('auth_tokens')
+            self._authenticated = True
+            return True
+        
+        logging.info("No saved auth data, showing login dialog")
         auth_data = self.app.authenticate()
         if auth_data:
+            logging.info("Login dialog authentication successful")
             self.user_info = auth_data['user_info']
             self.user_email = self.user_info['email']
             self.auth_tokens = auth_data['auth_tokens']
             
+            # Update auth state in file explorer if it exists
+            if hasattr(self, 'file_explorer'):
+                self.file_explorer.update_auth_state(self.user_email, self.auth_tokens)
+            
             # Save auth data
             self.save_auth_data()
             
-            # Update history manager with authenticated user
-            if hasattr(self, 'history_manager'):
-                self.history_manager.current_user_email = self.user_email
-                
+            logging.info(f"StormcloudApp stored user email: {self.user_email}")
+            
+            self._authenticated = True
             return True
+            
+        logging.info("Authentication failed or cancelled")
         return False
-
     def init_ui(self):
         """Initialize the user interface"""
         # Get theme for styling
@@ -3746,7 +3775,8 @@ class StormcloudApp(QMainWindow):
             self.settings_cfg_path,
             self.systray,
             self.history_manager,
-            self.user_email
+            self.user_email,
+            self.auth_tokens
         )
         layout.addWidget(file_explorer)
         
@@ -4842,7 +4872,7 @@ class SearchResultDelegate(QStyledItemDelegate):
 
 class FileExplorerPanel(QWidget):
     def __init__(self, json_directory, theme_manager, settings_cfg_path=None, 
-                 systray=None, history_manager=None, user_email=None):
+                 systray=None, history_manager=None, user_email=None, auth_tokens=None): 
         super().__init__()
         self.setObjectName("FileExplorerPanel")
 
@@ -4854,6 +4884,8 @@ class FileExplorerPanel(QWidget):
         self.systray = systray
         self.history_manager = history_manager
         self._user_email = user_email
+        self._auth_tokens = auth_tokens  # Store auth tokens
+        self._authenticated = user_email is not None and auth_tokens is not None
         self.custom_style = CustomTreeCarrot(self.theme_manager)
 
         # Initialize filesystem index
@@ -4897,6 +4929,13 @@ class FileExplorerPanel(QWidget):
         if hasattr(self, 'progress_widget'):
             self.progress_widget.user_email = email
         logging.info(f"FileExplorerPanel user_email updated to: {email}")
+
+    def update_auth_state(self, user_email: Optional[str], auth_tokens: Optional[dict]):
+        """Update authentication state"""
+        self._user_email = user_email
+        self._auth_tokens = auth_tokens
+        self._authenticated = user_email is not None and auth_tokens is not None
+        logging.info(f"FileExplorerPanel auth state updated. Authenticated: {self._authenticated}")
 
     def init_ui(self):
         layout = QVBoxLayout(self)
@@ -5080,6 +5119,11 @@ class FileExplorerPanel(QWidget):
 
     def handleDrop(self, target, event):
         try:
+            logging.info("Starting drop operation")
+            if not self._authenticated:
+                logging.warning(f"Drop operation attempted without authentication. User: {self._user_email}")
+                return False
+            
             if target.objectName() == "qt_scrollarea_viewport":
                 target = target.parent()
                 logging.info(f"Adjusted target to parent tree: {target.objectName()}")
@@ -5115,6 +5159,12 @@ class FileExplorerPanel(QWidget):
                 logging.info(f"Initiating backup operation for: {source_path}")
                 settings = self.read_settings()
                 if settings:
+                    # Add auth info to settings
+                    settings.update({
+                        'user_email': self._user_email,
+                        'auth_tokens': self._auth_tokens
+                    })
+                
                     settings['user_email'] = self.user_email
                     settings['settings_path'] = self.settings_path
                     if self.history_manager:
