@@ -2687,6 +2687,9 @@ class StormcloudApp(QMainWindow):
             # self.close()
             # return
         
+        self.user_email = 'Unknown'
+        self.auth_tokens = None
+        
         # Set window title and initial theme
         self.setWindowTitle('Stormcloud Backup Manager')
         self.apply_base_theme()
@@ -2697,10 +2700,10 @@ class StormcloudApp(QMainWindow):
         self.init_paths()
         
         # Attempt login before initializing UI
-        if not self.authenticate_user():
-            logging.info("Initial authentication failed")
-            self.close()
-            return
+        # if not self.authenticate_user():
+            # logging.info("Initial authentication failed")
+            # self.close()
+            # return
         
         # Show window only after successful auth
         self.show()
@@ -5192,7 +5195,7 @@ class FileExplorerPanel(QWidget):
             logging.info("Starting drop operation")
             if not self._authenticated:
                 logging.warning(f"Drop operation attempted without authentication. User: {self._user_email}")
-                return False
+                # return False
             
             if target.objectName() == "qt_scrollarea_viewport":
                 target = target.parent()
