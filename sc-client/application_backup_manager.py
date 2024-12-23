@@ -7818,7 +7818,8 @@ multiprocessing.set_start_method("spawn", force=True)
 
 def main():
     """Main entry point."""
-    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s',
+                        filename='stormcloud_app.log', filemode='a')
 
     # Multiprocessing freeze support for Windows
     multiprocessing.freeze_support()
