@@ -27,7 +27,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-from infi.systray import SysTrayIcon
+# from infi.systray import SysTrayIcon
 from multiprocessing import Process, Queue, Manager, Event
 from pathlib import Path
 from queue import Empty
@@ -2744,11 +2744,11 @@ class StormcloudApp(QMainWindow):
             self.backup_schedule = {'weekly': {}, 'monthly': {}}
             
             # Create systray
-            systray_menu_options = (("Backup now", None, 
-                lambda x: logging.info("User clicked 'Backup now'")),)
-            self.systray = SysTrayIcon("stormcloud.ico", 
-                "Stormcloud Backup Engine", systray_menu_options)
-            self.systray.start()
+            # systray_menu_options = (("Backup now", None, 
+                # lambda x: logging.info("User clicked 'Backup now'")),)
+            # self.systray = SysTrayIcon("stormcloud.ico", 
+                # "Stormcloud Backup Engine", systray_menu_options)
+            # self.systray.start()
             
             # Load settings
             self.load_settings()
@@ -3173,7 +3173,7 @@ class StormcloudApp(QMainWindow):
             json_directory, 
             self.theme_manager, 
             self.settings_cfg_path,
-            self.systray,
+            # self.systray,
             self.history_manager
         )
         
@@ -3709,7 +3709,7 @@ class StormcloudApp(QMainWindow):
             self.json_directory,
             self.theme_manager,
             self.settings_cfg_path,
-            self.systray,
+            # self.systray,
             self.history_manager,
             self.user_email
         )
@@ -4807,7 +4807,8 @@ class SearchResultDelegate(QStyledItemDelegate):
 
 class FileExplorerPanel(QWidget):
     def __init__(self, json_directory, theme_manager, settings_cfg_path=None, 
-                 systray=None, history_manager=None, user_email=None):
+                 # systray=None,
+                 history_manager=None, user_email=None):
         super().__init__()
         self.setObjectName("FileExplorerPanel")
 
@@ -4816,7 +4817,7 @@ class FileExplorerPanel(QWidget):
 
         self.theme_manager = theme_manager
         self.settings_path = settings_cfg_path
-        self.systray = systray
+        # self.systray = systray
         self.history_manager = history_manager
         self._user_email = user_email
         self.custom_style = CustomTreeCarrot(self.theme_manager)
