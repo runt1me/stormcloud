@@ -331,6 +331,12 @@ class FilesystemIndexer(Process):
             logging.info("Starting filesystem indexer process")
             self._init_db()
             self._sync_filesystem()
+            
+            # Check for shutdown signals periodically
+            # while not self.shutdown_event.is_set():
+                # # Perform periodic tasks or wait
+                # self._perform_periodic_task()
+            
         except Exception as e:
             logging.error(f"Indexer process error: {e}")
             self.status_queue.put(('error', str(e)))
@@ -469,12 +475,26 @@ class FilesystemIndex:
         self.status_queue = Queue()
         self.shutdown_event = Event()
         self.indexer = None
-        self._start_indexer()
 
     def _start_indexer(self):
-        """Start the indexer process."""
-        self.indexer = FilesystemIndexer(self.db_path, self.status_queue, self.shutdown_event)
-        self.indexer.start()
+        """Start the indexer process if not already running."""
+        if self.indexer is None:
+            self.indexer = FilesystemIndexer(self.db_path, self.status_queue, self.shutdown_event)
+            self.indexer.start()
+            logging.info("Started filesystem indexer")
+        else:
+            logging.warning("Indexer already running")
+
+    def start_indexing(self):
+        """Start the filesystem indexing process."""
+        if self.indexer is None:
+            logging.info("Starting filesystem indexer...")
+            self.indexer = FilesystemIndexer(
+                self.db_path, self.status_queue, self.shutdown_event
+            )
+            self.indexer.start()  # Start the separate process
+        else:
+            logging.warning("Indexer already running")
 
     def search(self, query: str, max_results: int = 100) -> tuple[list, bool]:
         query = query.lower()
@@ -538,10 +558,12 @@ class FilesystemIndex:
     def shutdown(self):
         """Clean shutdown of indexer process."""
         if self.indexer and self.indexer.is_alive():
+            logging.info("Shutting down filesystem indexer...")
             self.shutdown_event.set()
             self.indexer.join(timeout=5)
             if self.indexer.is_alive():
                 self.indexer.terminate()
+                logging.warning("Had to force terminate indexer process")
 
 class FileSearchWorker(Process):
     def __init__(self, root_path: str, search_term: str, progress_queue: Queue):
@@ -2187,33 +2209,58 @@ class BackgroundOperation:
 
     @staticmethod
     def _restore_worker(paths, settings, queue, should_stop):
-        """Worker process for restore operations"""
+        """Worker process for restore operations with enhanced logging"""
         if __name__ == "__main__":
             multiprocessing.freeze_support()
         
         try:
             operation_id = settings['operation_id']
+            logging.info(f"Starting restore operation {operation_id} for paths: {paths}")
+            
             total_files = 0
             success_count = 0
             fail_count = 0
             
-            # Count total files
+            # Validate settings first
+            required_keys = ['API_KEY', 'AGENT_ID']
+            missing_keys = [key for key in required_keys if key not in settings]
+            if missing_keys:
+                error_msg = f"Missing required settings: {missing_keys}"
+                logging.error(error_msg)
+                queue.put({
+                    'type': 'operation_failed',
+                    'error': error_msg,
+                    'operation_id': operation_id
+                })
+                return
+                
+            # Count total files with logging
+            logging.info("Counting files to restore...")
             for path in paths:
                 if os.path.isfile(path):
                     total_files += 1
+                    logging.debug(f"Added single file to restore: {path}")
                 else:
-                    for _, _, files in os.walk(path):
-                        total_files += len(files)
-            
+                    try:
+                        for root, _, files in os.walk(path):
+                            file_count = len(files)
+                            total_files += file_count
+                            logging.debug(f"Added {file_count} files from directory: {root}")
+                    except Exception as e:
+                        logging.error(f"Error counting files in {path}: {e}")
+                        
+            logging.info(f"Found {total_files} total files to restore")
             queue.put({'type': 'total_files', 'value': total_files})
             
             processed = 0
             for path in paths:
                 if should_stop.value:
+                    logging.info("Restore operation cancelled by user")
                     break
                     
                 if os.path.isfile(path):
                     try:
+                        logging.info(f"Attempting to restore file: {path}")
                         success = restore_utils.restore_file(
                             path,
                             settings['API_KEY'],
@@ -2222,6 +2269,9 @@ class BackgroundOperation:
                         success_count += 1 if success else 0
                         fail_count += 0 if success else 1
                         processed += 1
+                        
+                        result_msg = "successfully" if success else "failed to"
+                        logging.info(f"{result_msg.capitalize()} restored file: {path}")
                         
                         queue.put({
                             'type': 'file_progress',
@@ -2232,35 +2282,40 @@ class BackgroundOperation:
                             'operation_id': operation_id,
                             'record_file': True,
                             'parent_folder': os.path.dirname(path),
-                            'user_email': settings.get('user_email')  # Pass user email
+                            'user_email': settings.get('user_email')
                         })
                         
                     except Exception as e:
-                        logging.error(f"Failed to restore file {path}: {e}")
+                        error_msg = str(e)
+                        logging.error(f"Failed to restore file {path}: {error_msg}")
                         fail_count += 1
                         queue.put({
                             'type': 'file_progress',
                             'filepath': path,
                             'success': False,
-                            'error': str(e),
+                            'error': error_msg,
                             'total_files': total_files,
                             'processed_files': processed,
                             'operation_id': operation_id,
                             'record_file': True,
                             'parent_folder': os.path.dirname(path),
-                            'user_email': settings.get('user_email')  # Pass user email
+                            'user_email': settings.get('user_email')
                         })
                         
                 else:  # Directory
+                    logging.info(f"Processing directory: {path}")
                     for root, _, files in os.walk(path):
                         if should_stop.value:
                             break
                         for file in files:
                             if should_stop.value:
                                 break
+                                
                             file_path = os.path.join(root, file)
                             try:
                                 normalized_path = file_path.replace('\\', '/')
+                                logging.info(f"Attempting to restore file: {normalized_path}")
+                                
                                 success = restore_utils.restore_file(
                                     normalized_path,
                                     settings['API_KEY'],
@@ -2269,6 +2324,9 @@ class BackgroundOperation:
                                 success_count += 1 if success else 0
                                 fail_count += 0 if success else 1
                                 processed += 1
+                                
+                                result_msg = "successfully" if success else "failed to"
+                                logging.info(f"{result_msg.capitalize()} restored file: {normalized_path}")
                                 
                                 queue.put({
                                     'type': 'file_progress',
@@ -2279,28 +2337,30 @@ class BackgroundOperation:
                                     'operation_id': operation_id,
                                     'record_file': True,
                                     'parent_folder': path,
-                                    'user_email': settings.get('user_email')  # Pass user email
+                                    'user_email': settings.get('user_email')
                                 })
                                 
                             except Exception as e:
-                                logging.error(f"Failed to restore file {file_path}: {e}")
+                                error_msg = str(e)
+                                logging.error(f"Failed to restore file {file_path}: {error_msg}")
                                 fail_count += 1
                                 queue.put({
                                     'type': 'file_progress',
                                     'filepath': normalized_path,
                                     'success': False,
-                                    'error': str(e),
+                                    'error': error_msg,
                                     'total_files': total_files,
                                     'processed_files': processed,
                                     'operation_id': operation_id,
                                     'record_file': True,
                                     'parent_folder': path,
-                                    'user_email': settings.get('user_email')  # Pass user email
+                                    'user_email': settings.get('user_email')
                                 })
             
             # Send final completion status
             if not should_stop.value:
                 successful = fail_count == 0 and success_count > 0
+                logging.info(f"Restore operation completed. Success: {success_count}, Failed: {fail_count}, Total: {total_files}")
                 queue.put({
                     'type': 'operation_complete',
                     'success_count': success_count,
@@ -2308,18 +2368,19 @@ class BackgroundOperation:
                     'total': total_files,
                     'operation_id': operation_id,
                     'status': OperationStatus.SUCCESS if successful else OperationStatus.FAILED,
-                    'user_email': settings.get('user_email')  # Pass user email
+                    'user_email': settings.get('user_email')
                 })
-                
+                    
         except Exception as e:
-            logging.error(f"Restore worker failed: {e}")
+            error_msg = str(e)
+            logging.error(f"Restore worker failed: {error_msg}", exc_info=True)
             queue.put({
                 'type': 'operation_failed',
-                'error': str(e),
+                'error': error_msg,
                 'operation_id': operation_id,
-                'user_email': settings.get('user_email')  # Pass user email
+                'user_email': settings.get('user_email')
             })
-
+        
 class OperationProgressWidget(QWidget):
     """Widget to display backup/restore operation progress"""
     operation_completed = pyqtSignal(dict)  # Emits final status when complete
@@ -2418,17 +2479,19 @@ class OperationProgressWidget(QWidget):
         self.timer.start(100)
 
     def update_progress(self):
-        """Process progress updates from the background operation asynchronously"""
+        """Process progress updates from the background operation with enhanced logging"""
         if not self.background_op:
             return
-            
+                
         try:
-            # Use get_nowait() instead of blocking get()
+            # logging.debug("Checking for progress updates...")
             while True:
                 try:
                     update = self.background_op.queue.get_nowait()
+                    logging.debug(f"Received update: {update.get('type')}")
                     
                     if update['type'] == 'total_files':
+                        logging.info(f"Setting total files to process: {update['value']}")
                         self.file_count_label.setText(f"Files: 0/{update['value']}")
                         
                     elif update['type'] == 'file_progress':
@@ -2438,6 +2501,7 @@ class OperationProgressWidget(QWidget):
                         
                         if self.operation_id and update.get('record_file', True):
                             status = OperationStatus.SUCCESS if success else OperationStatus.FAILED
+                            logging.info(f"Recording file status - Path: {file_path}, Status: {status}")
                             self.history_manager.add_file_to_operation(
                                 self.operation_id,
                                 file_path,
@@ -2447,28 +2511,33 @@ class OperationProgressWidget(QWidget):
                         
                         # Update progress percentage
                         if update.get('total_files', 0) > 0:
-                            percentage = (update.get('processed_files', 0) / update.get('total_files', 0)) * 100
-                            self.progress_bar.setValue(int(percentage))
-                        
-                        total_files = update.get('total_files', 0)
-                        processed_files = update.get('processed_files', 0)
-                        if total_files > 0:
-                            self.file_count_label.setText(f"Files: {processed_files}/{total_files}")
+                            total_files = update.get('total_files', 0)
+                            processed_files = update.get('processed_files', 0)
                             percentage = (processed_files / total_files) * 100
                             self.progress_bar.setValue(int(percentage))
+                            self.file_count_label.setText(f"Files: {processed_files}/{total_files}")
+                            logging.info(f"Progress update: {processed_files}/{total_files} files ({percentage:.1f}%)")
                         
                         # Update current file label
                         if 'filepath' in update:
-                            self.current_file_label.setText(f"Processing: {os.path.basename(file_path)}")
-                            
+                            file_name = os.path.basename(file_path)
+                            self.current_file_label.setText(f"Processing: {file_name}")
+                            if error_msg:
+                                logging.error(f"Error processing {file_name}: {error_msg}")
+                                
                     elif update['type'] == 'operation_complete':
+                        logging.info("Operation completed successfully")
+                        logging.info(f"Final stats - Success: {update.get('success_count', 0)}, "
+                                   f"Failed: {update.get('fail_count', 0)}, "
+                                   f"Total: {update.get('total', 0)}")
+                                   
                         if self.history_manager:
                             final_status = OperationStatus.SUCCESS if update['fail_count'] == 0 else OperationStatus.FAILED
                             self.history_manager.complete_operation(
                                 update.get('operation_id'),
                                 final_status
                             )
-                    
+                        
                         self.operation_completed.emit({
                             'success_count': update.get('success_count', 0),
                             'fail_count': update.get('fail_count', 0),
@@ -2479,6 +2548,7 @@ class OperationProgressWidget(QWidget):
                         break
                         
                     elif update['type'] == 'operation_failed':
+                        logging.error(f"Operation failed: {update.get('error', 'Unknown error')}")
                         if self.history_manager:
                             self.history_manager.complete_operation(
                                 update.get('operation_id'),
@@ -2495,11 +2565,11 @@ class OperationProgressWidget(QWidget):
                         
                 except Empty:
                     break
-                    
+                        
         except Exception as e:
             logging.error(f"Error updating progress: {e}", exc_info=True)
             self.cleanup()
-
+        
     def cancel_operation(self):
         """Cancel the current operation"""
         if self.background_op:
@@ -2601,6 +2671,7 @@ class StormcloudApp(QMainWindow):
         super().__init__()
         self.theme_manager = ThemeManager()
         self.user_email = None
+        self._operation_in_progress = False  # Add flag here too
         #self.auth_tokens = None
         
         # Set window title and initial theme
@@ -2633,6 +2704,9 @@ class StormcloudApp(QMainWindow):
         
         # Apply theme to all widgets
         self.apply_theme()
+        
+        # Initialize filesystem indexing
+        self.init_indexing()
         
         # Initialize metadata refresh timer
         self.init_metadata_refresh()
@@ -2702,6 +2776,15 @@ class StormcloudApp(QMainWindow):
             StormcloudMessageBox.critical(self, "Error", 
                 "Failed to initialize application components. Please restart the application.")
 
+    def init_indexing(self):
+        """Initialize and start the filesystem indexing process."""
+        try:
+            self.filesystem_index = FilesystemIndex(self.filesystem_db_path)
+            self.filesystem_index.start_indexing()  # Start indexing as a separate process
+            logging.info("Filesystem indexing process started")
+        except Exception as e:
+            logging.error(f"Failed to start indexing: {e}")
+
     def init_paths(self):
         """Initialize all application paths"""
         # Base paths
@@ -2766,8 +2849,25 @@ class StormcloudApp(QMainWindow):
         # Perform initial metadata refresh
         QTimer.singleShot(0, self.refresh_metadata)
 
+    # Methods to set/clear operation flag that both classes can use
+    def set_operation_in_progress(self):
+        self._operation_in_progress = True
+        if hasattr(self, 'file_explorer'):
+            self.file_explorer._operation_in_progress = True
+        logging.info("Operation flag set")
+
+    def clear_operation_in_progress(self):
+        self._operation_in_progress = False
+        if hasattr(self, 'file_explorer'):
+            self.file_explorer._operation_in_progress = False
+        logging.info("Operation flag cleared")
+
     def refresh_metadata(self):
         """Refresh file metadata from API"""
+        if self._operation_in_progress:
+            logging.info("Skipping metadata refresh - operation in progress")
+            return
+            
         try:
             if not hasattr(self, 'settings_cfg_path') or not self.settings_cfg_path:
                 logging.error("Settings path not configured")
@@ -2787,7 +2887,7 @@ class StormcloudApp(QMainWindow):
                 
         except Exception as e:
             logging.error(f"Error refreshing metadata: {e}")
-
+        
     def apply_base_theme(self):
         """Apply initial theme to the main window"""
         theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
@@ -2801,18 +2901,26 @@ class StormcloudApp(QMainWindow):
 
     def load_initial_data(self):
         """Load initial data asynchronously"""
+        logging.info("Beginning initial data load")
         try:
-            # Start filesystem indexing
+            # Start filesystem indexing if available
             if hasattr(self, 'filesystem_index'):
-                self.filesystem_index.start_indexing()
-            
-            # Load history data if manager is available
-            if hasattr(self, 'history_panel'):
-                self.history_panel.load_history()
-                
-        except Exception as e:
-            logging.error(f"Error loading initial data: {e}")
+                self.filesystem_index._start_indexer()
 
+            # Load initial data for file explorer if it exists
+            if hasattr(self, 'file_explorer'):
+                self.file_explorer.load_initial_data()
+                
+            logging.info("Initial data load complete")
+            
+        except Exception as e:
+            logging.error(f"Error loading initial data: {e}", exc_info=True)
+            if hasattr(self, 'filesystem_index'):
+                try:
+                    self.filesystem_index.shutdown()
+                except Exception as shutdown_error:
+                    logging.error(f"Error during indexer shutdown: {shutdown_error}")
+                
     def authenticate_user(self) -> bool:
         while True:
             dialog = LoginDialog(
@@ -4240,7 +4348,21 @@ class StormcloudApp(QMainWindow):
             StormcloudMessageBox.critical(self, 'Error', f'Failed to stop backup engine: {e}')
         finally:
             self.update_status()
-            
+
+    def shutdown(self):
+        """Gracefully shut down the application and stop the indexer."""
+        try:
+            if hasattr(self, 'filesystem_index') and self.filesystem_index.indexer:
+                if self.filesystem_index.indexer.is_alive():
+                    logging.info("Shutting down filesystem indexer...")
+                    self.filesystem_index.shutdown_event.set()  # Signal the indexer to stop
+                    self.filesystem_index.indexer.join()  # Wait for the process to finish
+        except Exception as e:
+            logging.error(f"Error during shutdown: {e}")
+        finally:
+            logging.info("Application shutdown complete")
+
+
 # Calendar Widget
 # ---------------
 
@@ -4814,6 +4936,9 @@ class FileExplorerPanel(QWidget):
 
         self._drag_source_item = None
         self._drag_source_path = None
+        
+        # Add flag to prevent auto-refresh during operations
+        self._operation_in_progress = False
 
         self.theme_manager = theme_manager
         self.settings_path = settings_cfg_path
@@ -4823,7 +4948,7 @@ class FileExplorerPanel(QWidget):
         self.custom_style = CustomTreeCarrot(self.theme_manager)
 
         # Initialize filesystem index
-        index_db = os.path.join(json_directory, 'filesystem_index.db')
+        index_db = os.path.join(json_directory, 'db', 'filesystem.db')
         self.filesystem_index = FilesystemIndex(index_db)
         
         # Status checking timer
@@ -5099,7 +5224,7 @@ class FileExplorerPanel(QWidget):
             if not source_path:
                 logging.error("Invalid source path")
                 return False
-            
+
             if source_widget == self.local_tree and (target == self.remote_tree or target == self.remote_tree.viewport()):
                 logging.info(f"Initiating backup operation for: {source_path}")
                 settings = self.read_settings()
@@ -5115,7 +5240,7 @@ class FileExplorerPanel(QWidget):
                     
                     # After starting backup, completely reset the local tree
                     QTimer.singleShot(100, self.complete_tree_reset)
-                    
+
             elif source_widget == self.remote_tree and (target == self.local_tree or target == self.local_tree.viewport()):
                 logging.info(f"Initiating restore operation for: {source_path}")
                 settings = self.read_settings()
@@ -5127,16 +5252,99 @@ class FileExplorerPanel(QWidget):
                             'restore', InitiationSource.USER, self.user_email
                         )
                         settings['operation_id'] = operation_id
-                    self.progress_widget.start_operation('restore', source_path, settings)
-            
-            logging.debug("Drop operation completed successfully")
+
+                    # Get main window reference
+                    main_window = self.window()
+                    if main_window:
+                        # Set operation flag before reset
+                        main_window.set_operation_in_progress()
+                        
+                        # Reset tree just once
+                        self.reset_remote_tree()
+                        
+                        # Start operation
+                        self.progress_widget.start_operation('restore', source_path, settings)
+                        
+                        # Clear flag after delay
+                        QTimer.singleShot(5000, main_window.clear_operation_in_progress)
+
             event.accept()
             return True
 
         except Exception as e:
             logging.error(f"Error handling drop event: {e}", exc_info=True)
+            # Get main window reference for error handling
+            main_window = self.window()
+            if main_window:
+                main_window.clear_operation_in_progress()  # Ensure flag is cleared on error
             return False
+        
+    def clear_operation_flag(self):
+        """Clear the operation in progress flag"""
+        self._operation_in_progress = False
+        logging.info("Operation flag cleared")
 
+    def reset_remote_tree(self):
+        """Reset remote tree by creating a fresh model instance"""
+        logging.info(f"=== Starting Remote Tree Reset ===")
+        logging.info(f"Old model id: {id(self.remote_model)}")
+        
+        try:
+            # Debug: Check metadata file before reset
+            if hasattr(self, 'metadata_dir'):
+                metadata_files = sorted(
+                    [f for f in os.listdir(self.metadata_dir) 
+                     if f.startswith('file_metadata_') and f.endswith('.json')],
+                    reverse=True
+                )
+                if metadata_files:
+                    json_path = os.path.join(self.metadata_dir, metadata_files[0])
+                    with open(json_path, 'r') as f:
+                        data = json.load(f)
+                        logging.info(f"Current metadata file: {json_path}")
+                        logging.info(f"Number of items in metadata: {len(data)}")
+            
+            # Explicitly delete old model
+            if hasattr(self, 'remote_model'):
+                old_model = self.remote_model
+                self.remote_tree.setModel(None)
+                old_model.deleteLater()
+                
+            # Force garbage collection
+            import gc
+            gc.collect()
+            
+            # Create new model instance
+            self.remote_model = RemoteFileSystemModel()
+            logging.info(f"New model id: {id(self.remote_model)}")
+            
+            # Set new model
+            self.remote_tree.setModel(self.remote_model)
+            
+            # Load metadata
+            if hasattr(self, 'metadata_dir'):
+                self.remote_model.load_data(self.metadata_dir)
+                
+                # Debug: Check metadata after load
+                metadata_files = sorted(
+                    [f for f in os.listdir(self.metadata_dir) 
+                     if f.startswith('file_metadata_') and f.endswith('.json')],
+                    reverse=True
+                )
+                if metadata_files:
+                    json_path = os.path.join(self.metadata_dir, metadata_files[0])
+                    with open(json_path, 'r') as f:
+                        data = json.load(f)
+                        logging.info(f"After load - Number of items in metadata: {len(data)}")
+                        logging.info(f"Model root item children count: {self.remote_model.invisibleRootItem().rowCount()}")
+                
+                logging.info("Remote tree reset complete")
+                
+        except Exception as e:
+            logging.error(f"Error resetting remote tree: {e}", exc_info=True)
+        finally:
+            logging.info("=== Remote Tree Reset Complete ===")
+        
     def complete_tree_reset(self):
         """Completely reset and reinitialize the local file tree"""
         logging.info("Performing complete reset of local file tree")
@@ -5282,7 +5490,7 @@ class FileExplorerPanel(QWidget):
         if results:
             result_text = (f"{stats['matches_found']} matches for '{search_text}' "
                           f"({len(results)} shown) in {stats['total_files']} "
-                          f"files ({stats['total_folders']} folders)")
+                          f"files searched ({stats['total_folders']} folders)")
             parent_item.setData(0, Qt.UserRole, "found")
         else:
             result_text = (f"0 matches for '{search_text}' in "
@@ -5347,6 +5555,61 @@ class FileExplorerPanel(QWidget):
         self.remote_search_thread.start()
 
     def handle_remote_search_results(self, results):
+        def count_tree_items(root_item):
+            """Count total files and folders in the remote tree"""
+            file_count = 0
+            folder_count = 0
+            
+            def count_recursive(item):
+                nonlocal file_count, folder_count
+                for row in range(item.rowCount()):
+                    child = item.child(row)
+                    if child.hasChildren():
+                        folder_count += 1
+                        count_recursive(child)
+                    else:
+                        file_count += 1
+                        
+            count_recursive(root_item)
+            return file_count, folder_count
+
+        def get_full_path(item, file_name):
+            """Recursively build full path from tree structure"""
+            for row in range(item.rowCount()):
+                child = item.child(row)
+                child_text = child.text()
+                if child_text == os.path.basename(file_name):
+                    path_parts = []
+                    current = child
+                    drive_letter = None
+                    
+                    # Build path and find drive letter
+                    while current:
+                        text = current.text()
+                        if text.endswith(':'):  # Found drive letter
+                            drive_letter = text
+                        elif current.parent():  # Skip root item
+                            path_parts.insert(0, text)
+                        current = current.parent()
+                    
+                    # If we found a drive letter, use it, otherwise use the first available drive
+                    if not drive_letter:
+                        for i in range(root_item.rowCount()):
+                            drive_text = root_item.child(i).text()
+                            if drive_text.endswith(':'):
+                                drive_letter = drive_text
+                                break
+                    
+                    if drive_letter:
+                        return f"{drive_letter}/" + '/'.join(path_parts)
+                    return '/'.join(path_parts)  # Fallback with no drive letter
+                    
+                elif child.hasChildren():
+                    result = get_full_path(child, file_name)
+                    if result:
+                        return result
+            return None
+
         search_text = self.remote_search.text()
         self.remote_progress.setVisible(False)
         self.remote_results.setVisible(True)
@@ -5356,28 +5619,80 @@ class FileExplorerPanel(QWidget):
         timestamp = datetime.now().strftime("%H:%M:%S")
         parent_item.setData(0, Qt.UserRole + 1, timestamp)
         
-        # Group results by type
-        file_paths = set(results)  # Convert to set for unique paths
-        folders = {os.path.dirname(path) for path in file_paths if path}
+        # Get total counts from remote tree
+        root_item = self.remote_tree.model().invisibleRootItem()
+        total_files, total_folders = count_tree_items(root_item)
+        
+        # Get list of available drives
+        drives = []
+        for row in range(root_item.rowCount()):
+            drive_text = root_item.child(row).text()
+            if drive_text.endswith(':'):
+                drives.append(drive_text)
+        
+        # Separate results into files and folders based on file extension
+        file_matches = []
+        folder_matches = []
+        
+        for path in results:
+            # Get full path
+            full_path = get_full_path(root_item, os.path.basename(path))
+            if not full_path:
+                # Clean up path by removing any drive letters
+                clean_path = path
+                if ':' in path:
+                    # Extract drive letter if present in path
+                    drive, remainder = path.split(':', 1)
+                    drive = drive.strip().upper() + ':'
+                    if drive in drives:
+                        full_path = f"{drive}/{remainder.lstrip('/')}"
+                    else:
+                        # Use first available drive if original drive not found
+                        full_path = f"{drives[0]}/{remainder.lstrip('/')}" if drives else path
+                else:
+                    # Use first available drive if no drive letter in path
+                    full_path = f"{drives[0]}/{clean_path}" if drives else path
+                
+            # Check if it's a file or folder based on extension
+            basename = os.path.basename(path)
+            if '.' in basename and not basename.endswith('.'):  # Has extension but not just a dot at end
+                file_matches.append(full_path)
+            else:
+                folder_matches.append(full_path)
         
         # Construct result text
         if results:
-            result_text = f"Found {len(results)} matches for '{search_text}' in {len(file_paths)} files ({len(folders)} folders)"
+            result_text = (f"{len(results)} matches for '{search_text}' in {total_files} files searched "
+                          f"({total_folders} folders)")
             parent_item.setData(0, Qt.UserRole, "found")
             
-            # Add folder groups
-            if folders:
-                for folder in sorted(folders):
-                    folder_group = QTreeWidgetItem(parent_item)
-                    folder_files = [f for f in file_paths if os.path.dirname(f) == folder]
-                    folder_group.setText(0, f"{folder} Files ({len(folder_files)})")
-                    
-                    for file_path in sorted(folder_files):
-                        item = QTreeWidgetItem(folder_group)
-                        item.setText(0, os.path.basename(file_path))
-                        item.setData(0, Qt.UserRole, "found")
+            # Add folder matches if any
+            if folder_matches:
+                folder_group = QTreeWidgetItem(parent_item)
+                folder_group.setText(0, f"Folders ({len(folder_matches)})")
+                folder_group.setExpanded(True)
+                
+                for folder_path in sorted(folder_matches):
+                    item = QTreeWidgetItem(folder_group)
+                    item.setText(0, folder_path)
+                    item.setData(0, Qt.UserRole, "found")
+                    item.setData(0, Qt.UserRole + 1, folder_path)
+                    item.setToolTip(0, folder_path)
+            
+            # Add file matches if any
+            if file_matches:
+                file_group = QTreeWidgetItem(parent_item)
+                file_group.setText(0, f"Files ({len(file_matches)})")
+                file_group.setExpanded(True)
+                
+                for file_path in sorted(file_matches):
+                    item = QTreeWidgetItem(file_group)
+                    item.setText(0, file_path)
+                    item.setData(0, Qt.UserRole, "found")
+                    item.setData(0, Qt.UserRole + 1, file_path)
+                    item.setToolTip(0, file_path)
         else:
-            result_text = f"No matches found for '{search_text}'"
+            result_text = f"No matches in {total_files} files ({total_folders} folders)"
             parent_item.setData(0, Qt.UserRole, "not_found")
 
         parent_item.setText(0, result_text)
@@ -5385,7 +5700,8 @@ class FileExplorerPanel(QWidget):
         parent_item.setExpanded(True)
         
         # Apply color based on result status
-        color = QColor("#34A853") if results else QColor("#EA4335")
+        theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
+        color = QColor(theme['search_results_found'] if results else theme['search_results_not_found'])
         parent_item.setForeground(0, color)
         
         # Insert at the beginning of the list
@@ -5395,6 +5711,10 @@ class FileExplorerPanel(QWidget):
         while self.remote_results.topLevelItemCount() > 20:
             self.remote_results.takeTopLevelItem(self.remote_results.topLevelItemCount() - 1)
 
+        # If we have results, adjust column width to content
+        if results:
+            self.remote_results.resizeColumnToContents(0)
+        
     def update_search_progress(self, workers: List[Process]):
         try:
             while True:
@@ -5466,59 +5786,61 @@ class FileExplorerPanel(QWidget):
         if not item.parent() or not item.parent().parent():  # Skip root and category items
             return
 
-        # We need to find both the root drive and the target item
+        # Get the full path from the item (column 0 contains the path)
+        full_path = item.text(0)
+        if not full_path:
+            return
+
+        # Split into drive and path components
+        if ':' in full_path:
+            drive, path = full_path.split(':', 1)
+            drive = drive + ':'
+            path = path.strip('/')  # Remove leading/trailing slashes
+            components = path.split('/')
+        else:
+            return  # No drive letter found
+
+        # Get root index
         current_index = QModelIndex()
         model = self.remote_tree.model()
 
-        # First, find the root drive ('C:')
+        # Find the drive
         drive_index = None
         for row in range(model.rowCount(current_index)):
             child_index = model.index(row, 0, current_index)
-            if model.data(child_index, Qt.DisplayRole) == "C:":
+            if model.data(child_index, Qt.DisplayRole) == drive:
                 drive_index = child_index
                 break
 
         if not drive_index:
-            logging.error("Could not find root drive")
-            return
+            return  # Drive not found
 
-        # Get the clicked item's name and parent type
-        item_name = item.text(0)
-        parent_text = item.parent().text(0)
-        
-        logging.debug(f"Navigating to: {item_name} from {parent_text}")
-
-        # Start from the drive and step through each level
+        # Start from drive and navigate through each component
         current_index = drive_index
         self.remote_tree.expand(current_index)
 
-        # If we're looking for 'Users', we know it's under C:
-        if item_name == "Users":
-            # Look for Users directory under C:
+        for component in components:
+            found = False
             for row in range(model.rowCount(current_index)):
                 child_index = model.index(row, 0, current_index)
-                if model.data(child_index, Qt.DisplayRole) == "Users":
+                if model.data(child_index, Qt.DisplayRole) == component:
                     current_index = child_index
+                    self.remote_tree.expand(current_index)
+                    found = True
                     break
-        else:
-            # For other items, we need to traverse the full path
-            parts = ["Users", "Tyler", "Documents", "Dark_Age"]
-            for part in parts:
-                found = False
-                for row in range(model.rowCount(current_index)):
-                    child_index = model.index(row, 0, current_index)
-                    if model.data(child_index, Qt.DisplayRole) == part:
-                        current_index = child_index
-                        self.remote_tree.expand(current_index)
-                        found = True
-                        break
-                if not found:
-                    break
-
+            if not found:
+                break
+        
+        # Select the final item (the file/folder itself)
         if current_index.isValid():
             self.remote_tree.setCurrentIndex(current_index)
             self.remote_tree.scrollTo(current_index)
             self.remote_tree.setFocus()
+            
+            # Ensure the file is selected and visible
+            rect = self.remote_tree.visualRect(current_index)
+            if not rect.isEmpty():
+                self.remote_tree.scrollTo(current_index, QAbstractItemView.EnsureVisible)
             
     def expand_to_path(self, path: str, tree_view: QTreeView, model: QStandardItemModel):
         path_parts = Path(path).parts
@@ -5558,15 +5880,20 @@ class FileExplorerPanel(QWidget):
         self.remote_model = RemoteFileSystemModel()
 
     def load_initial_data(self):
-        """Load initial directory data after UI is fully initialized"""
-        logging.info("Beginning initial data load")
+        """Load initial directory data"""
+        logging.info("Loading initial data for file explorer")
         try:
+            # Load local directory model
             self.local_model.load_directory(QDir.homePath())
+            
+            # Load remote metadata if available
             if hasattr(self, 'metadata_dir'):
                 self.remote_model.load_data(self.metadata_dir)
-            logging.info("Initial data load complete")
+                
+            logging.info("File explorer data load complete")
         except Exception as e:
-            logging.error(f"Error loading initial data: {e}")
+            logging.error(f"Error loading file explorer data: {e}", exc_info=True)
+
 
     def on_item_clicked(self, index):
         item = self.local_model.itemFromIndex(index)
