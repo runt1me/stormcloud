@@ -2217,39 +2217,33 @@ class BackgroundOperation:
             operation_id = settings['operation_id']
             logging.info(f"Starting restore operation {operation_id} for paths: {paths}")
             
+            # Count files that match our restore paths
             total_files = 0
             success_count = 0
             fail_count = 0
             
-            # Validate settings first
-            required_keys = ['API_KEY', 'AGENT_ID']
-            missing_keys = [key for key in required_keys if key not in settings]
-            if missing_keys:
-                error_msg = f"Missing required settings: {missing_keys}"
-                logging.error(error_msg)
-                queue.put({
-                    'type': 'operation_failed',
-                    'error': error_msg,
-                    'operation_id': operation_id
-                })
-                return
+            metadata_dir = os.path.join(os.getenv('APPDATA'), 'Stormcloud', 'file_explorer', 'manifest')
+            metadata_files = sorted([f for f in os.listdir(metadata_dir) 
+                                   if f.startswith('file_metadata_') and f.endswith('.json')],
+                                  reverse=True)
+            
+            if not metadata_files:
+                raise Exception("No metadata files found")
                 
-            # Count total files with logging
-            logging.info("Counting files to restore...")
-            for path in paths:
-                if os.path.isfile(path):
+            # Load the most recent metadata file
+            json_path = os.path.join(metadata_dir, metadata_files[0])
+            with open(json_path, 'r') as f:
+                metadata = json.load(f)
+            
+            paths = []
+            for item in metadata:
+                file_path = item['ClientFullNameAndPathAsPosix']
+                paths.append(file_path)
+                if any(file_path.startswith(path.replace('\\', '/')) for path in paths):
                     total_files += 1
-                    logging.debug(f"Added single file to restore: {path}")
-                else:
-                    try:
-                        for root, _, files in os.walk(path):
-                            file_count = len(files)
-                            total_files += file_count
-                            logging.debug(f"Added {file_count} files from directory: {root}")
-                    except Exception as e:
-                        logging.error(f"Error counting files in {path}: {e}")
-                        
-            logging.info(f"Found {total_files} total files to restore")
+                    logging.debug(f"Added file to restore: {file_path}")
+            
+            logging.info(f"Found {total_files} backed up files to restore")
             queue.put({'type': 'total_files', 'value': total_files})
             
             processed = 0
