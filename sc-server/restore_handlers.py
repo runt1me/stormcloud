@@ -83,8 +83,57 @@ def handle_restore_file_request(request):
     file_size = os.path.getsize(path_on_server)
 
     if file_size > SIZE_LIMIT:
-        __logger__().error("File too large to restore via API.")
-        return RESPONSE_413_TOO_LARGE
+        __logger__().error("Large file detected. Streaming file...")
+        
+        # Handle range requests
+        if 'range' in request:
+            try:
+                start, end = request['range'].replace('bytes=', '').split('-')
+                start = int(start)
+                end = int(end) if end else None
+                
+                file_size = os.path.getsize(path_on_server)
+                
+                if end is None:
+                    end = file_size - 1
+                    
+                # Read requested range
+                with open(path_on_server, 'rb') as f:
+                    f.seek(start)
+                    chunk = f.read(end - start + 1)
+                    
+                response_data = {
+                    'file_content': base64.b64encode(chunk).decode('utf-8'),
+                    'content_range': f'bytes {start}-{end}/{file_size}'
+                }
+                
+                return 206, json.dumps(response_data)
+                
+            except Exception as e:
+                logging.error(f"Range request failed: {e}")
+                return 416, json.dumps({'error': 'Invalid range'})
+        
+        # Handle info requests
+        if request['request_type'] == 'restore_file_info':
+            file_size = os.path.getsize(path_on_server)
+            return 200, json.dumps({
+                'size': file_size,
+                'path': path_on_device
+            })
+        
+        # Legacy full file download
+        file_size = os.path.getsize(path_on_server)
+        if file_size > SIZE_LIMIT:
+            return RESPONSE_413_TOO_LARGE
+            
+        with open(path_on_server, 'rb') as f:
+            content = f.read()
+            
+        return 200, json.dumps({
+            'file_content': base64.b64encode(content).decode('utf-8')
+        })
+        
+        # return RESPONSE_413_TOO_LARGE
 
     else:
         __logger__().info("Reading file into memory for response")
