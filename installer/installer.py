@@ -61,9 +61,57 @@ class Installer(QWizard):
 
         return settings
 
+    def stop_stormcloud_processes(self):
+        """Stop all running stormcloud processes"""
+        try:
+            # Find all stormcloud processes
+            stormcloud_processes = [proc for proc in psutil.process_iter(['name', 'pid'])
+                                  if proc.info['name'] == 'stormcloud.exe']
+            
+            if not stormcloud_processes:
+                logging.info('No stormcloud processes found to stop')
+                return True
+                
+            # Terminate all processes
+            for proc in stormcloud_processes:
+                try:
+                    logging.info(f'Attempting to terminate stormcloud process {proc.info["pid"]}')
+                    proc.terminate()
+                    proc.wait(timeout=10)
+                    if proc.is_running():
+                        logging.info(f'Process {proc.info["pid"]} still running after terminate, attempting kill')
+                        proc.kill()
+                except psutil.NoSuchProcess:
+                    logging.info(f'Process {proc.info["pid"]} already terminated')
+                except Exception as e:
+                    logging.error(f'Error terminating process {proc.info["pid"]}: {e}')
+            
+            # Double check all processes are stopped
+            remaining_processes = [proc for proc in psutil.process_iter(['name'])
+                                 if proc.info['name'] == 'stormcloud.exe']
+            if remaining_processes:
+                logging.warning(f'Found {len(remaining_processes)} remaining stormcloud processes')
+                for proc in remaining_processes:
+                    try:
+                        proc.kill()
+                    except:
+                        pass
+            
+            logging.info('All stormcloud processes stopped successfully')
+            return True
+                    
+        except Exception as e:
+            logging.error(f'Failed to stop stormcloud processes: {e}')
+            return False
+
     def uninstall_existing_version(self):
         # Successfully tested this version:
         # !python C:/Users/Tyler/Documents/Dark_Age/uninstaller.py
+
+        # First stop any running stormcloud processes
+        if not self.stop_stormcloud_processes():
+            logging.error("Failed to stop running stormcloud processes")
+            return False
 
         # TODO: Test code below once uninstall.exe compiled
         if not self.existing_installation:
