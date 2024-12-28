@@ -57,106 +57,56 @@ def handle_queue_file_for_restore_request(request):
         return 400, json.dumps({'error': 'Failed to process file path [%s] in restore queue.' % request['file_path']})
 
 def handle_restore_file_request(request):
+    """Handle restore file request with chunk support"""
     __logger__().info("Server handling restore file request.")
     customer_id = db.get_customer_id_by_api_key(request['api_key'])
 
     if not customer_id:
         return RESPONSE_401_BAD_REQUEST
 
-    results = db.get_device_by_agent_id(request['agent_id'])
-    if not results:
-        return RESPONSE_401_BAD_REQUEST
-
-    device_id,_,_,_,_,_,_,_,_,_ = results
+    device_id,_,_,_,_,_,_,_,_,_ = db.get_device_by_agent_id(request['agent_id'])
     path_on_device = base64.b64decode(request['file_path']).decode("utf-8")
-
-    if not path_on_device:
-        return RESPONSE_401_BAD_REQUEST
-
-    path_on_device = backup_utils.normalize_path(path_on_device)
-    path_on_server = db.get_server_path_for_file(
-        device_id,
-        path_on_device
-    )
-
-    __logger__().info("Got path: %s" % path_on_server)
+    path_on_server = db.get_server_path_for_file(device_id, path_on_device)
+    
+    # Get file size
     file_size = os.path.getsize(path_on_server)
 
-    if file_size > SIZE_LIMIT:
-        __logger__().error("Large file detected. Streaming file...")
+    # Handle info-only request
+    if request.get('info_only'):
+        return 200, json.dumps({'file_size': file_size})
+    
+    # Handle chunked request
+    if 'offset' in request and 'length' in request:
+        offset = int(request['offset'])
+        length = int(request['length'])
         
-        # Handle range requests
-        if 'range' in request:
-            try:
-                start, end = request['range'].replace('bytes=', '').split('-')
-                start = int(start)
-                end = int(end) if end else None
-                
-                file_size = os.path.getsize(path_on_server)
-                
-                if end is None:
-                    end = file_size - 1
-                    
-                # Read requested range
-                with open(path_on_server, 'rb') as f:
-                    f.seek(start)
-                    chunk = f.read(end - start + 1)
-                    
-                response_data = {
-                    'file_content': base64.b64encode(chunk).decode('utf-8'),
-                    'content_range': f'bytes {start}-{end}/{file_size}'
-                }
-                
-                return 206, json.dumps(response_data)
-                
-            except Exception as e:
-                logging.error(f"Range request failed: {e}")
-                return 416, json.dumps({'error': 'Invalid range'})
-        
-        # Handle info requests
-        if request['request_type'] == 'restore_file_info':
-            file_size = os.path.getsize(path_on_server)
-            return 200, json.dumps({
-                'size': file_size,
-                'path': path_on_device
-            })
-        
-        # Legacy full file download
-        file_size = os.path.getsize(path_on_server)
-        if file_size > SIZE_LIMIT:
-            return RESPONSE_413_TOO_LARGE
+        if offset + length > file_size:
+            length = file_size - offset
             
         with open(path_on_server, 'rb') as f:
-            content = f.read()
+            f.seek(offset)
+            chunk = f.read(length)
             
         return 200, json.dumps({
-            'file_content': base64.b64encode(content).decode('utf-8')
+            'file_content': base64.b64encode(chunk).decode('utf-8'),
+            'chunk_size': len(chunk)
         })
-        
-        # return RESPONSE_413_TOO_LARGE
+    
+    # Handle full file request
+    if file_size > SIZE_LIMIT:
+        __logger__().error("File too large to restore via API.")
+        return RESPONSE_413_TOO_LARGE
 
-    else:
-        __logger__().info("Reading file into memory for response")
+    file_content = open(path_on_server, 'rb').read()
+    file_content_b64 = base64.b64encode(file_content).decode('utf-8')
 
-        file_content = open(path_on_server, 'rb').read()
-        file_content_b64 = base64.b64encode(file_content).decode('utf-8')
+    response_data = {
+        'restore_file-response': 'File incoming',
+        'file_content': file_content_b64
+    }
 
-        __logger__().info("Length of file: %d" % len(file_content))
-
-        response_data = {
-            'restore_file-response': 'File incoming',
-            'file_content': file_content_b64
-        }
-
-        _ = db.mark_file_as_restored(
-            device_id,
-            path_on_device
-        )
-
-        # TODO: update database to indicate restore date and mark the file as restored
-        # unfortunately this is non-trivial if we want to do it right, we have to make sure the client actually received the file
-        # before we mark it as complete, ideally the client would send a request back to us indicating that the file was restored
-        return 200, json.dumps(response_data)
+    db.mark_file_as_restored(device_id, path_on_device)
+    return 200, json.dumps(response_data)
 
 def handle_restore_complete_request():
     pass
