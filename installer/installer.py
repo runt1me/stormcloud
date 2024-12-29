@@ -319,8 +319,6 @@ class SystemInfoPage(QWizardPage):
         return True
         
     def passes_sanitize(self, input_string):
-      # Function for validating input to the database.
-      # 
       SANITIZE_LIST = ["'", '"', ";", "\\", "--", "*"]
       for expr in SANITIZE_LIST:
         if expr in input_string:
@@ -402,8 +400,6 @@ class BackupPage(QWizardPage):
             path_and_checkbox_layout.addLayout(checkboxLayout)
 
             self.scrollLayout.addWidget(self.createFolderWidget(folder, checkbox))  # Pass checkbox to method
-
-            # self.folder_layouts.append((folder, checkbox, path_and_checkbox_layout, removeButton))  # Store checkbox
 
             removeButton.clicked.connect(lambda: self.removeFolder(folder, checkbox, path_and_checkbox_layout, removeButton))
 
@@ -583,10 +579,6 @@ class InstallPage(QWizardPage):
 
     def register_application(self):
         try:
-            # Ensure the install directory ends with 'Stormcloud'
-            # if not self.wizard().install_directory.endswith('Stormcloud'):
-            #     self.wizard().install_directory = os.path.join(self.wizard().install_directory, 'Stormcloud')
-
             key_path = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Stormcloud"
             try:
                 uninstall_key = winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_ALL_ACCESS)
