@@ -2235,19 +2235,23 @@ class BackgroundOperation:
             with open(json_path, 'r') as f:
                 metadata = json.load(f)
             
-            paths = []
+            restore_files = []
+            
             for item in metadata:
                 file_path = item['ClientFullNameAndPathAsPosix']
-                paths.append(file_path)
-                if any(file_path.startswith(path.replace('\\', '/')) for path in paths):
-                    total_files += 1
-                    logging.debug(f"Added file to restore: {file_path}")
+                file_size = item.get('FileSize', 0)  # Get size from metadata
+                
+                for restore_path in paths:
+                    if file_path.startswith(restore_path):
+                        restore_files.append((file_path, file_size))
+            
+                total_files = len(restore_files)
             
             logging.info(f"Found {total_files} backed up files to restore")
             queue.put({'type': 'total_files', 'value': total_files})
             
             processed = 0
-            for path in paths:
+            for path, file_size in restore_files:
                 if should_stop.value:
                     logging.info("Restore operation cancelled by user")
                     break
@@ -2255,11 +2259,27 @@ class BackgroundOperation:
                 if os.path.isfile(path):
                     try:
                         logging.info(f"Attempting to restore file: {path}")
-                        success = restore_utils.restore_file(
-                            path,
-                            settings['API_KEY'],
-                            settings['AGENT_ID']
-                        )
+                        
+                        # Use chunked restore for large files
+                        if file_size > 300 * 1024 * 1024:  # 300MB
+                            success = restore_utils.restore_large_file(
+                                path,
+                                settings['API_KEY'],
+                                settings['AGENT_ID'],
+                                lambda p: queue.put({
+                                    'type': 'chunk_progress',
+                                    'filepath': path,
+                                    'progress': p
+                                }),
+                                should_stop
+                            )
+                        else:
+                            success = restore_utils.restore_file(
+                                path,
+                                settings['API_KEY'],
+                                settings['AGENT_ID']
+                            )
+                        
                         success_count += 1 if success else 0
                         fail_count += 0 if success else 1
                         processed += 1
