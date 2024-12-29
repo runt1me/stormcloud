@@ -27,6 +27,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
+# from infi.systray import SysTrayIcon
 from multiprocessing import Process, Queue, Manager, Event
 from pathlib import Path
 from queue import Empty
@@ -59,6 +60,11 @@ import network_utils
 from client_db_utils import get_or_create_hash_db
 from stormcloud import save_file_metadata, read_yaml_settings_file
 # -----------
+
+# logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', 
+                    # filename='stormcloud_app.log', filemode='a')
+# logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s', 
+                    # filename='stormcloud_app.log', filemode='a')
 
 # dataclasses/helper classes
 # -----------
@@ -486,9 +492,6 @@ class FilesystemIndex:
             self.indexer = FilesystemIndexer(
                 self.db_path, self.status_queue, self.shutdown_event
             )
-            # Register the indexer process
-            if hasattr(self, 'window') and self.window():
-                self.window().register_process(self.indexer)
             self.indexer.start()  # Start the separate process
         else:
             logging.warning("Indexer already running")
@@ -1322,17 +1325,6 @@ class HistoryManager:
         except sqlite3.Error as e:
             logging.error(f"Database error saving file record: {e}")
 
-    def close(self):
-        """Close database connections"""
-        try:
-            # Close any open database connections
-            if hasattr(self, 'db_path'):
-                with sqlite3.connect(self.db_path) as conn:
-                    conn.close()
-            logging.info("History manager database connections closed")
-        except Exception as e:
-            logging.error(f"Error closing history manager database: {e}")
-
 class OperationHistoryPanel(QWidget):
     """Panel for displaying hierarchical backup/restore history"""
     
@@ -1459,15 +1451,6 @@ class OperationHistoryPanel(QWidget):
         # Add content widget to main layout
         layout.addWidget(content)
 
-    def get_main_window(self):
-        """Traverse up the widget hierarchy to find the main window"""
-        parent = self.parent()
-        while parent is not None:
-            if isinstance(parent, StormcloudApp):
-                return parent
-            parent = parent.parent()
-        return None
-
     def set_history_manager(self, manager):
         """Set history manager after initialization"""
         self.history_manager = manager
@@ -1517,12 +1500,6 @@ class OperationHistoryPanel(QWidget):
             return
             
         self.thread = QThread()
-        
-        # Get parent window reference dynamically when needed
-        parent_window = self.window()
-        if parent_window and isinstance(parent_window, StormcloudApp):
-            parent_window.register_thread(self.thread)
-            
         self.worker = HistoryWorker(self.history_manager, self.event_type)
         self.worker.moveToThread(self.thread)
         
@@ -2012,12 +1989,7 @@ class BackgroundOperation:
             self.process = Process(target=BackgroundOperation._restore_worker, 
                                  args=(self.paths, self.settings, self.queue, self.should_stop))
         
-        
-        # Register the process with the main window
-        if hasattr(self, 'window') and self.window():
-            self.window().register_process(self.process)
-        
-        # Ensure process starts safely
+                # Ensure process starts safely
         if __name__ == "__main__":
             multiprocessing.freeze_support()
             self.process.start()
@@ -2243,6 +2215,7 @@ class BackgroundOperation:
         
         try:
             operation_id = settings['operation_id']
+            logging.info(f"Starting restore operation {operation_id} for paths: {paths}")
             
             # Count files that match our restore paths
             total_files = 0
@@ -2262,24 +2235,19 @@ class BackgroundOperation:
             with open(json_path, 'r') as f:
                 metadata = json.load(f)
             
-            restore_files = []
-            
-            # Find files to restore and get their sizes
+            paths = []
             for item in metadata:
                 file_path = item['ClientFullNameAndPathAsPosix']
-                file_size = item.get('FileSize', 0)  # Get size from metadata
-                
-                for restore_path in paths:
-                    if file_path.startswith(restore_path):
-                        restore_files.append((file_path, file_size))
-            
-            total_files = len(restore_files)
+                paths.append(file_path)
+                if any(file_path.startswith(path.replace('\\', '/')) for path in paths):
+                    total_files += 1
+                    logging.debug(f"Added file to restore: {file_path}")
             
             logging.info(f"Found {total_files} backed up files to restore")
             queue.put({'type': 'total_files', 'value': total_files})
             
             processed = 0
-            for path, file_size in restore_files:
+            for path in paths:
                 if should_stop.value:
                     logging.info("Restore operation cancelled by user")
                     break
@@ -2287,27 +2255,6 @@ class BackgroundOperation:
                 if os.path.isfile(path):
                     try:
                         logging.info(f"Attempting to restore file: {path}")
-                        
-                        # Use chunked restore for large files
-                        if file_size > 300 * 1024 * 1024:  # 300MB
-                            success = restore_utils.restore_large_file(
-                                file_path,
-                                settings['API_KEY'],
-                                settings['AGENT_ID'],
-                                lambda p: queue.put({
-                                    'type': 'chunk_progress',
-                                    'filepath': file_path,
-                                    'progress': p
-                                }),
-                                should_stop
-                            )
-                        else:
-                            success = restore_utils.restore_file(
-                                file_path,
-                                settings['API_KEY'],
-                                settings['AGENT_ID']
-                            )
-                        
                         success = restore_utils.restore_file(
                             path,
                             settings['API_KEY'],
@@ -2716,24 +2663,14 @@ class Transaction:
 class StormcloudApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        
-        # Track active components
-        self._active_threads = []
-        self._active_processes = []
-        self._active_timers = []
-        self._shutdown_requested = False
-        
+        self.theme_manager = ThemeManager()
         self.user_email = None
         self._operation_in_progress = False  # Add flag here too
-        
-        self.theme_manager = ThemeManager()
+        #self.auth_tokens = None
         
         # Set window title and initial theme
         self.setWindowTitle('Stormcloud Backup Manager')
         self.apply_base_theme()
-        
-        # Register cleanup handler for Windows
-        self._win_event_handler = win32api.SetConsoleCtrlHandler(self._handle_windows_shutdown, True)
         
         logging.info("Application session initiated. Attempting user authentication.")
         
@@ -4419,112 +4356,6 @@ class StormcloudApp(QMainWindow):
         finally:
             logging.info("Application shutdown complete")
 
-    def _handle_windows_shutdown(self, ctrl_type):
-        """Handle Windows shutdown events"""
-        if ctrl_type in (win32con.CTRL_C_EVENT, win32con.CTRL_BREAK_EVENT,
-                        win32con.CTRL_CLOSE_EVENT, win32con.CTRL_LOGOFF_EVENT,
-                        win32con.CTRL_SHUTDOWN_EVENT):
-            logging.info(f"Received Windows shutdown signal: {ctrl_type}")
-            self.cleanup_and_exit()
-            return True
-        return False
-
-    def register_thread(self, thread: QThread):
-        """Track active threads"""
-        if thread not in self._active_threads:
-            self._active_threads.append(thread)
-            thread.finished.connect(lambda: self._remove_thread(thread))
-
-    def register_process(self, process: Process):
-        """Track active processes"""
-        if process not in self._active_processes:
-            self._active_processes.append(process)
-
-    def _remove_thread(self, thread: QThread):
-        """Remove finished thread from tracking"""
-        if thread in self._active_threads:
-            self._active_threads.remove(thread)
-
-    def _remove_process(self, process: Process):
-        """Remove terminated process from tracking"""
-        if process in self._active_processes:
-            self._active_processes.remove(process)
-
-    def cleanup_and_exit(self):
-        """Perform thorough cleanup before exit"""
-        if self._shutdown_requested:
-            return
-        self._shutdown_requested = True
-        
-        logging.info("Starting application cleanup...")
-        
-        # Stop all timers
-        for timer in self._active_timers:
-            try:
-                timer.stop()
-                logging.info(f"Stopped timer: {timer}")
-            except Exception as e:
-                logging.error(f"Error stopping timer: {e}")
-        
-        # Stop filesystem indexer
-        if hasattr(self, 'filesystem_index'):
-            try:
-                self.filesystem_index.shutdown()
-                logging.info("Filesystem indexer shutdown complete")
-            except Exception as e:
-                logging.error(f"Error shutting down filesystem indexer: {e}")
-
-        # Stop background operations
-        if hasattr(self, 'progress_widget') and self.progress_widget:
-            try:
-                self.progress_widget.cleanup()
-                logging.info("Progress widget cleanup complete")
-            except Exception as e:
-                logging.error(f"Error cleaning up progress widget: {e}")
-
-        # Terminate active processes
-        for process in self._active_processes[:]:  # Copy list to avoid modification during iteration
-            try:
-                if process.is_alive():
-                    process.terminate()
-                    process.join(timeout=2)
-                    if process.is_alive():
-                        process.kill()
-                self._remove_process(process)
-                logging.info(f"Terminated process: {process}")
-            except Exception as e:
-                logging.error(f"Error terminating process: {e}")
-
-        # Stop active threads
-        for thread in self._active_threads[:]:  # Copy list to avoid modification during iteration
-            try:
-                if thread.isRunning():
-                    thread.quit()
-                    thread.wait(2000)  # Wait up to 2 seconds
-                    if thread.isRunning():
-                        thread.terminate()
-                logging.info(f"Stopped thread: {thread}")
-            except Exception as e:
-                logging.error(f"Error stopping thread: {e}")
-
-        # Close database connections
-        if hasattr(self, 'history_manager'):
-            try:
-                self.history_manager.close()
-                logging.info("History manager closed")
-            except Exception as e:
-                logging.error(f"Error closing history manager: {e}")
-
-        logging.info("Application cleanup complete")
-
-    def closeEvent(self, event):
-        """Handle application close event"""
-        try:
-            self.cleanup_and_exit()
-            super().closeEvent(event)
-        except Exception as e:
-            logging.error(f"Error during close event: {e}")
-            event.accept()  # Ensure the window closes even if there's an error
 
 # Calendar Widget
 # ---------------
@@ -5091,11 +4922,11 @@ class SearchResultDelegate(QStyledItemDelegate):
 # ---------------
 
 class FileExplorerPanel(QWidget):
-    def __init__(self, json_directory, theme_manager, settings_cfg_path=None, history_manager=None, user_email=None):
+    def __init__(self, json_directory, theme_manager, settings_cfg_path=None, 
+                 # systray=None,
+                 history_manager=None, user_email=None):
         super().__init__()
         self.setObjectName("FileExplorerPanel")
-
-        self.parent_window = self.get_main_window()
 
         self._drag_source_item = None
         self._drag_source_path = None
@@ -5318,15 +5149,6 @@ class FileExplorerPanel(QWidget):
 
         # Progress widget
         layout.addWidget(self.progress_widget)
-
-    def get_main_window(self):
-        """Traverse up the widget hierarchy to find the main window"""
-        parent = self.parent()
-        while parent is not None:
-            if isinstance(parent, StormcloudApp):
-                return parent
-            parent = parent.parent()
-        return None
 
     def eventFilter(self, source, event):
         if event.type() == QEvent.DragEnter:
@@ -5634,8 +5456,6 @@ class FileExplorerPanel(QWidget):
         
         # Create search worker thread
         self.search_thread = QThread()
-        self.main_window.register_thread(self.search_thread)
-        
         self.search_worker = LocalSearchWorker(search_text, self.filesystem_index)
         self.search_worker.moveToThread(self.search_thread)
         
@@ -5716,8 +5536,6 @@ class FileExplorerPanel(QWidget):
         
         # Create search worker thread
         self.remote_search_thread = QThread()
-        self.main_window.register_thread(self.remote_search_thread)
-        
         self.remote_search_worker = RemoteSearchWorker(search_text, self.remote_model)
         self.remote_search_worker.moveToThread(self.remote_search_thread)
         
@@ -6614,111 +6432,27 @@ class FileExplorerPanel(QWidget):
             logging.error(f"Failed to backup folder {folder_path}: {e}")
             StormcloudMessageBox.critical(self, "Error", f"Failed to backup folder: {str(e)}")
 
-    def restore_file(file_path: str, api_key: str, agent_id: str, version_id: str = None) -> bool:
-        """
-        Restore file with chunk handling for large files
-        """
+    def restore_file(self, file_path):
+        """Restore file from backup"""
+        settings = self.read_settings()
+        if not settings:
+            StormcloudMessageBox.critical(self, "Error", "Could not read required settings")
+            return
+
         try:
-            # First request just the file size
-            info_request = json.dumps({
-                'request_type': 'restore_file',
-                'file_path': base64.b64encode(str(file_path).encode("utf-8")).decode('utf-8'),
-                'api_key': api_key,
-                'agent_id': agent_id,
-                'version_id': version_id,
-                'info_only': True  # New flag to request only file info
-            })
+            file_path = file_path.replace('\\', '/')
+            logging.info("Restore requested from application for file: {}".format(file_path))
             
-            status_code, response = scnet.tls_send_json_data_get(info_request, 200)
-            if not response or 'file_size' not in response:
-                logging.warning("Failed to get file size info")
-                return False
-                
-            total_size = response['file_size']
-            
-            # Use standard method for small files
-            if total_size <= 250 * 1024 * 1024:  # Leave buffer below server limit
-                restore_request = json.dumps({
-                    'request_type': 'restore_file',
-                    'file_path': base64.b64encode(str(file_path).encode("utf-8")).decode('utf-8'),
-                    'api_key': api_key,
-                    'agent_id': agent_id,
-                    'version_id': version_id
-                })
-
-                status_code, response_data = scnet.tls_send_json_data_get(
-                    restore_request,
-                    200,
-                    show_json=False
-                )
-                
-                if not response_data or 'file_content' not in response_data:
-                    logging.warning("Failed to get response from restore_file request")
-                    return False
-
-                file_content = base64.b64decode(response_data['file_content'])
-                return write_file_to_disk(file_content, file_path)
-                
-            # For large files, use chunked restore
-            chunk_size = 200 * 1024 * 1024  # 200MB chunks (well under limit)
-            temp_path = f"{file_path}.tmp"
-            
-            try:
-                os.makedirs(os.path.dirname(file_path), exist_ok=True)
-                
-                with open(temp_path, 'wb') as f:
-                    for offset in range(0, total_size, chunk_size):
-                        length = min(chunk_size, total_size - offset)
-                        
-                        chunk_request = json.dumps({
-                            'request_type': 'restore_file',
-                            'file_path': base64.b64encode(str(file_path).encode("utf-8")).decode('utf-8'),
-                            'api_key': api_key,
-                            'agent_id': agent_id,
-                            'version_id': version_id,
-                            'offset': offset,
-                            'length': length
-                        })
-                        
-                        status_code, chunk_response = scnet.tls_send_json_data_get(
-                            chunk_request,
-                            200,
-                            show_json=False
-                        )
-                        
-                        if not chunk_response or 'file_content' not in chunk_response:
-                            logging.error(f"Failed to get chunk at offset {offset}")
-                            return False
-                            
-                        chunk_data = base64.b64decode(chunk_response['file_content'])
-                        if len(chunk_data) != length:
-                            logging.error(f"Chunk size mismatch at offset {offset}")
-                            return False
-                            
-                        f.write(chunk_data)
-                        f.flush()
-                        os.fsync(f.fileno())
-                        
-                        logging.info(f"Downloaded chunk {offset}/{total_size} bytes")
-                        
-                # Atomic rename after successful download
-                os.replace(temp_path, file_path)
-                logging.info(f"Successfully restored file {file_path}")
-                return True
-                
-            except Exception as e:
-                logging.error(f"Error during chunked restore: {e}")
-                if os.path.exists(temp_path):
-                    try:
-                        os.remove(temp_path)
-                    except:
-                        pass
-                return False
-                
+            if restore_utils.restore_file(file_path
+                                            , settings['API_KEY']
+                                            , settings['AGENT_ID']):
+                StormcloudMessageBox.information(self, "Success", f"Successfully restored {file_path}")
+            else:
+                StormcloudMessageBox.critical(self, "Error", f"Failed to restore {file_path}")
         except Exception as e:
-            logging.error(f"Restore failed: {e}")
-            return False
-        
+            logging.error(f"Failed to restore file {file_path}: {e}")
+            StormcloudMessageBox.critical(self, "Error", f"Failed to restore file: {str(e)}")
+            
     def restore_file_version(self, file_path, version_data):
         """Restore specific version of a file"""
         settings = self.read_settings()
