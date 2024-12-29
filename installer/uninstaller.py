@@ -32,9 +32,13 @@ def terminate_stormcloud_processes():
     for proc in psutil.process_iter(['name', 'exe']):
         try:
             if proc.name().lower() == 'stormcloud.exe' or (proc.exe() and 'stormcloud' in proc.exe().lower()):
-                proc.terminate()
-                logging.info(f"Terminated Stormcloud process: {proc.pid}")
-                terminated = True
+                # Prevent uninstaller suicide
+                if 'uninstaller' in proc.exe().lower():
+                    pass
+                else:
+                    proc.terminate()
+                    logging.info(f"Terminated Stormcloud process: {proc.pid}")
+                    terminated = True
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             pass
 
