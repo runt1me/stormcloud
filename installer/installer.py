@@ -105,15 +105,6 @@ class Installer(QWizard):
             return False
 
     def uninstall_existing_version(self):
-        # Successfully tested this version:
-        # !python C:/Users/Tyler/Documents/Dark_Age/uninstaller.py
-
-        # First stop any running stormcloud processes
-        if not self.stop_stormcloud_processes():
-            logging.error("Failed to stop running stormcloud processes")
-            return False
-
-        # TODO: Test code below once uninstall.exe compiled
         if not self.existing_installation:
             logging.error("No existing installation found to uninstall.")
             return False
