@@ -33,6 +33,8 @@ class Installer(QWizard):
         self.setWindowTitle("Stormcloud Installer")
         self.setFixedSize(640, 480)
 
+        setup_logging()
+
         self.system_info = None
         self.api_key = None
         self.target_folder = None
@@ -105,15 +107,6 @@ class Installer(QWizard):
             return False
 
     def uninstall_existing_version(self):
-        # Successfully tested this version:
-        # !python C:/Users/Tyler/Documents/Dark_Age/uninstaller.py
-
-        # First stop any running stormcloud processes
-        if not self.stop_stormcloud_processes():
-            logging.error("Failed to stop running stormcloud processes")
-            return False
-
-        # TODO: Test code below once uninstall.exe compiled
         if not self.existing_installation:
             logging.error("No existing installation found to uninstall.")
             return False
@@ -124,6 +117,7 @@ class Installer(QWizard):
             return False
 
         uninstaller_path = os.path.join(install_path, "uninstall.exe")
+        logging.info(uninstaller_path)
         if not os.path.exists(uninstaller_path):
             logging.error(f"Uninstaller not found at {uninstaller_path}")
             return False
@@ -134,6 +128,8 @@ class Installer(QWizard):
             logging.info("Uninstallation completed successfully.")
             return True
         except subprocess.CalledProcessError as e:
+            import traceback
+            logging.error(traceback.format_exc())
             logging.error(f"Uninstallation failed with error code {e.returncode}")
             return False
         except Exception as e:
@@ -323,8 +319,6 @@ class SystemInfoPage(QWizardPage):
         return True
         
     def passes_sanitize(self, input_string):
-      # Function for validating input to the database.
-      # 
       SANITIZE_LIST = ["'", '"', ";", "\\", "--", "*"]
       for expr in SANITIZE_LIST:
         if expr in input_string:
@@ -407,8 +401,6 @@ class BackupPage(QWizardPage):
 
             self.scrollLayout.addWidget(self.createFolderWidget(folder, checkbox))  # Pass checkbox to method
 
-            # self.folder_layouts.append((folder, checkbox, path_and_checkbox_layout, removeButton))  # Store checkbox
-
             removeButton.clicked.connect(lambda: self.removeFolder(folder, checkbox, path_and_checkbox_layout, removeButton))
 
     def removeFolder(self, folder, checkbox, widget, button):
@@ -472,6 +464,11 @@ class InstallPage(QWizardPage):
             self.SERVER_PORT_DOWNLOAD,
             self.STORMCLOUD_VERSION
         )
+        self.stormcloud_manager_url = "https://%s:%s/sc-dist/windows-x86_64-stormcloud-manager-%s.exe" % (
+            self.SERVER_NAME,
+            self.SERVER_PORT_DOWNLOAD,
+            self.STORMCLOUD_VERSION
+        )
         self.register_new_device_url = "https://%s:%s/api/register-new-device" % (
             self.SERVER_NAME,
             self.SERVER_PORT_API
@@ -497,7 +494,6 @@ class InstallPage(QWizardPage):
             QMessageBox.warning(self, "Warning", "Failed to register application with Windows. Some features may not work correctly.")
             logging.error("Failed to register application with Windows")
 
-        
         def get_result(result, result_type):
             valid_result_types = ('register', 'download', 'configure', 'persist')
             if result_type not in valid_result_types:
@@ -531,6 +527,15 @@ class InstallPage(QWizardPage):
         download_result, full_exe_path = self.download_to_folder(self.stormcloud_client_url, self.wizard().install_directory, "stormcloud.exe")
         if not get_result(download_result, result_type='download'):
             QMessageBox.warning(self, "Error", "Failed to download stormcloud. Please try again.")
+
+        download_manager_result, manager_exe_path = self.download_to_folder(self.stormcloud_manager_url, self.wizard().install_directory, "stormcloud-manager.exe")
+        if not get_result(download_result, result_type='download'):
+            QMessageBox.warning(self, "Error", "Failed to download stormcloud manager. Please try again.")
+
+        download_uninstaller_result = self.download_and_install_uninstaller()
+        if not download_uninstaller_result:
+            QMessageBox.warning(self, "Error", "Failed to download Stormcloud uninstaller. Please try again.")
+            return
 
         self.progress.setValue(60)
 
@@ -574,10 +579,6 @@ class InstallPage(QWizardPage):
 
     def register_application(self):
         try:
-            # Ensure the install directory ends with 'Stormcloud'
-            # if not self.wizard().install_directory.endswith('Stormcloud'):
-            #     self.wizard().install_directory = os.path.join(self.wizard().install_directory, 'Stormcloud')
-
             key_path = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Stormcloud"
             try:
                 uninstall_key = winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_ALL_ACCESS)
@@ -691,7 +692,6 @@ class InstallPage(QWizardPage):
         return (0, None)
 
     def download_and_install_uninstaller(self):
-        # Download uninstaller
         uninstaller_url = "https://%s:%s/sc-dist/windows-x86_64-stormcloud-uninstaller.exe" % (
             self.SERVER_NAME,
             self.SERVER_PORT_DOWNLOAD
@@ -770,7 +770,6 @@ class FinishPage(QWizardPage):
     def __init__(self):
         super().__init__()
 
-        # TODO: have a checkbox to launch the installer
         self.checkbox = QCheckBox("Run Stormcloud")
 
         layout = QVBoxLayout()
