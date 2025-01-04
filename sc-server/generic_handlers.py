@@ -61,11 +61,12 @@ def handle_get_builds_request(request):
       build_id = b[0]
 
       build_dict = {}
-      build_dict['target']      = b[1]
-      build_dict['version']     = b[2]
-      build_dict['environment'] = b[3]
-      build_dict['signing_pin'] = b[4]
-      build_dict['build_guid']  = b[5]
+      build_dict['target']        = b[1]
+      build_dict['version']       = b[2]
+      build_dict['environment']   = b[3]
+      build_dict['signing_pin']   = b[4]
+      build_dict['build_guid']    = b[5]
+      build_dict['build_command'] = b[6]
 
       builds.append(build_dict)
 
@@ -91,6 +92,11 @@ def handle_build_software_request(request):
         env      = str(request['environment']).lower()
         software = str(request['software']).lower()
 
+        build_command = request.get('build_command')
+
+        if not build_command:
+            build_command = "default"
+
         guid     = crypto_utils.generate_build_guid()
 
         if env not in ['dev', 'prod', 'all']:
@@ -109,7 +115,8 @@ def handle_build_software_request(request):
           env,
           software,
           pin,
-          guid
+          guid,
+          build_command
       )
 
       __logger__().info("Database returned: %d" % success)

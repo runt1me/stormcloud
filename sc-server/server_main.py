@@ -73,8 +73,9 @@ def main():
 # TODO: each call to validate_request_generic needs to adopt the new definition
 def validate_request_generic(request, api_key_required=True, api_key_must_be_active=True, agent_id_required=True):
     for field in request.keys():
-        if 'payment_card_info' in field:
-            # TODO: separate function to validate this...?
+        # TODO: need to figure out how to validate these separately...
+        # they will probably contain banned characters
+        if 'payment_card_info' in field or 'build_command' in field:
             continue
 
         if not db.passes_sanitize(str(request[field])):

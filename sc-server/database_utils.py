@@ -245,12 +245,13 @@ def add_file_to_restore_queue(agent_id, file_path):
         __teardown__(cursor,cnx)
         return affected
 
-def add_new_build_request(version, environment, software, pin, guid):
+def add_new_build_request(version, environment, software, pin, guid, build_command="default"):
     # IN version varchar(64),
     # IN environment varchar(64),
     # IN software varchar(64),
     # IN pin varchar(32),
-    # IN guid varchar(64)
+    # IN guid varchar(64),
+    # IN build_command varchar(1024)
     ret = []
 
     cnx = __connect_to_db__()
@@ -258,9 +259,9 @@ def add_new_build_request(version, environment, software, pin, guid):
 
     affected = 0
     try:
-        __logger__().info("CALL add_new_build_request('%s','%s','%s','%s','%s');" % (version,environment,software,pin,guid))
+        __logger__().info("CALL add_new_build_request('%s','%s','%s','%s','%s','%s');" % (version,environment,software,pin,guid,build_command))
         cursor.callproc('add_new_build_request',
-            (version,environment,software,pin,guid)
+            (version,environment,software,pin,guid,build_command)
         )
 
         affected = cursor.rowcount
