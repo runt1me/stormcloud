@@ -203,7 +203,6 @@ class ProcessRegistry:
             return
             
         self._timers.add(timer)
-        logging.info("Registered timer")
 
     def unregister_process(self, process: Process) -> None:
         """Unregister a process (e.g., when it completes normally)"""
@@ -6275,13 +6274,20 @@ class FileExplorerPanel(QWidget):
                         main_window.set_operation_in_progress()
                         
                         # Reset tree just once
-                        self.reset_remote_tree()
+                        # self.reset_remote_tree()
                         
                         # Start operation
                         self.progress_widget.start_operation('restore', source_path, settings)
                         
                         # Clear flag after delay
-                        QTimer.singleShot(5000, main_window.clear_operation_in_progress)
+                        # QTimer.singleShot(5000, main_window.clear_operation_in_progress)
+                        
+                        # Only after operation starts, schedule a single tree reset
+                        def reset_and_clear():
+                            self.reset_remote_tree()
+                            main_window.clear_operation_in_progress()
+                            
+                        QTimer.singleShot(5000, reset_and_clear)
 
             event.accept()
             return True
@@ -8000,6 +8006,7 @@ class RemoteFileSystemModel(QStandardItemModel):
 
         try:
             self._is_loading = True
+            logging.info("=== Starting metadata load ===")
             self.beginResetModel()
             
             metadata_files = sorted(
@@ -8015,16 +8022,26 @@ class RemoteFileSystemModel(QStandardItemModel):
             json_path = os.path.join(metadata_dir, metadata_files[0])
             with open(json_path, 'r') as file:
                 data = json.load(file)
+                logging.info(f"Loading {len(data)} items from {json_path}")
+                
+                # Track unique paths
+                paths_added = set()
                 
                 # Create directories first
                 directories = set()
                 for item in data:
                     path = item['ClientFullNameAndPathAsPosix']
+                    if path in paths_added:
+                        logging.info(f"Duplicate path detected during load: {path}")
+                    paths_added.add(path)
+                    
                     parts = path.strip('/').split('/')
                     current = ""
                     for part in parts[:-1]:
                         current = f"{current}/{part}" if current else part
                         directories.add(current)
+                
+                logging.info(f"=== Metadata load complete: {len(paths_added)} unique paths ===")
                 
                 for directory in sorted(directories):
                     self._create_directory_path(directory)
@@ -8033,13 +8050,44 @@ class RemoteFileSystemModel(QStandardItemModel):
                 for item in data:
                     self._add_file(item['ClientFullNameAndPathAsPosix'], item)
                     
-            logging.info(f"Loaded metadata from {metadata_files[0]}")
+            logging.info(f"Loaded metadata from {json_path}")
 
         except Exception as e:
             logging.error(f"Error loading metadata: {str(e)}")
         finally:
             self.endResetModel()
             self._is_loading = False
+
+    def _ensure_directory_exists(self, path_parts):
+        """Ensure directory structure exists, create if needed"""
+        parent = self.root
+        current_path = ""
+        
+        for part in path_parts[:-1]:  # Skip the last part (filename)
+            current_path = f"{current_path}/{part}" if current_path else part
+            
+            # Look for existing directory at this level
+            found = None
+            for row in range(parent.rowCount()):
+                if parent.child(row).text() == part:
+                    found = parent.child(row)
+                    break
+            
+            if not found:
+                # Create new directory item
+                dir_item = QStandardItem(part)
+                dir_item.setIcon(QIcon.fromTheme("folder"))
+                dir_metadata = {
+                    'ClientFullNameAndPathAsPosix': current_path,
+                    'is_directory': True
+                }
+                dir_item.setData(dir_metadata, Qt.UserRole)
+                parent.appendRow(dir_item)
+                parent = dir_item
+            else:
+                parent = found
+                
+        return parent
 
     def _create_directory_path(self, path):
         parts = path.strip('/').split('/')
@@ -8063,6 +8111,11 @@ class RemoteFileSystemModel(QStandardItemModel):
     def _add_file(self, path, metadata):
         parts = path.strip('/').split('/')
         parent = self.root
+        
+        logging.info(f"foobar tarfun: {parts}")
+        logging.info(f"foobar tarfun: {parent}")
+        logging.info(f"foobar tarfun: {path}")
+        logging.info(f"foobar tarfun: {metadata}")
         
         for part in parts[:-1]:
             for row in range(parent.rowCount()):
@@ -8834,25 +8887,18 @@ class PreviewButtonDelegate(QStyledItemDelegate):
         
         # Debug logging
         metadata = index.data(Qt.UserRole)
-        logging.debug(f"Item metadata: {metadata}")
         
         if not metadata or not isinstance(metadata, dict):
-            logging.debug(f"Invalid metadata for index")
             return
                 
         filepath = metadata.get('ClientFullNameAndPathAsPosix')
-        logging.debug(f"Checking filepath: {filepath}")
+        
         if not filepath:
-            logging.debug("No filepath found")
             return
                 
         # Log before checking if previewable    
-        logging.debug(f"Checking if previewable: {filepath}")
         if not restore_utils.is_previewable_file(filepath):
-            logging.debug(f"File not marked as previewable: {filepath}")
             return
-            
-        logging.debug(f"Drawing preview button for: {filepath}")
 
         # Draw the preview button
         button_rect = self.get_button_rect(option.rect)
