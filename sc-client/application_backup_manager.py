@@ -1,3 +1,5 @@
+# standard python library imports
+# -----------
 import json
 import logging
 import multiprocessing
@@ -27,13 +29,11 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-# from infi.systray import SysTrayIcon
 from multiprocessing import Process, Queue, Manager, Event
 from pathlib import Path
 from queue import Empty
 from threading import Thread, Lock
 from typing import Optional, Set, List, Dict
-
 
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QMenu,
                              QLabel, QPushButton, QToolButton, QListWidget, QListWidgetItem,
@@ -49,9 +49,9 @@ from PyQt5.QtGui import (QDesktopServices, QFont, QIcon, QColor,
                          QPalette, QPainter, QPixmap, QTextCharFormat,
                          QStandardItemModel, QStandardItem, QPen, QPolygon, QPainterPath, QBrush)
 from PyQt5.QtWinExtras import QtWin
+# -----------
 
 # stormcloud imports
-#   core imports
 # -----------
 import restore_utils
 import backup_utils
@@ -61,14 +61,8 @@ from client_db_utils import get_or_create_hash_db
 from stormcloud import save_file_metadata, read_yaml_settings_file
 # -----------
 
-# logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', 
-                    # filename='stormcloud_app.log', filemode='a')
-# logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s', 
-                    # filename='stormcloud_app.log', filemode='a')
-
 # dataclasses/helper classes
 # -----------
-
 class InitiationSource(Enum):
     REALTIME = "Realtime"
     SCHEDULED = "Scheduled"
@@ -143,11 +137,163 @@ class SearchProgress:
     current_path: str
     is_complete: bool
 
+@dataclass
+class Transaction:
+    id: str
+    date: datetime
+    amount: float
+    status: str
+    customer_name: str
+    description: str
+    payment_method: str
+# -----------
+
+# Thread Registry (to ensure no orphaned processes on shutdown)
+# -----------
+class ProcessRegistry:
+    """
+    Singleton registry for managing application processes and threads.
+    
+    Key Features:
+    - Single point of process/thread management
+    - Automatic cleanup on application exit
+    - Timeout-based termination
+    - Logging for debugging
+    """
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(ProcessRegistry, cls).__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self):
+        if self._initialized:
+            return
+            
+        self._initialized = True
+        self._processes: Set[Process] = set()
+        self._threads: Set[QThread] = set()
+        self._timers: Set[QTimer] = set()
+        logging.info("ProcessRegistry initialized")
+
+    def register_process(self, process: Process) -> None:
+        """Register a multiprocessing.Process"""
+        if not isinstance(process, Process):
+            logging.error(f"Attempted to register invalid process type: {type(process)}")
+            return
+            
+        self._processes.add(process)
+        logging.info(f"Registered process {process.name} (PID: {process.pid if process.pid else 'Not started'})")
+
+    def register_thread(self, thread: QThread) -> None:
+        """Register a QThread"""
+        if not isinstance(thread, QThread):
+            logging.error(f"Attempted to register invalid thread type: {type(thread)}")
+            return
+            
+        self._threads.add(thread)
+        logging.info(f"Registered thread {thread.objectName() or 'Unnamed'}")
+
+    def register_timer(self, timer: QTimer) -> None:
+        """Register a QTimer"""
+        if not isinstance(timer, QTimer):
+            logging.error(f"Attempted to register invalid timer type: {type(timer)}")
+            return
+            
+        self._timers.add(timer)
+        logging.info("Registered timer")
+
+    def unregister_process(self, process: Process) -> None:
+        """Unregister a process (e.g., when it completes normally)"""
+        try:
+            self._processes.remove(process)
+            logging.info(f"Unregistered process {process.name}")
+        except KeyError:
+            logging.warning(f"Attempted to unregister unknown process {process.name}")
+
+    def unregister_thread(self, thread: QThread) -> None:
+        """Unregister a thread (e.g., when it completes normally)"""
+        try:
+            self._threads.remove(thread)
+            logging.info(f"Unregistered thread {thread.objectName() or 'Unnamed'}")
+        except KeyError:
+            logging.warning("Attempted to unregister unknown thread")
+
+    def unregister_timer(self, timer: QTimer) -> None:
+        """Unregister a timer"""
+        try:
+            self._timers.remove(timer)
+            logging.info("Unregistered timer")
+        except KeyError:
+            logging.warning("Attempted to unregister unknown timer")
+
+    def cleanup(self, timeout: int = 5) -> None:
+        """
+        Clean up all registered processes and threads.
+        
+        Args:
+            timeout: Maximum time in seconds to wait for each process/thread
+        """
+        logging.info("Starting ProcessRegistry cleanup")
+        
+        # Stop all timers first
+        for timer in self._timers:
+            try:
+                if timer.isActive():
+                    timer.stop()
+                    logging.info("Stopped timer")
+            except Exception as e:
+                logging.error(f"Error stopping timer: {e}")
+
+        # Clean up threads
+        for thread in list(self._threads):
+            try:
+                if thread.isRunning():
+                    logging.info(f"Stopping thread {thread.objectName() or 'Unnamed'}")
+                    thread.quit()
+                    if not thread.wait(timeout * 1000):  # Convert to milliseconds
+                        logging.warning(f"Thread {thread.objectName() or 'Unnamed'} did not stop gracefully, forcing termination")
+                        thread.terminate()
+                self._threads.remove(thread)
+            except Exception as e:
+                logging.error(f"Error cleaning up thread: {e}")
+
+        # Clean up processes
+        for process in list(self._processes):
+            try:
+                if process.is_alive():
+                    logging.info(f"Terminating process {process.name}")
+                    process.terminate()
+                    process.join(timeout=timeout)
+                    if process.is_alive():
+                        logging.warning(f"Process {process.name} did not terminate gracefully, killing")
+                        process.kill()
+                self._processes.remove(process)
+            except Exception as e:
+                logging.error(f"Error cleaning up process: {e}")
+
+        logging.info("ProcessRegistry cleanup completed")
+
+    @property
+    def active_process_count(self) -> int:
+        """Get count of active processes"""
+        return len([p for p in self._processes if p.is_alive()])
+
+    @property
+    def active_thread_count(self) -> int:
+        """Get count of active threads"""
+        return len([t for t in self._threads if t.isRunning()])
+
+    @property
+    def active_timer_count(self) -> int:
+        """Get count of active timers"""
+        return len([t for t in self._timers if t.isActive()])
 # -----------
 
 # standalone functions
 # -----------
-
 def ordinal(n):
     if 10 <= n % 100 <= 20:
         suffix = 'th'
@@ -179,120 +325,27 @@ def init_db(db_path):
            error_message TEXT,
            FOREIGN KEY (operation_id) REFERENCES operations(operation_id)
        )""")
-
 # -----------
 
-# workers
+# filesystem indexing / accelerated filesystem search
 # -----------
-class LocalSearchWorker(QObject):
-    finished = pyqtSignal()
-    results_ready = pyqtSignal(list, bool, dict)  # Added stats parameter
-    
-    def __init__(self, search_text, filesystem_index):
-        super().__init__()
-        self.search_text = search_text
-        self.filesystem_index = filesystem_index
-    
-    def run(self):
-        try:
-            results, truncated, stats = self.filesystem_index.search(self.search_text)
-            self.results_ready.emit(results, truncated, stats)
-        except Exception as e:
-            logging.error(f"Search error: {e}")
-            self.results_ready.emit([], False, {'total_files': 0, 'total_folders': 0})
-        finally:
-            self.finished.emit()
-
-class RemoteSearchWorker(QObject):
-    finished = pyqtSignal()
-    results_ready = pyqtSignal(list)
-    
-    def __init__(self, search_text, model):
-        super().__init__()
-        self.search_text = search_text.lower()
-        self.model = model
-        self.results = []
-
-    def run(self):
-        def search_recursive(parent):
-            for row in range(parent.rowCount()):
-                item = parent.child(row)
-                if self.search_text in item.text().lower():
-                    self.results.append(item.text())
-                if item.hasChildren():
-                    search_recursive(item)
-
-        search_recursive(self.model.invisibleRootItem())
-        self.results_ready.emit(self.results)
-        self.finished.emit()
-        
-class HistoryWorker(QObject):
-    batch_ready = pyqtSignal(object)  # Single operation ready
-    error_occurred = pyqtSignal(str)
-    finished = pyqtSignal()
-    
-    def __init__(self, history_manager, operation_type):
-        super().__init__()
-        self.history_manager = history_manager
-        self.operation_type = operation_type
-        
-    def run(self):
-        try:
-            with sqlite3.connect(self.history_manager.db_path) as conn:
-                cursor = conn.cursor()
-                
-                # Get top 20 operations
-                cursor.execute("""
-                    SELECT operation_id, timestamp, source, status, operation_type, user_email, error_message
-                    FROM operations 
-                    WHERE operation_type = ?
-                    ORDER BY timestamp DESC
-                    LIMIT 20
-                """, (self.operation_type,))
-                
-                # Process each operation individually
-                for row in cursor.fetchall():
-                    op_id = row[0]
-                    operation = Operation(
-                        operation_id=op_id,
-                        timestamp=datetime.fromisoformat(row[1]),
-                        source=InitiationSource(row[2]),
-                        status=OperationStatus(row[3]),
-                        operation_type=row[4],
-                        user_email=row[5],
-                        error_message=row[6],
-                        files=[]
-                    )
-                    
-                    # Get files for this operation
-                    cursor.execute("""
-                        SELECT filepath, timestamp, status, error_message
-                        FROM file_records
-                        WHERE operation_id = ?
-                        ORDER BY timestamp DESC
-                    """, (op_id,))
-                    
-                    for file_row in cursor.fetchall():
-                        operation.files.append(FileRecord(
-                            filepath=file_row[0],
-                            timestamp=datetime.fromisoformat(file_row[1]),
-                            status=OperationStatus(file_row[2]),
-                            error_message=file_row[3],
-                            operation_id=op_id
-                        ))
-                    
-                    # Emit each operation as it's ready
-                    self.batch_ready.emit(operation)
-                    
-        except Exception as e:
-            self.error_occurred.emit(str(e))
-        finally:
-            self.finished.emit()
-# -----------
-
-
 class PathCache:
-    """Thread-safe LRU cache for frequently accessed paths"""
+    """Thread-safe LRU cache for filesystem path metadata.
+
+    Key Functions:
+    - Caches frequently accessed filesystem path metadata using LRU eviction
+    - Provides thread-safe get/put operations for concurrent access
+
+    Implementation Details:
+    - Built on OrderedDict with synchronized access via threading.Lock
+    - Fixed maximum size with LRU eviction of oldest entries
+    - Thread-safe operations for all cache modifications
+
+    Application Integration:
+    - Used by filesystem indexing components to optimize repeated path lookups
+    - Reduces filesystem read operations by caching path metadata
+    """
+
     def __init__(self, max_size: int = 10000):
         self.cache: OrderedDict[str, dict] = OrderedDict()
         self.max_size = max_size
@@ -315,6 +368,29 @@ class PathCache:
             self.cache[path] = data
 
 class FilesystemIndexer(Process):
+    """Background process for indexing local filesystem content.
+
+    Key Functions:
+    - Scans all local drives to build searchable index
+    - Synchronizes filesystem state with SQLite database 
+    - Reports indexing progress through queue
+    - Handles graceful shutdown on application exit
+
+    Implementation Details:
+    - Runs as separate process via multiprocessing
+    - Uses SQLite database for persistent storage
+    - Batch processing with configurable transaction sizes
+    - Win32API for drive enumeration
+    - Queue-based progress reporting
+    - Event-based shutdown signaling
+
+    Application Integration:
+    - Launched by FilesystemIndex class
+    - Provides data for file search functionality
+    - Coordinates with main application via queues/events
+    - Database used by search components
+    """
+
     def __init__(self, db_path: str, status_queue: Queue, shutdown_event: Event):
         super().__init__()
         self.db_path = db_path
@@ -323,7 +399,6 @@ class FilesystemIndexer(Process):
         self.batch_size = 10000
         
     def run(self):
-        """Run the indexer process with logging focus"""
         if __name__ == "__main__":
             multiprocessing.freeze_support()
             
@@ -355,7 +430,6 @@ class FilesystemIndexer(Process):
             conn.execute("CREATE INDEX IF NOT EXISTS idx_path ON filesystem_index(path)")
 
     def _sync_filesystem(self):
-        """Synchronize filesystem state with database using batch processing."""
         try:
             # Scan filesystem
             current_paths = set()
@@ -440,7 +514,6 @@ class FilesystemIndexer(Process):
             self.status_queue.put(('error', str(e)))
 
     def _get_local_drives(self) -> List[str]:
-        """Get list of local drive letters."""
         drives = []
         bitmask = win32api.GetLogicalDrives()
         for letter in range(65, 91):
@@ -470,6 +543,25 @@ class FilesystemIndexer(Process):
             logging.error(f"Error adding {path} to index: {e}")
 
 class FilesystemIndex:
+    """High-level interface for filesystem indexing and searching.
+
+    Key Functions:
+    - Manages background indexing process
+    - Provides search capabilities against indexed paths
+    - Handles indexer lifecycle and status monitoring
+
+    Implementation Details:
+    - Controls FilesystemIndexer process
+    - SQLite database queries for searches
+    - Status monitoring via queue
+    - Process management with graceful shutdown
+
+    Application Integration:
+    - Used by FileExplorerPanel for search functionality
+    - Coordinates with UI for progress updates
+    - Manages database used throughout application
+    """
+
     def __init__(self, db_path: str):
         self.db_path = db_path
         self.status_queue = Queue()
@@ -477,7 +569,6 @@ class FilesystemIndex:
         self.indexer = None
 
     def _start_indexer(self):
-        """Start the indexer process if not already running."""
         if self.indexer is None:
             self.indexer = FilesystemIndexer(self.db_path, self.status_queue, self.shutdown_event)
             self.indexer.start()
@@ -486,7 +577,6 @@ class FilesystemIndex:
             logging.warning("Indexer already running")
 
     def start_indexing(self):
-        """Start the filesystem indexing process."""
         if self.indexer is None:
             logging.info("Starting filesystem indexer...")
             self.indexer = FilesystemIndexer(
@@ -546,7 +636,6 @@ class FilesystemIndex:
             return [], False, {'total_files': 0, 'total_folders': 0, 'matches_found': 0}
 
     def get_indexing_status(self) -> tuple:
-        """Get current indexing status."""
         try:
             return self.status_queue.get_nowait()
         except Empty:
@@ -556,7 +645,7 @@ class FilesystemIndex:
             return None, None
 
     def shutdown(self):
-        """Clean shutdown of indexer process."""
+        """Clean shutdown of indexer process with timeout."""
         if self.indexer and self.indexer.is_alive():
             logging.info("Shutting down filesystem indexer...")
             self.shutdown_event.set()
@@ -566,6 +655,25 @@ class FilesystemIndex:
                 logging.warning("Had to force terminate indexer process")
 
 class FileSearchWorker(Process):
+    """Filesystem traversal worker for path searching.
+
+    Key Functions:
+    - Recursively searches directories for matching paths
+    - Reports search progress and results
+    - Handles permission errors and access issues
+
+    Implementation Details:
+    - Separate process for non-blocking operation
+    - Queue-based progress/results reporting
+    - Path traversal using os.walk
+    - Permission and access error handling
+
+    Application Integration:
+    - Used for deep filesystem searches
+    - Reports to FileExplorerPanel via queue
+    - Complements indexed search capabilities
+    """
+
     def __init__(self, root_path: str, search_term: str, progress_queue: Queue):
         super().__init__()
         self.root_path = root_path
@@ -620,111 +728,172 @@ class FileSearchWorker(Process):
         except Exception as e:
             logging.error(f"Error accessing directory {directory}: {e}")
 
-class AnimatedButton(QPushButton):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._animation_progress = 0.0
-        self._base_color = QColor(66, 133, 244)
-        self._current_color = self._base_color
-        self._start_color = self._base_color
-        self._target_color = self._base_color
-        self._is_start_button = False
-        self._running = False
-        self._border_radius = 5
+class LocalSearchWorker(QObject):
+    """Qt worker for searching local filesystem index.
 
-        self.color_animation = QPropertyAnimation(self, b"animation_progress")
-        self.color_animation.setDuration(300)
-        self.color_animation.setEasingCurve(QEasingCurve.InOutQuad)
+    Key Functions:
+    - Queries indexed paths database
+    - Emits results through Qt signals
+    - Provides search statistics
+
+    Implementation Details:
+    - Qt signal/slot mechanism
+    - SQLite database queries
+    - Non-blocking operation via QThread
+
+    Application Integration:
+    - Used by FileExplorerPanel UI
+    - Works with FilesystemIndex class
+    - Updates search results display
+    """
+
+    finished = pyqtSignal()
+    results_ready = pyqtSignal(list, bool, dict)  # Added stats parameter
+    
+    def __init__(self, search_text, filesystem_index):
+        super().__init__()
+        self.search_text = search_text
+        self.filesystem_index = filesystem_index
+    
+    def run(self):
+        try:
+            results, truncated, stats = self.filesystem_index.search(self.search_text)
+            self.results_ready.emit(results, truncated, stats)
+        except Exception as e:
+            logging.error(f"Search error: {e}")
+            self.results_ready.emit([], False, {'total_files': 0, 'total_folders': 0})
+        finally:
+            self.finished.emit()
+
+class RemoteSearchWorker(QObject):
+    """Qt worker for searching remote file tree.
+
+    Key Functions:
+    - Traverses remote file tree model
+    - Matches paths against search criteria
+    - Emits results via Qt signals
+
+    Implementation Details:
+    - Qt model/view framework integration
+    - Tree traversal algorithms
+    - Non-blocking via QThread
+
+    Application Integration:
+    - Searches remote backup content
+    - Updates FileExplorerPanel UI
+    - Works with remote file tree model
+    """
+
+    finished = pyqtSignal()
+    results_ready = pyqtSignal(list)
+    
+    def __init__(self, search_text, model):
+        super().__init__()
+        self.search_text = search_text.lower()
+        self.model = model
+        self.results = []
+
+    def run(self):
+        def search_recursive(parent):
+            for row in range(parent.rowCount()):
+                item = parent.child(row)
+                if self.search_text in item.text().lower():
+                    self.results.append(item.text())
+                if item.hasChildren():
+                    search_recursive(item)
+
+        search_recursive(self.model.invisibleRootItem())
+        self.results_ready.emit(self.results)
+        self.finished.emit()
+
+class SearchResultDelegate(QStyledItemDelegate):
+    """Custom renderer for search result items.
+
+    Key Functions:
+    - Applies themed styling to search results
+    - Indicates result status through colors
+    - Handles mouse interaction
+
+    Implementation Details:
+    - Qt delegate painting system
+    - Theme-aware color schemes
+    - Custom drawing routines
+
+    Application Integration:
+    - Used by search results tree views
+    - Works with theme management system
+    - Provides visual feedback in UI
+    """
+
+    def __init__(self, theme_manager):
+        super().__init__()
+        self.theme_manager = theme_manager
+
+    def paint(self, painter, option, index):
+        theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
         
-        self.setStyleSheet("")
-        self.setAttribute(Qt.WA_Hover)
-
-    def setAsStartButton(self):
-        self._is_start_button = True
-
-    def setRunning(self, running):
-        previous_state = self._running
-        self._running = running
+        painter.save()
         
-        # Only reset animation if the state actually changed
-        if previous_state != running:
-            # Reset to base state first
-            self._current_color = self._base_color
-            self._start_color = self._base_color
-            self._target_color = self._base_color
-            self._animation_progress = 0.0
-            
-            # If mouse is still over button, trigger a new hover animation
-            if self.underMouse():
-                self._start_color = self._base_color
-                self._target_color = QColor(220, 53, 69) if running else QColor(40, 167, 69)
-                self.color_animation.stop()
-                self.color_animation.setStartValue(0.0)
-                self.color_animation.setEndValue(1.0)
-                self.color_animation.start()
-                
-        self.update()
-
-    @pyqtProperty(float)
-    def animation_progress(self):
-        return self._animation_progress
-
-    @animation_progress.setter
-    def animation_progress(self, value):
-        self._animation_progress = value
-        self._update_current_color()
-        self.update()
-
-    def _update_current_color(self):
-        # Interpolate between start and target colors
-        self._current_color = QColor(
-            int(self._start_color.red() + (self._target_color.red() - self._start_color.red()) * self._animation_progress),
-            int(self._start_color.green() + (self._target_color.green() - self._start_color.green()) * self._animation_progress),
-            int(self._start_color.blue() + (self._target_color.blue() - self._start_color.blue()) * self._animation_progress)
-        )
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        
-        # Convert QRect to QRectF
-        rect = QRectF(self.rect())
-        
-        # Create rounded rectangle path
-        path = QPainterPath()
-        path.addRoundedRect(rect, self._border_radius, self._border_radius)
-        
-        # Set the clipping path to ensure everything is rounded
-        painter.setClipPath(path)
-        
-        # Fill the button with the current color
-        painter.fillPath(path, self._current_color)
-        
-        # Draw the text
-        painter.setPen(QColor(255, 255, 255))
-        painter.drawText(rect.toRect(), Qt.AlignCenter, self.text())
-
-    def enterEvent(self, event):
-        self._start_color = self._current_color
-        if self._is_start_button:
-            self._target_color = QColor(220, 53, 69) if self._running else QColor(40, 167, 69)
+        # Draw background
+        if option.state & QStyle.State_Selected:
+            painter.fillRect(option.rect, QColor(theme["list_item_selected"]))
+        elif option.state & QStyle.State_MouseOver:
+            painter.fillRect(option.rect, QColor(theme["list_item_hover"]))
         else:
-            self._target_color = self._base_color.lighter(120)
+            painter.fillRect(option.rect, QColor(theme["panel_background"]))
 
-        self.color_animation.setStartValue(0.0)
-        self.color_animation.setEndValue(1.0)
-        self.color_animation.start()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self._start_color = self._current_color
-        self._target_color = self._base_color
-        self.color_animation.setStartValue(0.0)
-        self.color_animation.setEndValue(1.0)
-        self.color_animation.start()
-        super().leaveEvent(event)
+        # Set text color based on search result type
+        result_type = index.data(Qt.UserRole)
+        if result_type == "found":
+            text_color = QColor(theme["search_results_found"])
+        elif result_type == "not_found":
+            text_color = QColor(theme["search_results_not_found"])
+        else:
+            text_color = QColor(theme["text_primary"])
         
+        # Draw text
+        painter.setPen(text_color)
+        text = index.data(Qt.DisplayRole)
+        font = option.font
+        if not index.parent().isValid():  # Make root items bold
+            font.setBold(True)
+            painter.setFont(font)
+        
+        # Add padding to text rectangle
+        text_rect = option.rect
+        text_rect.setLeft(text_rect.left() + 5)
+        painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, text)
+        
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        size = super().sizeHint(option, index)
+        size.setHeight(size.height() + 5)
+        return size
+# -----------
+
+# Dialogs
+# -----------
 class LoginDialog(QDialog):
+    """Authentication dialog for application login.
+
+    Key Functions:
+    - Handles user authentication
+    - Manages login credentials and tokens
+    - Provides visual feedback during login
+
+    Implementation Details:
+    - Qt dialog with themed UI components
+    - Network authentication via network_utils
+    - Secure token/credential storage
+    - App icon extraction from executable
+
+    Application Integration:
+    - Entry point for user authentication
+    - Provides auth tokens to main application
+    - Updates StormcloudApp user context
+    """
+
     def __init__(self, theme_manager, settings_path, parent=None):
         super().__init__(parent)
         self.theme_manager = theme_manager
@@ -998,7 +1167,1415 @@ class LoginDialog(QDialog):
             logging.error(f"Exception traceback: {traceback.format_exc()}")
             self.show_error("Connection error. Please try again.")
 
+class MetadataDialog(QDialog):
+    """Dialog for displaying file metadata details.
+
+    Key Functions:
+    - Displays formatted JSON metadata
+    - Provides read-only view of file properties
+
+    Implementation Details:
+    - Qt dialog with text display
+    - JSON formatting/pretty printing
+
+    Application Integration:
+    - Used by FileExplorerPanel for file inspection
+    - Accessed via context menus
+    """
+
+    def __init__(self, metadata, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("File Metadata")
+        self.setMinimumSize(500, 400)
+        self.setup_ui(metadata)
+
+    def setup_ui(self, metadata):
+        layout = QVBoxLayout(self)
+
+        # Metadata display
+        self.text_edit = QTextEdit()
+        self.text_edit.setReadOnly(True)
+        formatted_json = json.dumps(metadata, indent=2)
+        self.text_edit.setText(formatted_json)
+        layout.addWidget(self.text_edit)
+
+        # Close button
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(self.accept)
+
+class StormcloudMessageBox(QMessageBox):
+    """Themed message box for application notifications.
+
+    Key Functions:
+    - Shows themed information/error messages
+    - Provides static convenience methods
+
+    Implementation Details:
+    - Custom Qt message box with theme support
+    - Static methods for common message types
+
+    Application Integration:
+    - Used throughout app for user notifications
+    - Maintains consistent visual style
+    - Integrates with theme system
+    """
+
+    def __init__(self, parent=None, theme_manager=None):
+        super().__init__(parent)
+        self.theme_manager = theme_manager
+        self.setWindowTitle("Stormcloud")
+        self.apply_theme()
+
+    def apply_theme(self):
+        if self.theme_manager:
+            theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
+            self.setStyleSheet(theme["stylesheet"])
+
+    @staticmethod
+    def information(parent, title, text, theme_manager=None):
+        msg_box = StormcloudMessageBox(parent, theme_manager)
+        msg_box.setIcon(QMessageBox.Information)
+        msg_box.setText(text)
+        msg_box.setWindowTitle(title)
+        msg_box.setStandardButtons(QMessageBox.Ok)
+        return msg_box.exec_()
+
+    @staticmethod
+    def critical(parent, title, text, theme_manager=None):
+        msg_box = StormcloudMessageBox(parent, theme_manager)
+        msg_box.setIcon(QMessageBox.Critical)
+        msg_box.setText(text)
+        msg_box.setWindowTitle(title)
+        msg_box.setStandardButtons(QMessageBox.Ok)
+        return msg_box.exec_()
+# -----------
+
+# Custom style classes
+# -----------
+class AnimatedButton(QPushButton):
+    """Animated button with color transitions and state management.
+
+    Key Functions:
+    - Handles button state animations
+    - Manages running/stopped states
+    - Provides smooth color transitions
+
+    Implementation Details:
+    - Qt property animations
+    - Custom painting for rounded corners
+    - Color interpolation for transitions
+    - State-based hover/press effects
+
+    Application Integration:
+    - Used for main control buttons
+    - Provides visual feedback for operations
+    - Integrates with theme system
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._animation_progress = 0.0
+        self._base_color = QColor(66, 133, 244)
+        self._current_color = self._base_color
+        self._start_color = self._base_color
+        self._target_color = self._base_color
+        self._is_start_button = False
+        self._running = False
+        self._border_radius = 5
+
+        self.color_animation = QPropertyAnimation(self, b"animation_progress")
+        self.color_animation.setDuration(300)
+        self.color_animation.setEasingCurve(QEasingCurve.InOutQuad)
+        
+        self.setStyleSheet("")
+        self.setAttribute(Qt.WA_Hover)
+
+    def setAsStartButton(self):
+        self._is_start_button = True
+
+    def setRunning(self, running):
+        previous_state = self._running
+        self._running = running
+        
+        # Only reset animation if the state actually changed
+        if previous_state != running:
+            # Reset to base state first
+            self._current_color = self._base_color
+            self._start_color = self._base_color
+            self._target_color = self._base_color
+            self._animation_progress = 0.0
+            
+            # If mouse is still over button, trigger a new hover animation
+            if self.underMouse():
+                self._start_color = self._base_color
+                self._target_color = QColor(220, 53, 69) if running else QColor(40, 167, 69)
+                self.color_animation.stop()
+                self.color_animation.setStartValue(0.0)
+                self.color_animation.setEndValue(1.0)
+                self.color_animation.start()
+                
+        self.update()
+
+    @pyqtProperty(float)
+    def animation_progress(self):
+        return self._animation_progress
+
+    @animation_progress.setter
+    def animation_progress(self, value):
+        self._animation_progress = value
+        self._update_current_color()
+        self.update()
+
+    def _update_current_color(self):
+        # Interpolate between start and target colors
+        self._current_color = QColor(
+            int(self._start_color.red() + (self._target_color.red() - self._start_color.red()) * self._animation_progress),
+            int(self._start_color.green() + (self._target_color.green() - self._start_color.green()) * self._animation_progress),
+            int(self._start_color.blue() + (self._target_color.blue() - self._start_color.blue()) * self._animation_progress)
+        )
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # Convert QRect to QRectF
+        rect = QRectF(self.rect())
+        
+        # Create rounded rectangle path
+        path = QPainterPath()
+        path.addRoundedRect(rect, self._border_radius, self._border_radius)
+        
+        # Set the clipping path to ensure everything is rounded
+        painter.setClipPath(path)
+        
+        # Fill the button with the current color
+        painter.fillPath(path, self._current_color)
+        
+        # Draw the text
+        painter.setPen(QColor(255, 255, 255))
+        painter.drawText(rect.toRect(), Qt.AlignCenter, self.text())
+
+    def enterEvent(self, event):
+        self._start_color = self._current_color
+        if self._is_start_button:
+            self._target_color = QColor(220, 53, 69) if self._running else QColor(40, 167, 69)
+        else:
+            self._target_color = self._base_color.lighter(120)
+
+        self.color_animation.setStartValue(0.0)
+        self.color_animation.setEndValue(1.0)
+        self.color_animation.start()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._start_color = self._current_color
+        self._target_color = self._base_color
+        self.color_animation.setStartValue(0.0)
+        self.color_animation.setEndValue(1.0)
+        self.color_animation.start()
+        super().leaveEvent(event)
+
+class CustomTreeCarrot(QProxyStyle):
+    """Themed directional arrow button.
+
+    Key Functions:
+    - Renders directional arrows (left/right)
+    - Handles hover/press states
+
+    Implementation Details:
+    - Custom QPainter drawing
+    - Circle background with arrow
+    - Theme-based colors
+
+    Application Integration:
+    - Used in navigation controls
+    - Calendar navigation
+    """
+
+    def __init__(self, theme_manager):
+        super().__init__()
+        self.theme_manager = theme_manager
+
+    def drawPrimitive(self, element, option, painter, widget=None):
+        if element == QStyle.PE_IndicatorBranch:
+            if option.state & QStyle.State_Children:
+                rect = option.rect
+                center = rect.center()
+                theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
+                
+                painter.save()
+                # Don't use antialiasing - we want crisp pixels
+                painter.setRenderHint(QPainter.Antialiasing, False)
+                
+                # Set up pen for single pixel drawing
+                pen = QPen(QColor(theme["accent_color"]))
+                pen.setWidth(1)
+                painter.setPen(pen)
+                
+                if option.state & QStyle.State_Open:
+                    # Down carrot (rotated 90 degrees from right carrot)
+                    base_x = center.x() - 3
+                    base_y = center.y() - 2
+                    
+                    # Left diagonal line
+                    for i in range(4):
+                        painter.drawPoint(base_x + i, base_y + i)
+                    # Right diagonal line
+                    for i in range(4):
+                        painter.drawPoint(base_x + 6 - i, base_y + i)
+                else:
+                    # Right carrot (keep the working version)
+                    base_x = center.x() - 2
+                    base_y = center.y() - 3
+                    
+                    # Draw top diagonal line down-right
+                    for i in range(4):
+                        painter.drawPoint(base_x + i, base_y + i)
+                    # Draw bottom diagonal line up-right
+                    for i in range(4):
+                        painter.drawPoint(base_x + i, base_y + 6 - i)
+                
+                painter.restore()
+            else:
+                super().drawPrimitive(element, option, painter, widget)
+        else:
+            super().drawPrimitive(element, option, painter, widget)
+
+class CustomArrowButton(QPushButton):
+    """Themed directional arrow button.
+
+    Key Functions:
+    - Renders directional arrows (left/right)
+    - Handles hover/press states
+
+    Implementation Details:
+    - Custom QPainter drawing
+    - Circle background with arrow
+    - Theme-based colors
+
+    Application Integration:
+    - Used in navigation controls
+    - Calendar navigation
+    """
+
+    def __init__(self, direction, theme_manager, parent=None):
+        super().__init__(parent)
+        self.direction = direction
+        self.theme_manager = theme_manager
+        self.setFixedSize(24, 24)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setObjectName("CustomArrowButton")
+
+        # Connect to theme changes
+        self.theme_manager.theme_changed.connect(self.on_theme_changed)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
+        
+        # Draw circle
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(theme["button_background"]))
+        painter.drawEllipse(2, 2, 20, 20)
+
+        # Draw arrow
+        painter.setPen(QColor(theme["button_text"]))
+        painter.setBrush(QColor(theme["button_text"]))
+        if self.direction == 'left':
+            painter.drawPolygon(QPoint(14, 6), QPoint(14, 18), QPoint(8, 12))
+        else:
+            painter.drawPolygon(QPoint(10, 6), QPoint(10, 18), QPoint(16, 12))
+
+    def on_theme_changed(self):
+        self.update()  # Force repaint when theme changes
+
+class ThemeManager(QObject):
+    """Central theme management system.
+
+    Key Functions:
+    - Manages application-wide themes
+    - Provides theme switching
+    - Defines color schemes and styles
+
+    Implementation Details:
+    - Qt signal system for theme changes
+    - Comprehensive theme definitions
+    - Complex stylesheet management
+    - Color scheme coordination
+
+    Application Integration:
+    - Used by all UI components
+    - Controls app-wide appearance
+    - Provides consistent styling
+    """
+
+    theme_changed = pyqtSignal(str)
+
+    def __init__(self):
+        super().__init__()
+        self.themes = {
+            "Dark Age Classic Dark": self.dark_theme(),
+            "Light": self.light_theme()
+        }
+        self.current_theme = "Dark Age Classic Dark"
+
+    def get_theme(self, theme_name):
+        return self.themes.get(theme_name, self.themes["Dark Age Classic Dark"])
+
+    def set_theme(self, theme_name):
+        if theme_name in self.themes:
+            self.current_theme = theme_name
+            self.theme_changed.emit(theme_name)
+
+    def dark_theme(self):
+        return {
+            "app_background": "#202124",
+            "panel_background": "#333333",
+            "text_primary": "#e8eaed",
+            "text_secondary": "#9aa0a6",
+            "accent_color": "#4285F4",
+            "accent_color_hover": "#5294FF",
+            "accent_color_pressed": "#3275E4",
+            "panel_border": "#666",
+            "input_background": "#333",
+            "input_border": "#666",
+            "input_border_focus": "#8ab4f8",
+            "button_text": "white",
+            "list_item_hover": "#3c4043",
+            "list_item_selected": "#444",
+            "list_item_selected_text": "#8ab4f8",
+            "scroll_background": "#2a2a2a",
+            "scroll_handle": "#5a5a5a",
+            "scroll_handle_hover": "#6a6a6a",
+            "header_background": "#171717",
+            "divider_color": "#666",
+            
+            
+            "status_running": "#28A745",
+            "status_not_running": "#DC3545",
+            "status_unknown": "#FFC107",  # Amber color for unknown state
+            
+            "calendar_background": "#333",
+            "calendar_text": "#e8eaed",
+            "calendar_highlight": "#4285F4",
+            "calendar_highlight_text": "#ffffff",
+            "calendar_grid": "#444",
+            "calendar_today": "#8ab4f8",
+            "calendar_backup_day": "#66, 133, 244, 100",
+            "button_background": "#4285F4",
+            "button_hover": "#5294FF",
+            "button_pressed": "#3275E4",
+            "carrot_background": "#4285F4",
+            "carrot_foreground": "#FFFFFF",
+            "search_results_found": "#34A853",
+            "search_results_not_found": "#EA4335",
+            
+            
+            
+            "payment_success": "#28A745",
+            "payment_success_hover": "#218838",
+            "payment_failed": "#DC3545",
+            "payment_failed_hover": "#BD2130",
+            "payment_pending": "#FFC107",
+            "payment_pending_hover": "#E0A800",
+            "payment_neutral": "#6C757D",
+            "payment_neutral_hover": "#5A6268",
+            "payment_primary": "#007BFF",
+            "payment_primary_hover": "#0056b3",
+            "payment_info": "#17A2B8",
+            "payment_info_hover": "#138496",
+            "payment_high_priority": "#DC3545",
+            
+            "stylesheet": """
+                QMainWindow, QWidget#centralWidget, QWidget#gridWidget {
+                    background-color: #202124;
+                }
+                QWidget {
+                    background-color: transparent;
+                    color: #e8eaed;
+                    font-family: 'Arial', sans-serif;
+                }
+                QWidget[class="folder-item"] QLabel {
+                    min-width: 150px;
+                    padding: 2px;
+                    color: inherit;
+                }
+                #PanelWidget {
+                    background-color: #333333;
+                    border: 1px solid #666;
+                    border-radius: 5px;
+                }
+                #HeaderLabel {
+                    background-color: #202124;
+                    color: #8ab4f8;
+                    font-size: 16px;
+                    font-weight: bold;
+                    border: 1px solid #666;
+                    border-top-left-radius: 5px;
+                    border-top-right-radius: 5px;
+                    padding: 5px;
+                }
+                #ContentWidget {
+                    background-color: #333333;
+                    border: 1px solid #666; 
+                    border-radius: 5px;
+                    border-top: 0px;
+                    border-top-left-radius: 0px;
+                    border-top-right-radius: 0px;
+                }
+                QMenuBar, QStatusBar {
+                    background-color: #202124;
+                    color: #e8eaed;
+                }
+                QMenuBar::item:selected {
+                    background-color: #3c4043;
+                }
+                QMainWindow::title {
+                    background-color: #202124;
+                    color: #4285F4;
+                    font-size: 16px;
+                    font-weight: bold;
+                    padding-left: 10px;
+                }
+                QPushButton {
+                    background-color: #4285F4;
+                    color: white;
+                    border: none;
+                    padding: 5px 10px;
+                    border-radius: 5px;
+                    font-size: 14px;
+                }
+                QPushButton:hover {
+                    background-color: #5294FF;
+                }
+                QPushButton:pressed {
+                    background-color: #3275E4;
+                }
+                QPushButton#start_button:hover {
+                    background-color: #28A745;  /* Green when not running */
+                }
+                QPushButton#start_button[status="running"]:hover {
+                    background-color: #DC3545;  /* Red when running */
+                }
+                QLabel {
+                    font-size: 14px;
+                }
+                QListWidget, QTreeWidget, QTreeView {
+                    background-color: #333;
+                    border: none;
+                    border-radius: 5px;
+                    outline: 0;
+                    padding: 1px;
+                }
+                QListWidget::item, QTreeWidget::item, QTreeView::item {
+                    padding: 5px;
+                }
+                QListWidget::item:hover, QTreeWidget::item:hover, QTreeView::item:hover {
+                    background-color: #3c4043;
+                }
+                QListWidget::item:selected, QTreeWidget::item:selected, QTreeView::item:selected {
+                    background-color: #444;
+                    color: #8ab4f8;
+                }
+                #HeaderLabel[panelType="Configuration Dashboard"] {
+                    color: #2ECC71;
+                }
+                #HeaderLabel[panelType="Backup Schedule"] {
+                    color: #3498DB;
+                }
+                #HeaderLabel[panelType="File Explorer"] {
+                    color: #bf2ee8;
+                }
+                #HeaderLabel[panelType="Web & Folders"] {
+                    color: #F1C40F;
+                }
+                QLabel#SubpanelHeader {
+                    font-weight: bold;
+                }
+                QLabel#HistoryTypeLabel {
+                    color: #e8eaed;
+                    font-size: 14px;
+                }
+                #WebLink {
+                    background-color: transparent;
+                    color: #8ab4f8;
+                    text-align: left;
+                }
+                #WebLink:hover {
+                    text-decoration: underline;
+                }
+                QComboBox, QSpinBox, QTimeEdit {
+                    background-color: #333;
+                    color: #e8eaed;
+                    border: 1px solid #666;
+                    border-radius: 5px;
+                    padding: 5px;
+                    min-width: 6em;
+                }
+                QComboBox:hover, QSpinBox:hover, QTimeEdit:hover {
+                    border-color: #8ab4f8;
+                }
+                QComboBox::drop-down {
+                    subcontrol-origin: padding;
+                    subcontrol-position: center right;
+                    width: 20px;
+                    border-left: none;
+                    background: transparent;
+                }
+                QComboBox QAbstractItemView {
+                    border: 1px solid #666;
+                    background-color: #333;
+                    selection-background-color: #4285F4;
+                }
+                QFrame[frameShape="4"], QFrame[frameShape="5"] {
+                    color: #666;
+                    width: 1px;
+                    height: 1px;
+                }
+                QWidget:disabled {
+                    color: #888;
+                }
+                QComboBox:disabled, QTimeEdit:disabled, QSpinBox:disabled {
+                    background-color: #555;
+                    color: #888;
+                }
+                QPushButton:disabled {
+                    background-color: #555;
+                    color: #888;
+                }
+                QCheckBox {
+                    spacing: 5px;
+                }
+                #FootnoteLabel {
+                    color: #999;
+                    font-size: 12px;
+                    font-style: italic;
+                    padding-top: 5px;
+                    padding-bottom: 5px;
+                }
+                QScrollBar:vertical, QScrollBar:horizontal {
+                    background: #2a2a2a;
+                    width: 10px;
+                    height: 10px;
+                    margin: 0px;
+                }
+                QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
+                    background: #5a5a5a;
+                    min-height: 30px;
+                    min-width: 30px;
+                    border-radius: 5px;
+                }
+                QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
+                    background: #6a6a6a;
+                }
+                QScrollBar::add-line, QScrollBar::sub-line {
+                    height: 0px;
+                    width: 0px;
+                }
+                QScrollBar::add-page, QScrollBar::sub-page {
+                    background: none;
+                }
+                QTimeEdit::up-button, QTimeEdit::down-button,
+                QSpinBox::up-button, QSpinBox::down-button {
+                    background-color: transparent;
+                    border: none;
+                    width: 16px;
+                    height: 12px;
+                }
+                QSpinBox::up-arrow, QTimeEdit::up-arrow {
+                    image: url(up-arrow-dark.png);
+                    width: 8px;
+                    height: 8px;
+                }
+                QSpinBox::down-arrow, QTimeEdit::down-arrow {
+                    image: url(down-arrow-dark.png);
+                    width: 8px;
+                    height: 8px;
+                }
+                QWidget#BackupSchedulePanel[enabled="false"] {
+                    background-color: #555;
+                }
+                QWidget#BackupSchedulePanel[enabled="true"] {
+                    background-color: #333;
+                }
+                QCalendarWidget {
+                    background-color: #333;
+                    color: #e8eaed;
+                }
+                QCalendarWidget QTableView {
+                    alternate-background-color: #3a3a3a;
+                    background-color: #333;
+                }
+                QCalendarWidget QWidget {
+                    alternate-background-color: #3a3a3a;
+                }
+                QCalendarWidget QMenu {
+                    background-color: #333;
+                    color: #e8eaed;
+                }
+                QCalendarWidget QToolButton {
+                    background-color: transparent;
+                    color: #e8eaed;
+                }
+                QCalendarWidget QToolButton:hover {
+                    background-color: #4285F4;
+                    border-radius: 2px;
+                }
+                QCalendarWidget #qt_calendar_navigationbar {
+                    background-color: #2a2a2a;
+                }
+                QWidget#FileExplorerPanel {
+                    background-color: #333;
+                    color: #e8eaed;
+                    font-family: 'Segoe UI', Arial, sans-serif;
+                }
+                QLineEdit#SearchBox {
+                    background-color: #303134;
+                    border: 1px solid #5f6368;
+                    border-radius: 4px;
+                    padding: 8px;
+                    font-size: 12px;
+                    color: #e8eaed;
+                }
+                QLineEdit#SearchBox:focus {
+                    border-color: #8ab4f8;
+                }
+                QTableCornerButton::section {
+                    background-color: #333333;  /* Match table background */
+                    border: none;
+                }
+
+                QTableWidget {
+                    background-color: #333333;
+                    alternate-background-color: #3c4043;
+                    border: none;
+                    gridline-color: #666;
+                }
+                
+                QHeaderView::section {
+                    background-color: #303134;
+                    color: #e8eaed;
+                    padding: 8px;
+                    border: none;
+                    font-weight: bold;
+                }
+                
+                QHeaderView::section:first {
+                    background-color: #303134;
+                }
+                
+                QSplitter::handle {
+                    background-color: #666;
+                }
+                QGroupBox {
+                    font-weight: bold;
+                    border: 1px solid #666;
+                    border-radius: 5px;
+                    margin-top: 7px;
+                }
+                QGroupBox::title {
+                    subcontrol-origin: margin;
+                    left: 10px;
+                    padding: 0 3px 0 3px;
+                }
+                QTreeWidget#ResultsPanel QTreeWidgetItem {
+                    color: #e8eaed;
+                }
+                QTreeWidget#ResultsPanel QTreeWidgetItem[results="found"] {
+                    color: #34A853;
+                }
+                QTreeWidget#ResultsPanel QTreeWidgetItem[results="not_found"] {
+                    color: #EA4335;
+                }
+                
+                BackupScheduleCalendar {
+                    background-color: #202124;
+                }
+                BackupScheduleCalendar > QWidget#BackupScheduleSubpanel {
+                    background-color: #202124;
+                    border: 1px solid #666;
+                    border-radius: 5px;
+                }
+                BackupScheduleCalendar QGroupBox {
+                    background-color: #202124;
+                    border: 1px solid #666;
+                    border-radius: 5px;
+                    margin-top: 7px;
+                }
+                BackupScheduleCalendar QGroupBox::title {
+                    subcontrol-origin: margin;
+                    left: 10px;
+                    padding: 0 3px 0 3px;
+                }
+                BackupScheduleCalendar > QWidget#CalendarWidgetSubpanel {
+                    background-color: #202124;
+                    border-radius: 5px;
+                }
+                QTabWidget::pane {
+                    border-top: none;
+                    border-bottom: 2px solid #666;
+                }
+                QTabBar::tab {
+                    background-color: #202124;
+                    color: #e8eaed;
+                    padding: 8px 12px;
+                    margin-right: 4px;
+                    border-top-left-radius: 0;
+                    border-top-right-radius: 0;
+                    border-bottom-left-radius: 4px;
+                    border-bottom-right-radius: 4px;
+                }
+                QTabBar::tab:selected {
+                    background-color: #333333;
+                    border-bottom: 2px solid #4285F4;
+                }
+                QTabBar::tab:hover:!selected {
+                    background-color: #3c4043;
+                }
+                QToolBar {
+                    background-color: #202124;
+                    border-bottom: 1px solid #666;
+                    spacing: 10px;
+                    padding: 5px;
+                }
+                QToolBar QLabel {
+                    color: #e8eaed;
+                }
+                QToolBar QComboBox {
+                    background-color: #333;
+                    color: #e8eaed;
+                    border: 1px solid #666;
+                    border-radius: 3px;
+                    padding: 2px 5px;
+                }
+                
+                
+                /* Payment Processing Specific Styles */
+                .payment-group-box {
+                    background-color: #333333;
+                    border: 1px solid #666;
+                    border-radius: 5px;
+                    margin-top: 7px;
+                    padding-top: 10px;
+                    font-weight: bold;
+                }
+                
+                #payment-stripe-connect {
+                    background-color: #28A745;
+                    color: white;
+                    border: none;
+                    padding: 5px 10px;
+                    border-radius: 5px;
+                    font-size: 14px;
+                }
+                #payment-stripe-connect:hover {
+                    background-color: #34CE57;  /* Brighter green */
+                }
+
+                #payment-refresh-btn {
+                    background-color: #4285F4;  /* Match backup tab blue */
+                    color: white;
+                    border: none;
+                    padding: 5px 10px;
+                    border-radius: 5px;
+                    font-size: 14px;
+                }
+                #payment-refresh-btn:hover {
+                    background-color: #5294FF;  /* Match backup tab hover */
+                }
+
+                #payment-reminder-btn {
+                    background-color: #4285F4;
+                    color: white;
+                    border: none;  /* Explicitly remove border */
+                    padding: 5px 10px;
+                    border-radius: 5px;
+                    font-size: 14px;
+                    outline: none;  /* Remove outline */
+                }
+                #payment-reminder-btn:hover {
+                    background-color: #5294FF;
+                }
+                #payment-reminder-btn:focus {
+                    border: none;  /* Remove focus border */
+                    outline: none;  /* Remove focus outline */
+                }
+
+                #payment-all-reminders-btn {
+                    background-color: #4285F4;  /* Match backup tab blue */
+                    color: white;
+                    border: none;
+                    padding: 5px 10px;
+                    border-radius: 5px;
+                    font-size: 14px;
+                }
+                #payment-all-reminders-btn:hover {
+                    background-color: #5294FF;  /* Match backup tab hover */
+                }
+
+                #payment-export-btn {
+                    background-color: #17A2B8;
+                    color: white;
+                    border: none;
+                    padding: 5px 10px;
+                    border-radius: 5px;
+                    font-size: 14px;
+                }
+                #payment-export-btn:hover {
+                    background-color: #1FC8E3;  /* Brighter cyan */
+                }
+
+                #payment-total-outstanding {
+                    font-weight: bold;
+                    color: #e8eaed;
+                    margin: 5px;
+                }
+
+                #payment-overdue-count {
+                    font-weight: bold;
+                    color: #DC3545;
+                    margin: 5px;
+                }
+
+                #payment-demo-label {
+                    color: #FFC107;
+                    font-style: italic;
+                }
+
+                .payment-table {
+                    background-color: #333333;
+                    alternate-background-color: #3c4043;
+                    border: none;
+                    gridline-color: #666;
+                }
+
+                .payment-table-item {
+                    padding: 5px;
+                }
+            """
+    }
+        
+    def light_theme(self):
+        return {
+            "app_background": "#f8f9fa",
+            "panel_background": "#ffffff",
+            "text_primary": "#202124",
+            "text_secondary": "#5f6368",
+            "accent_color": "#1a73e8",
+            "accent_color_hover": "#1967d2",
+            "accent_color_pressed": "#185abc",
+            "panel_border": "#dadce0",
+            "input_background": "#ffffff",
+            "input_border": "#dadce0",
+            "input_border_focus": "#1a73e8",
+            "button_text": "white",
+            "list_item_hover": "#f1f3f4",
+            "list_item_selected": "#e8f0fe",
+            "list_item_selected_text": "#1a73e8",
+            "scroll_background": "#f1f3f4",
+            "scroll_handle": "#dadce0",
+            "scroll_handle_hover": "#bdc1c6",
+            "header_background": "#f1f3f4",
+            "divider_color": "#dadce0",
+            
+            "status_running": "#34a853",
+            "status_not_running": "#ea4335",
+            "status_unknown": "#FFC107",  # Amber color for unknown state
+            
+            "search_results_found": "#34A853",  # Green
+            "search_results_not_found": "#EA4335",  # Red
+            
+            "calendar_background": "#ffffff",
+            "calendar_text": "#202124",
+            "calendar_highlight": "#1a73e8",
+            "calendar_highlight_text": "#ffffff",
+            "calendar_grid": "#dadce0",
+            "calendar_today": "#1a73e8",
+            "calendar_backup_day": "rgba(26, 115, 232, 0.2)",
+            
+            "button_background": "#1a73e8",
+            "button_hover": "#1967d2",
+            "button_pressed": "#185abc",
+            
+            "file_explorer_background": "#ffffff",
+            "file_explorer_text": "#202124",
+            "file_explorer_search_background": "#f1f3f4",
+            "file_explorer_search_border": "#dadce0",
+            "file_explorer_search_focus_border": "#1a73e8",
+            "file_explorer_item_hover": "#f1f3f4",
+            "file_explorer_item_selected": "#e8f0fe",
+            "file_explorer_item_selected_text": "#1a73e8",
+            "file_explorer_scrollbar_background": "#f8f9fa",
+            "file_explorer_scrollbar_handle": "#dadce0",
+            "file_explorer_scrollbar_handle_hover": "#bdc1c6",
+            "file_explorer_header": "#f1f3f4",
+            "file_explorer_splitter": "#dadce0",
+            
+            "carrot_background": "#1a73e8",
+            "carrot_foreground": "#ffffff",
+            
+            "search_results_found": "#34A853",
+            "search_results_not_found": "#EA4335",
+            
+            "stylesheet": """
+                QMainWindow, QWidget {
+                    background-color: #f8f9fa;
+                    color: #202124;
+                    font-family: 'Arial', sans-serif;
+                }
+                QWidget[class="folder-item"] QLabel {
+                    min-width: 150px;
+                    padding: 2px;
+                    color: inherit;
+                }
+                QMenuBar {
+                    background-color: #ffffff;
+                    color: #202124;
+                }
+                QMenuBar::item:selected {
+                    background-color: #e8f0fe;
+                }
+                QMainWindow::title {
+                    background-color: #ffffff;
+                    color: #1a73e8;
+                    font-size: 16px;
+                    font-weight: bold;
+                    padding-left: 10px;
+                }
+                QPushButton {
+                    background-color: #1a73e8;
+                    color: white;
+                    border: none;
+                    padding: 5px 10px;
+                    border-radius: 5px;
+                    font-size: 14px;
+                }
+                QPushButton:hover {
+                    background-color: #1967d2;
+                }
+                QPushButton:pressed {
+                    background-color: #185abc;
+                }
+                QPushButton#start_button {
+                    font-size: 16px;
+                    font-weight: bold;
+                }
+                QPushButton#start_button:hover {
+                    background-color: #34a853;  /* Green when not running */
+                }
+                QPushButton#start_button[status="running"]:hover {
+                    background-color: #ea4335;  /* Red when running */
+                }
+                QLabel {
+                    font-size: 14px;
+                }
+                QLabel#SubpanelHeader {
+                    font-weight: bold;
+                }
+                QLabel#HistoryTypeLabel {
+                    color: #202124;
+                    font-size: 14px;
+                }
+                QListWidget, QTreeWidget {
+                    background-color: #ffffff;
+                    border: 1px solid #dadce0;
+                    border-radius: 5px;
+                    outline: 0;
+                    padding: 1px;
+                }
+                QListWidget::item, QTreeWidget::item {
+                    padding: 5px;
+                }
+                QListWidget::item:hover, QTreeWidget::item:hover {
+                    background-color: #f1f3f4;
+                }
+                QListWidget::item:selected, QTreeWidget::item:selected {
+                    background-color: #e8f0fe;
+                    color: #1a73e8;
+                }
+                #PanelWidget {
+                    background-color: #ffffff;
+                    border: 1px solid #dadce0;
+                    border-radius: 5px;
+                }
+                
+                QListWidget, QTreeWidget, QTreeView {
+                    background-color: #ffffff;
+                    border: none;
+                    border-radius: 5px;
+                    outline: 0;
+                    padding: 1px;
+                }
+                QListWidget::item, QTreeWidget::item, QTreeView::item {
+                    padding: 5px;
+                }
+                QListWidget::item:hover, QTreeWidget::item:hover, QTreeView::item:hover {
+                    background-color: #eee;
+                }
+                QListWidget::item:selected, QTreeWidget::item:selected, QTreeView::item:selected {
+                    background-color: #ddd;
+                    color: #2574f5;
+                }
+                
+                #HeaderLabel {
+                    font-size: 16px;
+                    font-weight: bold;
+                    background-color: #eee;
+                    border: 1px solid #dadce0;
+                    border-top-left-radius: 5px;
+                    border-top-right-radius: 5px;
+                    padding: 5px;
+                }
+                
+                #HeaderLabel[panelType="Configuration Dashboard"] {
+                    color: #228B22;
+                }
+                #HeaderLabel[panelType="Backup Schedule"] {
+                    color: #4169E1;
+                }
+                #HeaderLabel[panelType="File Explorer"] {
+                    color: #800080;
+                }
+                #HeaderLabel[panelType="Web & Folders"] {
+                    color: #daa520;
+                }
+                
+                #ContentWidget {
+                    background-color: transparent;
+                    border-bottom-left-radius: 5px;
+                    border-bottom-right-radius: 5px;
+                }
+                #WebLink {
+                    background-color: transparent;
+                    color: #1a73e8;
+                    text-align: left;
+                }
+                #WebLink:hover {
+                    text-decoration: underline;
+                }
+                QComboBox, QSpinBox, QTimeEdit {
+                    background-color: #ffffff;
+                    color: #202124;
+                    border: 1px solid #dadce0;
+                    border-radius: 5px;
+                    padding: 5px;
+                    min-width: 6em;
+                }
+                QComboBox:hover, QSpinBox:hover, QTimeEdit:hover {
+                    border-color: #1a73e8;
+                }
+                QComboBox::drop-down {
+                    subcontrol-origin: padding;
+                    subcontrol-position: center right;
+                    width: 20px;
+                    border-left: none;
+                    background: transparent;
+                }
+                QFrame[frameShape="4"],
+                QFrame[frameShape="5"] {
+                    color: #dadce0;
+                    width: 1px;
+                    height: 1px;
+                }
+                QWidget:disabled {
+                    color: #9aa0a6;
+                    background-color: #f1f3f4;
+                }
+                QCalendarWidget QWidget:disabled {
+                    color: #9aa0a6;
+                    background-color: #f1f3f4;
+                }
+                QComboBox:disabled, QTimeEdit:disabled, QSpinBox:disabled {
+                    background-color: #333;
+                    color: #bdc1c6;
+                }
+                QPushButton:disabled {
+                    background-color: #bdc1c6;
+                    color: #f1f3f4;
+                }
+                QCheckBox {
+                    spacing: 5px;
+                }
+                #FootnoteLabel {
+                    color: #5f6368;
+                    font-size: 12px;
+                    font-style: italic;
+                    padding-top: 5px;
+                    padding-bottom: 5px;
+                }
+                QScrollBar:vertical {
+                    border: none;
+                    background: #f1f3f4;
+                    width: 10px;
+                    margin: 0px;
+                }
+                QScrollBar::handle:vertical {
+                    background: #dadce0;
+                    min-height: 30px;
+                    border-radius: 5px;
+                }
+                QScrollBar::handle:vertical:hover {
+                    background: #bdc1c6;
+                }
+                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                    height: 0px;
+                }
+                QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                    background: none;
+                }
+                QScrollBar:horizontal {
+                    border: none;
+                    background: #f1f3f4;
+                    height: 10px;
+                    margin: 0px;
+                }
+                QScrollBar::handle:horizontal {
+                    background: #dadce0;
+                    min-width: 30px;
+                    border-radius: 5px;
+                }
+                QScrollBar::handle:horizontal:hover {
+                    background: #bdc1c6;
+                }
+                QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                    width: 0px;
+                }
+                QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+                    background: none;
+                }
+                QTimeEdit::up-button, QTimeEdit::down-button,
+                QSpinBox::up-button, QSpinBox::down-button {
+                    background-color: transparent;
+                    border: none;
+                    width: 16px;
+                    height: 12px;
+                }
+                
+                QSpinBox::up-arrow, QTimeEdit::up-arrow {
+                    image: url(up-arrow-light.png);
+                    width: 8px;
+                    height: 8px;
+                }
+                QSpinBox::down-arrow, QTimeEdit::down-arrow {
+                    image: url(down-arrow-light.png);
+                    width: 8px;
+                    height: 8px;
+                }
+                QWidget#BackupSchedulePanel[enabled="false"] {
+                    background-color: #f1f3f4;
+                }
+                QWidget#BackupSchedulePanel[enabled="true"] {
+                    background-color: #ffffff;
+                }
+                QCalendarWidget {
+                    background-color: #ffffff;
+                    color: #202124;
+                }
+                QCalendarWidget QTableView {
+                    alternate-background-color: #f8f9fa;
+                    background-color: #ffffff;
+                }
+                QCalendarWidget QWidget {
+                    alternate-background-color: #f8f9fa;
+                }
+                QCalendarWidget QMenu {
+                    background-color: #ffffff;
+                    color: #202124;
+                }
+                QCalendarWidget QToolButton {
+                    color: #202124;
+                }
+                QCalendarWidget QToolButton:hover {
+                    background-color: #e8f0fe;
+                    border-radius: 2px;
+                }
+                QCalendarWidget #qt_calendar_navigationbar {
+                    background-color: #f1f3f4;
+                }
+                QWidget#FileExplorerPanel {
+                    background-color: #ffffff;
+                    color: #202124;
+                    font-family: 'Segoe UI', Arial, sans-serif;
+                }
+
+                QLineEdit#SearchBox {
+                    background-color: #f1f3f4;
+                    border: 1px solid #dadce0;
+                    border-radius: 4px;
+                    padding: 8px;
+                    font-size: 12px;
+                    color: #202124;
+                }
+                QHeaderView::section {
+                    background-color: #f1f3f4;
+                    color: #202124;
+                }
+                QGroupBox {
+                    font-weight: bold;
+                    border: 1px solid #666;
+                    border-radius: 5px;
+                    margin-top: 7px;
+                }
+                QGroupBox::title {
+                    subcontrol-origin: margin;
+                    left: 10px;
+                    padding: 0 3px 0 3px;
+                }
+                
+                QTreeWidget#ResultsPanel {
+                    background-color: #ffffff;
+                    border: 1px solid #dadce0;
+                    border-radius: 4px;
+                }
+
+                QTreeWidget#ResultsPanel QTreeWidgetItem {
+                    color: #202124;
+                    padding: 4px;
+                }
+
+                QTreeWidget#ResultsPanel QTreeWidgetItem:hover {
+                    background-color: #f1f3f4;
+                }
+
+                QTreeWidget#ResultsPanel QTreeWidgetItem:selected {
+                    background-color: #e8f0fe;
+                    color: #1a73e8;
+                }
+                
+                QTreeWidget#ResultsPanel QTreeWidgetItem[results="found"] {
+                    color: #34A853;  /* Green color for results found */
+                }
+                QTreeWidget#ResultsPanel QTreeWidgetItem[results="not_found"] {
+                    color: #EA4335;  /* Red color for no results */
+                }
+                
+                QWidget#FileExplorerPanel QTreeView {
+                    background-color: #ffffff;
+                    border: 1px solid #dadce0;
+                }
+                
+                QWidget#FileExplorerPanel QLineEdit#SearchBox {
+                    background-color: #f1f3f4;
+                    border: 1px solid #dadce0;
+                    color: #202124;
+                    padding: 8px;
+                }
+                
+                QWidget#ResultsPanel {
+                    background-color: #ffffff;
+                    border: 1px solid #dadce0;
+                }
+                
+                QLineEdit#SearchBox {
+                    background-color: #eee;
+                    border: 1px solid #ccc;
+                    border-radius: 4px;
+                    padding: 8px;
+                    font-size: 12px;
+                    color: #202124;
+                }
+                QLineEdit#SearchBox:focus {
+                    border-color: #1a73e8;
+                }
+                
+                QListWidget#backup_paths_list {
+                    background-color: #ffffff;
+                }
+                QListWidget#backup_paths_list::item {
+                    background-color: #ffffff;
+                }
+                
+                BackupScheduleCalendar {
+                    background-color: #f1f3f4;
+                }
+                BackupScheduleCalendar > QWidget#BackupScheduleSubpanel {
+                    background-color: #f1f3f4;
+                    border: 1px solid #666;
+                    border-radius: 5px;
+                }
+                BackupScheduleCalendar QGroupBox {
+                    background-color: #f1f3f4;
+                    border: 1px solid #666;
+                    border-radius: 5px;
+                    margin-top: 7px;
+                }
+                BackupScheduleCalendar QGroupBox::title {
+                    subcontrol-origin: margin;
+                    left: 10px;
+                    padding: 0 3px 0 3px;
+                }
+                BackupScheduleCalendar > QWidget#CalendarWidgetSubpanel {
+                    background-color: #f1f3f4;
+                    border-radius: 5px;
+                }
+                
+                QTabWidget::pane {
+                    border-top: 2px solid #dadce0;
+                    background-color: #ffffff;
+                }
+                QTabWidget::tab-bar {
+                    left: 5px;
+                }
+                QTabBar::tab {
+                    background-color: #f8f9fa;
+                    color: #202124;
+                    padding: 8px 12px;
+                    margin-right: 4px;
+                    border-top-left-radius: 4px;
+                    border-top-right-radius: 4px;
+                }
+                QTabBar::tab:selected {
+                    background-color: #ffffff;
+                    border-top: 2px solid #1a73e8;
+                }
+                QTabBar::tab:hover:!selected {
+                    background-color: #f1f3f4;
+                }
+                
+                QToolBar {
+                    background-color: #f8f9fa;
+                    border-bottom: 1px solid #dadce0;
+                    spacing: 10px;
+                    padding: 5px;
+                }
+                QToolBar QLabel {
+                    color: #202124;
+                }
+                QToolBar QComboBox {
+                    background-color: #ffffff;
+                    color: #202124;
+                    border: 1px solid #dadce0;
+                    border-radius: 3px;
+                    padding: 2px 5px;
+                }
+            """
+        }
+# -----------
+
+# Device history management
+# -----------
 class HistoryManager:
+    """Database manager for backup/restore operation history.
+
+    Key Functions:
+    - Records operation details and file statuses
+    - Manages operation attribution and user tracking
+    - Provides paginated history retrieval
+
+    Implementation Details:
+    - SQLite database for persistent storage
+    - Thread-safe operations
+    - Transaction batching
+    - User attribution system
+
+    Application Integration:
+    - Used by FileExplorerPanel for operation tracking
+    - Provides data for HistoryPanel display
+    - Coordinates with backup/restore operations
+    """
+
     def __init__(self, db_path):
         """Initialize the history manager with the database path
         
@@ -1326,7 +2903,24 @@ class HistoryManager:
             logging.error(f"Database error saving file record: {e}")
 
 class OperationHistoryPanel(QWidget):
-    """Panel for displaying hierarchical backup/restore history"""
+    """UI panel displaying backup/restore history.
+
+    Key Functions:
+    - Displays hierarchical operation history
+    - Provides filtering and search
+    - Shows operation details and status
+
+    Implementation Details:
+    - Qt tree widget with custom delegates
+    - Filter system for operations
+    - Auto-refresh mechanism
+    - Custom tree display formatting
+
+    Application Integration:
+    - Main history display component
+    - Works with HistoryManager
+    - Updates based on operations
+    """
     
     def __init__(self, event_type: str, history_manager: HistoryManager, theme_manager, parent=None):
         super().__init__(parent)
@@ -1960,733 +3554,132 @@ class OperationHistoryPanel(QWidget):
         for combo in [self.date_range, self.status_filter, self.history_type_combo]:
             combo.setStyleSheet(combo_style)
 
-class BackgroundOperation:
-    """Handles background processing for backup/restore operations"""
-    def __init__(self, operation_type, paths, settings):
+class HistoryWorker(QObject):
+    """Asynchronous worker for loading operation history.
+
+    Key Functions:
+    - Loads operation history in batches
+    - Emits progress updates and results
+
+    Implementation Details:
+    - Qt signal/slot mechanism
+    - SQLite queries
+    - Non-blocking operation
+
+    Application Integration:
+    - Used by HistoryPanel for data loading
+    - Updates UI with operation history
+    """
+
+    batch_ready = pyqtSignal(object)  # Single operation ready
+    error_occurred = pyqtSignal(str)
+    finished = pyqtSignal()
+    
+    def __init__(self, history_manager, operation_type):
+        super().__init__()
+        self.history_manager = history_manager
         self.operation_type = operation_type
-        self.paths = paths if isinstance(paths, list) else [paths]
-        self.settings = settings.copy()
-        self.queue = Queue()
-        self.process = None
-        self.total_files = 0
-        self.processed_files = 0
-        self.manager = Manager()
-        self.should_stop = self.manager.Value('b', False)
-        self.user_email = settings.get('user_email')
-        self.auth_tokens = settings.get('auth_tokens')  # Get auth tokens from settings
-
-        self.operation_id = self.settings.get('operation_id') or datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        self.settings['operation_id'] = self.operation_id
-        self.start_time = datetime.now()
-        self.settings['operation_start_time'] = self.start_time
-
-    def start(self):
-        """Start the background operation"""
-        if self.operation_type == 'backup':
-            self.process = Process(target=BackgroundOperation._backup_worker, 
-                                 args=(self.paths, self.settings, self.queue, self.should_stop))
-        else:
-            self.process = Process(target=BackgroundOperation._restore_worker, 
-                                 args=(self.paths, self.settings, self.queue, self.should_stop))
         
-                # Ensure process starts safely
-        if __name__ == "__main__":
-            multiprocessing.freeze_support()
-            self.process.start()
-            
-        return self.process.pid
-
-    def stop(self):
-        """Stop the background operation"""
-        if self.process and self.process.is_alive():
-            self.should_stop.value = True
-            self.process.join(timeout=5)
-            if self.process.is_alive():
-                self.process.terminate()
-
-    def get_progress(self):
-        """Get progress updates from the queue without blocking"""
+    def run(self):
         try:
-            while True:
-                update = self.queue.get_nowait()
-                if update.get('type') == 'total_files':
-                    self.total_files = update['value']
-                elif update.get('type') == 'file_progress':
-                    self.processed_files += 1
-                    # Calculate percentage
-                    if self.total_files > 0:
-                        percentage = (self.processed_files / self.total_files) * 100
-                        update['progress'] = percentage
-                yield update
-        except Empty:
-            return
-
-    def update_progress(self):
-        """Process progress updates from the background operation"""
-        if not hasattr(self, 'history_manager'):
-            return
-            
-        for update in self.get_progress():
-            update_type = update.get('type')
-            
-            if update_type == 'file_progress':
-                file_path = update.get('filepath', '')
-                success = update.get('success', False)
-                error_msg = update.get('error')
+            with sqlite3.connect(self.history_manager.db_path) as conn:
+                cursor = conn.cursor()
                 
-                # Update file status in history if record_file is True
-                if self.operation_id and update.get('record_file', True):
-                    status = OperationStatus.SUCCESS if success else OperationStatus.FAILED
-                    self.history_manager.add_file_to_operation(
-                        self.operation_id,
-                        file_path,
-                        status,
-                        error_msg
+                # Get top 20 operations
+                cursor.execute("""
+                    SELECT operation_id, timestamp, source, status, operation_type, user_email, error_message
+                    FROM operations 
+                    WHERE operation_type = ?
+                    ORDER BY timestamp DESC
+                    LIMIT 20
+                """, (self.operation_type,))
+                
+                # Process each operation individually
+                for row in cursor.fetchall():
+                    op_id = row[0]
+                    operation = Operation(
+                        operation_id=op_id,
+                        timestamp=datetime.fromisoformat(row[1]),
+                        source=InitiationSource(row[2]),
+                        status=OperationStatus(row[3]),
+                        operation_type=row[4],
+                        user_email=row[5],
+                        error_message=row[6],
+                        files=[]
                     )
                     
-                # Calculate progress percentage
-                if self.total_files > 0:
-                    percentage = (self.processed_files / self.total_files) * 100
-                    yield {
-                        'type': 'progress',
-                        'value': percentage,
-                        'current_file': file_path,
-                        'status': status,
-                        'error': error_msg
-                    }
-
-    @staticmethod
-    def _backup_worker(paths, settings, queue, should_stop):
-        """Worker process with authentication handling"""
-        if __name__ == "__main__":
-            multiprocessing.freeze_support()
-            
-        try:
-            operation_id = settings['operation_id']
-            
-            # Initialize authentication context
-            backup_utils.initialize_auth_context(
-                api_key=settings['API_KEY'],
-                agent_id=settings['AGENT_ID'],
-                auth_tokens=settings.get('auth_tokens')
-            )
-            
-            total_files = 0
-            success_count = 0
-            fail_count = 0
-            
-            # First count total files
-            for path in paths:
-                if os.path.isfile(path):
-                    total_files += 1
-                else:
-                    for _, _, files in os.walk(path):
-                        total_files += len(files)
-            
-            queue.put({'type': 'total_files', 'value': total_files})
-            
-            # Connect to hash database
-            hash_db_path = os.path.join(os.path.dirname(settings['settings_path']), 'schash.db')
-            dbconn = get_or_create_hash_db(hash_db_path)
-            
-            try:
-                processed = 0
-                for path in paths:
-                    if should_stop.value:
-                        break
-                        
-                    if os.path.isfile(path):
-                        try:
-                            success = backup_utils.process_file(
-                                pathlib.Path(path),
-                                settings['API_KEY'],
-                                settings['AGENT_ID'],
-                                dbconn,
-                                True
-                            )
-                            success_count += 1 if success else 0
-                            fail_count += 0 if success else 1
-                            processed += 1
-                            
-                            # Use consistent operation_id and ensure record_file is True
-                            queue.put({
-                                'type': 'file_progress',
-                                'filepath': path,
-                                'success': success,
-                                'total_files': total_files,
-                                'processed_files': processed,
-                                'operation_id': operation_id,
-                                'record_file': True
-                            })
-                            
-                        except Exception as e:
-                            logging.error(f"Failed to backup file {path}: {e}")
-                            fail_count += 1
-                            queue.put({
-                                'type': 'file_progress',
-                                'filepath': path,
-                                'success': False,
-                                'error': str(e),
-                                'total_files': total_files,
-                                'processed_files': processed,
-                                'operation_id': operation_id,
-                                'record_file': True
-                            })
-                    else:  # Directory
-                        for root, _, files in os.walk(path):
-                            if should_stop.value:
-                                break
-                            for file in files:
-                                if should_stop.value:
-                                    break
-                                    
-                                file_path = os.path.join(root, file)
-                                try:
-                                    normalized_path = file_path.replace('\\', '/')
-                                    
-                                    success = backup_utils.process_file(
-                                        pathlib.Path(normalized_path),
-                                        settings['API_KEY'],
-                                        settings['AGENT_ID'],
-                                        dbconn,
-                                        True
-                                    )
-                                    success_count += 1 if success else 0
-                                    fail_count += 0 if success else 1
-                                    processed += 1
-                                    
-                                    # Ensure record_file is True for directory contents
-                                    queue.put({
-                                        'type': 'file_progress',
-                                        'filepath': normalized_path,
-                                        'success': success,
-                                        'total_files': total_files,
-                                        'processed_files': processed,
-                                        'operation_id': operation_id,
-                                        'record_file': True,
-                                        'parent_folder': path
-                                    })
-                                    
-                                except Exception as e:
-                                    logging.error(f"Failed to backup file {file_path}: {e}")
-                                    fail_count += 1
-                                    queue.put({
-                                        'type': 'file_progress',
-                                        'filepath': normalized_path,
-                                        'success': False,
-                                        'error': str(e),
-                                        'total_files': total_files,
-                                        'processed_files': processed,
-                                        'operation_id': operation_id,
-                                        'record_file': True,
-                                        'parent_folder': path
-                                    })
-                                    
-            finally:
-                if dbconn:
-                    dbconn.close()
-            
-            # Send final completion status
-            if not should_stop.value:
-                successful = fail_count == 0 and success_count > 0
-                queue.put({
-                    'type': 'operation_complete',
-                    'success_count': success_count,
-                    'fail_count': fail_count,
-                    'total': total_files,
-                    'operation_id': operation_id,
-                    'status': OperationStatus.SUCCESS if successful else OperationStatus.FAILED
-                })
-            
-        except Exception as e:
-            logging.error(f"Backup worker failed: {e}")
-            # Use consistent operation_id for failure
-            queue.put({
-                'type': 'operation_failed',
-                'error': str(e),
-                'operation_id': operation_id
-            })
-
-    @staticmethod
-    def _restore_worker(paths, settings, queue, should_stop):
-        """Worker process for restore operations with enhanced logging"""
-        if __name__ == "__main__":
-            multiprocessing.freeze_support()
-        
-        try:
-            operation_id = settings['operation_id']
-            logging.info(f"Starting restore operation {operation_id} for paths: {paths}")
-            
-            # Count files that match our restore paths
-            total_files = 0
-            success_count = 0
-            fail_count = 0
-            
-            metadata_dir = os.path.join(os.getenv('APPDATA'), 'Stormcloud', 'file_explorer', 'manifest')
-            metadata_files = sorted([f for f in os.listdir(metadata_dir) 
-                                   if f.startswith('file_metadata_') and f.endswith('.json')],
-                                  reverse=True)
-            
-            if not metadata_files:
-                raise Exception("No metadata files found")
-                
-            # Load the most recent metadata file
-            json_path = os.path.join(metadata_dir, metadata_files[0])
-            with open(json_path, 'r') as f:
-                metadata = json.load(f)
-            
-            restore_files = []
-            
-            for item in metadata:
-                file_path = item['ClientFullNameAndPathAsPosix']
-                file_size = item.get('FileSize', 0)  # Get size from metadata
-                
-                for restore_path in paths:
-                    if file_path.startswith(restore_path):
-                        restore_files.append((file_path, file_size))
-            
-                total_files = len(restore_files)
-            
-            logging.info(f"Found {total_files} backed up files to restore")
-            queue.put({'type': 'total_files', 'value': total_files})
-            
-            processed = 0
-            for path, file_size in restore_files:
-                if should_stop.value:
-                    logging.info("Restore operation cancelled by user")
-                    break
+                    # Get files for this operation
+                    cursor.execute("""
+                        SELECT filepath, timestamp, status, error_message
+                        FROM file_records
+                        WHERE operation_id = ?
+                        ORDER BY timestamp DESC
+                    """, (op_id,))
                     
-                if os.path.isfile(path):
-                    try:
-                        logging.info(f"Attempting to restore file: {path}")
-                        
-                        # Use chunked restore for large files
-                        if file_size > 300 * 1024 * 1024:  # 300MB
-                            success = restore_utils.restore_large_file(
-                                path,
-                                settings['API_KEY'],
-                                settings['AGENT_ID'],
-                                lambda p: queue.put({
-                                    'type': 'chunk_progress',
-                                    'filepath': path,
-                                    'progress': p
-                                }),
-                                should_stop
-                            )
-                        else:
-                            success = restore_utils.restore_file(
-                                path,
-                                settings['API_KEY'],
-                                settings['AGENT_ID']
-                            )
-                        
-                        success_count += 1 if success else 0
-                        fail_count += 0 if success else 1
-                        processed += 1
-                        
-                        result_msg = "successfully" if success else "failed to"
-                        logging.info(f"{result_msg.capitalize()} restored file: {path}")
-                        
-                        queue.put({
-                            'type': 'file_progress',
-                            'filepath': path,
-                            'success': success,
-                            'total_files': total_files,
-                            'processed_files': processed,
-                            'operation_id': operation_id,
-                            'record_file': True,
-                            'parent_folder': os.path.dirname(path),
-                            'user_email': settings.get('user_email')
-                        })
-                        
-                    except Exception as e:
-                        error_msg = str(e)
-                        logging.error(f"Failed to restore file {path}: {error_msg}")
-                        fail_count += 1
-                        queue.put({
-                            'type': 'file_progress',
-                            'filepath': path,
-                            'success': False,
-                            'error': error_msg,
-                            'total_files': total_files,
-                            'processed_files': processed,
-                            'operation_id': operation_id,
-                            'record_file': True,
-                            'parent_folder': os.path.dirname(path),
-                            'user_email': settings.get('user_email')
-                        })
-                        
-                else:  # Directory
-                    logging.info(f"Processing directory: {path}")
-                    for root, _, files in os.walk(path):
-                        if should_stop.value:
-                            break
-                        for file in files:
-                            if should_stop.value:
-                                break
-                                
-                            file_path = os.path.join(root, file)
-                            try:
-                                normalized_path = file_path.replace('\\', '/')
-                                logging.info(f"Attempting to restore file: {normalized_path}")
-                                
-                                success = restore_utils.restore_file(
-                                    normalized_path,
-                                    settings['API_KEY'],
-                                    settings['AGENT_ID']
-                                )
-                                success_count += 1 if success else 0
-                                fail_count += 0 if success else 1
-                                processed += 1
-                                
-                                result_msg = "successfully" if success else "failed to"
-                                logging.info(f"{result_msg.capitalize()} restored file: {normalized_path}")
-                                
-                                queue.put({
-                                    'type': 'file_progress',
-                                    'filepath': normalized_path,
-                                    'success': success,
-                                    'total_files': total_files,
-                                    'processed_files': processed,
-                                    'operation_id': operation_id,
-                                    'record_file': True,
-                                    'parent_folder': path,
-                                    'user_email': settings.get('user_email')
-                                })
-                                
-                            except Exception as e:
-                                error_msg = str(e)
-                                logging.error(f"Failed to restore file {file_path}: {error_msg}")
-                                fail_count += 1
-                                queue.put({
-                                    'type': 'file_progress',
-                                    'filepath': normalized_path,
-                                    'success': False,
-                                    'error': error_msg,
-                                    'total_files': total_files,
-                                    'processed_files': processed,
-                                    'operation_id': operation_id,
-                                    'record_file': True,
-                                    'parent_folder': path,
-                                    'user_email': settings.get('user_email')
-                                })
-            
-            # Send final completion status
-            if not should_stop.value:
-                successful = fail_count == 0 and success_count > 0
-                logging.info(f"Restore operation completed. Success: {success_count}, Failed: {fail_count}, Total: {total_files}")
-                queue.put({
-                    'type': 'operation_complete',
-                    'success_count': success_count,
-                    'fail_count': fail_count,
-                    'total': total_files,
-                    'operation_id': operation_id,
-                    'status': OperationStatus.SUCCESS if successful else OperationStatus.FAILED,
-                    'user_email': settings.get('user_email')
-                })
+                    for file_row in cursor.fetchall():
+                        operation.files.append(FileRecord(
+                            filepath=file_row[0],
+                            timestamp=datetime.fromisoformat(file_row[1]),
+                            status=OperationStatus(file_row[2]),
+                            error_message=file_row[3],
+                            operation_id=op_id
+                        ))
+                    
+                    # Emit each operation as it's ready
+                    self.batch_ready.emit(operation)
                     
         except Exception as e:
-            error_msg = str(e)
-            logging.error(f"Restore worker failed: {error_msg}", exc_info=True)
-            queue.put({
-                'type': 'operation_failed',
-                'error': error_msg,
-                'operation_id': operation_id,
-                'user_email': settings.get('user_email')
-            })
-        
-class OperationProgressWidget(QWidget):
-    """Widget to display backup/restore operation progress"""
-    operation_completed = pyqtSignal(dict)  # Emits final status when complete
-    
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.theme_manager = parent.theme_manager if parent else None
-        self.history_manager = None
-        self._user_email = None
-        self.init_ui()
-        self.background_op = None
-        self.timer = None
+            self.error_occurred.emit(str(e))
+        finally:
+            self.finished.emit()
+# -----------
 
-    @property
-    def user_email(self) -> Optional[str]:
-        return self._user_email
-
-    @user_email.setter
-    def user_email(self, email: Optional[str]):
-        self._user_email = email
-
-    def init_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(5, 5, 5, 5)
-        layout.setSpacing(5)
-
-        # Progress information
-        info_layout = QHBoxLayout()
-        self.operation_label = QLabel("Operation: None")
-        self.file_count_label = QLabel("Files: 0/0")
-        info_layout.addWidget(self.operation_label)
-        info_layout.addWidget(self.file_count_label)
-        info_layout.addStretch()
-        
-        # Cancel button
-        self.cancel_button = QPushButton("Cancel")
-        self.cancel_button.clicked.connect(self.cancel_operation)
-        self.cancel_button.setFixedWidth(70)
-        info_layout.addWidget(self.cancel_button)
-        
-        layout.addLayout(info_layout)
-
-        # Progress bar
-        self.progress_bar = QProgressBar()
-        layout.addWidget(self.progress_bar)
-
-        # Current file label
-        self.current_file_label = QLabel()
-        self.current_file_label.setWordWrap(True)
-        layout.addWidget(self.current_file_label)
-
-        self.setVisible(False)
-        self.apply_theme()
-
-    def apply_theme(self):
-        if not self.theme_manager:
-            return
-            
-        theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
-        self.setStyleSheet(f"""
-            QLabel {{
-                color: {theme['text_primary']};
-            }}
-            QProgressBar {{
-                border: 1px solid {theme['input_border']};
-                border-radius: 3px;
-                text-align: center;
-                background-color: {theme['panel_background']};
-            }}
-            QProgressBar::chunk {{
-                background-color: {theme['accent_color']};
-            }}
-        """)
-
-    def start_operation(self, operation_type, paths, settings):
-        """Start a new operation with non-blocking progress updates"""
-        # Store the user email but don't update history manager
-        self._user_email = settings.get('user_email')
-        
-        self.background_op = BackgroundOperation(operation_type, paths, settings)
-        self.background_op.start()
-        
-        if self.history_manager:
-            # Remove this line - don't update history_manager's email here
-            # self.history_manager.current_user_email = settings.get('user_email')
-            pass
-        
-        self.operation_id = settings.get('operation_id')
-        self.operation_label.setText(f"Operation: {operation_type.capitalize()}")
-        self.progress_bar.setValue(0)
-        self.current_file_label.setText("Preparing...")
-        self.setVisible(True)
-        
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.update_progress)
-        self.timer.start(100)
-
-    def update_progress(self):
-        """Process progress updates from the background operation with enhanced logging"""
-        if not self.background_op:
-            return
-                
-        try:
-            # logging.debug("Checking for progress updates...")
-            while True:
-                try:
-                    update = self.background_op.queue.get_nowait()
-                    logging.debug(f"Received update: {update.get('type')}")
-                    
-                    if update['type'] == 'total_files':
-                        logging.info(f"Setting total files to process: {update['value']}")
-                        self.file_count_label.setText(f"Files: 0/{update['value']}")
-                        
-                    elif update['type'] == 'file_progress':
-                        file_path = update.get('filepath', '')
-                        success = update.get('success', False)
-                        error_msg = update.get('error')
-                        
-                        if self.operation_id and update.get('record_file', True):
-                            status = OperationStatus.SUCCESS if success else OperationStatus.FAILED
-                            logging.info(f"Recording file status - Path: {file_path}, Status: {status}")
-                            self.history_manager.add_file_to_operation(
-                                self.operation_id,
-                                file_path,
-                                status,
-                                error_msg
-                            )
-                        
-                        # Update progress percentage
-                        if update.get('total_files', 0) > 0:
-                            total_files = update.get('total_files', 0)
-                            processed_files = update.get('processed_files', 0)
-                            percentage = (processed_files / total_files) * 100
-                            self.progress_bar.setValue(int(percentage))
-                            self.file_count_label.setText(f"Files: {processed_files}/{total_files}")
-                            logging.info(f"Progress update: {processed_files}/{total_files} files ({percentage:.1f}%)")
-                        
-                        # Update current file label
-                        if 'filepath' in update:
-                            file_name = os.path.basename(file_path)
-                            self.current_file_label.setText(f"Processing: {file_name}")
-                            if error_msg:
-                                logging.error(f"Error processing {file_name}: {error_msg}")
-                                
-                    elif update['type'] == 'operation_complete':
-                        logging.info("Operation completed successfully")
-                        logging.info(f"Final stats - Success: {update.get('success_count', 0)}, "
-                                   f"Failed: {update.get('fail_count', 0)}, "
-                                   f"Total: {update.get('total', 0)}")
-                                   
-                        if self.history_manager:
-                            final_status = OperationStatus.SUCCESS if update['fail_count'] == 0 else OperationStatus.FAILED
-                            self.history_manager.complete_operation(
-                                update.get('operation_id'),
-                                final_status
-                            )
-                        
-                        self.operation_completed.emit({
-                            'success_count': update.get('success_count', 0),
-                            'fail_count': update.get('fail_count', 0),
-                            'total': update.get('total', 0),
-                            'operation_type': self.background_op.operation_type
-                        })
-                        self.cleanup()
-                        break
-                        
-                    elif update['type'] == 'operation_failed':
-                        logging.error(f"Operation failed: {update.get('error', 'Unknown error')}")
-                        if self.history_manager:
-                            self.history_manager.complete_operation(
-                                update.get('operation_id'),
-                                OperationStatus.FAILED,
-                                update.get('error')
-                            )
-                        
-                        self.operation_completed.emit({
-                            'error': update.get('error', 'Operation failed'),
-                            'operation_type': self.background_op.operation_type
-                        })
-                        self.cleanup()
-                        break
-                        
-                except Empty:
-                    break
-                        
-        except Exception as e:
-            logging.error(f"Error updating progress: {e}", exc_info=True)
-            self.cleanup()
-        
-    def cancel_operation(self):
-        """Cancel the current operation"""
-        if self.background_op:
-            operation_type = self.background_op.operation_type
-            operation_id = self.background_op.operation_id
-            user_email = self.user_email  # Get current user's email
-            
-            # Stop the background operation
-            self.background_op.stop()
-            
-            # Recalculate final status based on completed files
-            if self.history_manager:
-                event = self.history_manager.get_operation(operation_id)
-                if event:
-                    completed_files = [f for f in event.files 
-                                     if f.status != OperationStatus.IN_PROGRESS]
-                    if completed_files:
-                        # Determine final status based on completed files
-                        final_status = (OperationStatus.FAILED 
-                                      if any(f.status == OperationStatus.FAILED for f in completed_files)
-                                      else OperationStatus.SUCCESS)
-                        
-                        # Update the operation's status with user email
-                        self.history_manager.complete_operation(
-                            operation_id,
-                            final_status,
-                            "Operation cancelled by user",
-                            user_email  # Pass user email
-                        )
-                    else:
-                        # No files completed, mark as failed
-                        self.history_manager.complete_operation(
-                            operation_id,
-                            OperationStatus.FAILED,
-                            "Operation cancelled by user before any files were processed",
-                            user_email  # Pass user email
-                        )
-            
-            self.operation_completed.emit({
-                'error': 'Operation cancelled by user',
-                'operation_type': operation_type
-            })
-            self.cleanup()
-
-    def cleanup(self):
-        """Clean up after operation completes"""
-        if self.timer:
-            self.timer.stop()
-            self.timer = None
-            
-        if self.background_op:
-            self.background_op.stop()
-            self.background_op = None
-            
-        self.setVisible(False)
-
-class StormcloudMessageBox(QMessageBox):
-    def __init__(self, parent=None, theme_manager=None):
-        super().__init__(parent)
-        self.theme_manager = theme_manager
-        self.setWindowTitle("Stormcloud")
-        self.apply_theme()
-
-    def apply_theme(self):
-        if self.theme_manager:
-            theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
-            self.setStyleSheet(theme["stylesheet"])
-
-    @staticmethod
-    def information(parent, title, text, theme_manager=None):
-        msg_box = StormcloudMessageBox(parent, theme_manager)
-        msg_box.setIcon(QMessageBox.Information)
-        msg_box.setText(text)
-        msg_box.setWindowTitle(title)
-        msg_box.setStandardButtons(QMessageBox.Ok)
-        return msg_box.exec_()
-
-    @staticmethod
-    def critical(parent, title, text, theme_manager=None):
-        msg_box = StormcloudMessageBox(parent, theme_manager)
-        msg_box.setIcon(QMessageBox.Critical)
-        msg_box.setText(text)
-        msg_box.setWindowTitle(title)
-        msg_box.setStandardButtons(QMessageBox.Ok)
-        return msg_box.exec_()
-
-@dataclass
-class Transaction:
-    id: str
-    date: datetime
-    amount: float
-    status: str
-    customer_name: str
-    description: str
-    payment_method: str
-      
+# Main app window
+# -----------
 class StormcloudApp(QMainWindow):
+    """Main application window managing core functionality and UI.
+
+    Key Functions:
+    - Manages user authentication and session state
+    - Controls backup engine operations
+    - Handles filesystem indexing and searching
+    - Manages core services initialization
+    - Controls UI tabs and panels
+
+    Implementation Details:
+    - Qt main window architecture
+    - Multi-threaded operation handling
+    - SQLite databases for various functions
+    - Background process management
+    - Theme system integration
+    - Windows API integration (process management)
+    - Network operations for cloud services
+    - File system monitoring
+    - Secure credential storage
+
+    Application Integration:
+    - Core application controller
+    - Manages all major subsystems:
+       - Authentication system
+       - Backup engine
+       - File explorer
+       - History tracking
+       - Theme management
+       - Search functionality
+       - Configuration management
+    - Coordinates between UI components and backend services
+    - Handles application lifecycle
+    """
+
     def __init__(self):
         super().__init__()
+        
+        # Add process registry as one of the first initializations
+        self.process_registry = ProcessRegistry()
+        
         self.theme_manager = ThemeManager()
         self.user_email = None
         self._operation_in_progress = False  # Add flag here too
-        #self.auth_tokens = None
         
         # Set window title and initial theme
         self.setWindowTitle('Stormcloud Backup Manager')
@@ -2794,8 +3787,11 @@ class StormcloudApp(QMainWindow):
         """Initialize and start the filesystem indexing process."""
         try:
             self.filesystem_index = FilesystemIndex(self.filesystem_db_path)
-            self.filesystem_index.start_indexing()  # Start indexing as a separate process
-            logging.info("Filesystem indexing process started")
+            # Start indexing and register the process
+            pid = self.filesystem_index.start_indexing()
+            if pid and hasattr(self.filesystem_index, 'indexer'):
+                self.process_registry.register_process(self.filesystem_index.indexer)
+            logging.info("Filesystem indexing process started and registered")
         except Exception as e:
             logging.error(f"Failed to start indexing: {e}")
 
@@ -2859,6 +3855,8 @@ class StormcloudApp(QMainWindow):
         self.metadata_timer = QTimer(self)
         self.metadata_timer.timeout.connect(self.refresh_metadata)
         self.metadata_timer.start(10000)  # 10 second interval
+        # Register the timer
+        self.process_registry.register_timer(self.metadata_timer)
         
         # Perform initial metadata refresh
         QTimer.singleShot(0, self.refresh_metadata)
@@ -4375,12 +5373,27 @@ class StormcloudApp(QMainWindow):
             logging.error(f"Error during shutdown: {e}")
         finally:
             logging.info("Application shutdown complete")
-
+# -----------
 
 # Calendar Widget
-# ---------------
-
+# -----------
 class TimeSlot(QPushButton):
+    """Interactive time slot button for schedule selection.
+
+    Key Functions:
+    - Represents individual time slots in schedule
+    - Emits signals with time data
+    - Manages selection state
+
+    Implementation Details:
+    - Qt button with custom signals
+    - Time management using QTime
+
+    Application Integration:
+    - Used by backup schedule calendar
+    - Coordinates schedule selection
+    """
+
     clicked_with_time = pyqtSignal(QTime)
 
     def __init__(self, time):
@@ -4442,6 +5455,26 @@ class TimeSlot(QPushButton):
         self.schedule = schedule
 
 class BackupScheduleCalendar(QWidget):
+    """Backup schedule management calendar.
+
+    Key Functions:
+    - Manages weekly/monthly backup schedules
+    - Provides visual schedule display
+    - Handles schedule modifications
+
+    Implementation Details:
+    - Custom Qt widget layout
+    - Schedule data structures
+    - Theme integration
+    - Time slot management
+    - Event handling system
+
+    Application Integration:
+    - Main schedule interface
+    - Updates backup configuration
+    - Works with theme system
+    """
+
     schedule_updated = pyqtSignal(dict)
 
     def __init__(self, theme_manager):
@@ -4740,6 +5773,25 @@ class BackupScheduleCalendar(QWidget):
         self.update_calendar_view()
 
 class CustomCalendarWidget(QCalendarWidget):
+    """Enhanced calendar widget for schedule visualization.
+
+    Key Functions:
+    - Shows scheduled backup days
+    - Provides custom navigation
+    - Displays schedule status
+
+    Implementation Details:
+    - Custom Qt calendar widget
+    - Theme-aware rendering
+    - Custom navigation controls
+    - Schedule visualization system
+
+    Application Integration:
+    - Used by BackupScheduleCalendar
+    - Shows backup schedule state
+    - Theme system integration
+    """
+
     def __init__(self, theme_manager, parent=None):
         super().__init__(parent)
         self.theme_manager = theme_manager
@@ -4854,98 +5906,45 @@ class CustomCalendarWidget(QCalendarWidget):
     def update_schedule(self, schedule):
         self.schedule = schedule
         self.updateCells()
+# -----------
 
-class CustomArrowButton(QPushButton):
-    def __init__(self, direction, theme_manager, parent=None):
-        super().__init__(parent)
-        self.direction = direction
-        self.theme_manager = theme_manager
-        self.setFixedSize(24, 24)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setObjectName("CustomArrowButton")
-
-        # Connect to theme changes
-        self.theme_manager.theme_changed.connect(self.on_theme_changed)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-
-        theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
-        
-        # Draw circle
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(theme["button_background"]))
-        painter.drawEllipse(2, 2, 20, 20)
-
-        # Draw arrow
-        painter.setPen(QColor(theme["button_text"]))
-        painter.setBrush(QColor(theme["button_text"]))
-        if self.direction == 'left':
-            painter.drawPolygon(QPoint(14, 6), QPoint(14, 18), QPoint(8, 12))
-        else:
-            painter.drawPolygon(QPoint(10, 6), QPoint(10, 18), QPoint(16, 12))
-
-    def on_theme_changed(self):
-        self.update()  # Force repaint when theme changes
-
-# ---------------
-
-class SearchResultDelegate(QStyledItemDelegate):
-    def __init__(self, theme_manager):
-        super().__init__()
-        self.theme_manager = theme_manager
-
-    def paint(self, painter, option, index):
-        theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
-        
-        painter.save()
-        
-        # Draw background
-        if option.state & QStyle.State_Selected:
-            painter.fillRect(option.rect, QColor(theme["list_item_selected"]))
-        elif option.state & QStyle.State_MouseOver:
-            painter.fillRect(option.rect, QColor(theme["list_item_hover"]))
-        else:
-            painter.fillRect(option.rect, QColor(theme["panel_background"]))
-
-        # Set text color based on search result type
-        result_type = index.data(Qt.UserRole)
-        if result_type == "found":
-            text_color = QColor(theme["search_results_found"])
-        elif result_type == "not_found":
-            text_color = QColor(theme["search_results_not_found"])
-        else:
-            text_color = QColor(theme["text_primary"])
-        
-        # Draw text
-        painter.setPen(text_color)
-        text = index.data(Qt.DisplayRole)
-        font = option.font
-        if not index.parent().isValid():  # Make root items bold
-            font.setBold(True)
-            painter.setFont(font)
-        
-        # Add padding to text rectangle
-        text_rect = option.rect
-        text_rect.setLeft(text_rect.left() + 5)
-        painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, text)
-        
-        painter.restore()
-
-    def sizeHint(self, option, index):
-        size = super().sizeHint(option, index)
-        size.setHeight(size.height() + 5)
-        return size
-
-# File Explorer Widget
-# ---------------
-
+# File Explorer Panel
+# -----------
 class FileExplorerPanel(QWidget):
+    """Main file explorer interface managing local and remote file browsing.
+
+    Key Functions:
+    - Displays local filesystem and remote backup content
+    - Handles drag-drop for backup/restore operations
+    - Provides file search functionality
+    - Manages file operations and progress tracking
+    - Handles file metadata display
+
+    Implementation Details:
+    - Qt widgets with split views
+    - Custom tree models and delegates
+    - Background workers for search/operations
+    - Progress tracking system
+    - Windows API integration
+    - SQLite database for search indexing
+    - Network operations for remote content
+    - Theme integration
+
+    Application Integration:
+    - Core file management interface
+    - Works with backup/restore systems
+    - Uses HistoryManager for tracking
+    - Coordinates with theme system
+    """
+
     def __init__(self, json_directory, theme_manager, settings_cfg_path=None, 
                  # systray=None,
                  history_manager=None, user_email=None):
         super().__init__()
+        
+        # Get process registry instance
+        self.process_registry = ProcessRegistry()
+        
         self.setObjectName("FileExplorerPanel")
 
         self._drag_source_item = None
@@ -4969,6 +5968,7 @@ class FileExplorerPanel(QWidget):
         self.status_timer = QTimer()
         self.status_timer.timeout.connect(self.check_indexing_status)
         self.status_timer.start(1000)  # Check every second
+        self.process_registry.register_timer(self.status_timer)
         
         self.install_path = self.get_install_path()
         if self.install_path:
@@ -5135,6 +6135,7 @@ class FileExplorerPanel(QWidget):
         self.remote_tree.setModel(self.remote_model)
         self.remote_tree.setHeaderHidden(True)
         self.remote_tree.setStyle(CustomTreeCarrot(self.theme_manager))
+        self.remote_tree.setItemDelegate(PreviewButtonDelegate(self.remote_tree))
         self.remote_tree.setDragEnabled(True)
         self.remote_tree.setAcceptDrops(True)
         self.remote_tree.setDropIndicatorShown(False)
@@ -5479,6 +6480,9 @@ class FileExplorerPanel(QWidget):
         self.search_worker = LocalSearchWorker(search_text, self.filesystem_index)
         self.search_worker.moveToThread(self.search_thread)
         
+        # Register the thread
+        self.process_registry.register_thread(self.search_thread)
+        
         # Connect signals
         self.search_thread.started.connect(self.search_worker.run)
         self.search_worker.finished.connect(self.search_thread.quit)
@@ -5706,7 +6710,7 @@ class FileExplorerPanel(QWidget):
                     item.setData(0, Qt.UserRole + 1, file_path)
                     item.setToolTip(0, file_path)
         else:
-            result_text = f"No matches in {total_files} files ({total_folders} folders)"
+            result_text = f"No matches for '{search_text}' in {total_files} files ({total_folders} folders)"
             parent_item.setData(0, Qt.UserRole, "not_found")
 
         parent_item.setText(0, result_text)
@@ -6615,10 +7619,15 @@ class FileExplorerPanel(QWidget):
         self.progress_widget.start_operation(operation_type, path, settings)
 
     def closeEvent(self, event):
-        """Handle clean shutdown."""
-        if hasattr(self, 'filesystem_index'):
-            self.filesystem_index.shutdown()
-        super().closeEvent(event)
+        """Handle cleanup."""
+        try:
+            # Filesystem index cleanup is handled by process registry
+            if hasattr(self, 'background_op'):
+                self.background_op.stop()
+        except Exception as e:
+            logging.error(f"Error during FileExplorerPanel cleanup: {e}")
+        finally:
+            super().closeEvent(event)
 
 class FileSystemModel(QStandardItemModel):
     def __init__(self):
@@ -6666,6 +7675,26 @@ class FileSystemModel(QStandardItemModel):
         return QIcon.fromTheme("folder")
 
 class LocalFileSystemModel(QStandardItemModel):
+    """Model representing local filesystem for UI display.
+
+    Key Functions:
+    - Provides hierarchical view of local drives/folders
+    - Handles dynamic loading of directory contents
+    - Manages drag-drop operations
+
+    Implementation Details:
+    - Qt model/view architecture
+    - Asynchronous directory loading
+    - Windows API for drive enumeration
+    - Permission handling
+    - Custom icon management
+
+    Application Integration:
+    - Used by FileExplorerPanel
+    - Coordinates with filesystem indexing
+    - Supports backup operations
+    """
+
     def __init__(self):
         super().__init__()
         self.setHorizontalHeaderLabels(['Local Files'])
@@ -6940,6 +7969,25 @@ class LocalFileSystemModel(QStandardItemModel):
             return QIcon()
 
 class RemoteFileSystemModel(QStandardItemModel):
+    """Model representing remote backup storage hierarchy.
+
+    Key Functions:
+    - Displays backed up files/folders
+    - Loads metadata for remote files
+    - Manages file version information
+
+    Implementation Details:
+    - Qt model/view framework
+    - JSON metadata parsing
+    - Custom icon system
+    - Hierarchical data organization
+
+    Application Integration:
+    - Used by FileExplorerPanel
+    - Supports restore operations
+    - Shows backup status
+    """
+
     def __init__(self):
         super().__init__()
         self.setHorizontalHeaderLabels(['Remote Files'])
@@ -7039,1129 +8087,899 @@ class RemoteFileSystemModel(QStandardItemModel):
         except:
             return QIcon()
 
-# ---------------
+class BackgroundOperation:
+    """Manager for background backup/restore operations.
 
-class MetadataDialog(QDialog):
-    def __init__(self, metadata, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("File Metadata")
-        self.setMinimumSize(500, 400)
-        self.setup_ui(metadata)
+    Key Functions:
+    - Handles backup/restore processes
+    - Tracks operation progress
+    - Manages file processing queues
 
-    def setup_ui(self, metadata):
-        layout = QVBoxLayout(self)
+    Implementation Details:
+    - Multiprocessing for operations
+    - Queue-based progress updates
+    - Windows API integration
+    - Error handling system
 
-        # Metadata display
-        self.text_edit = QTextEdit()
-        self.text_edit.setReadOnly(True)
-        formatted_json = json.dumps(metadata, indent=2)
-        self.text_edit.setText(formatted_json)
-        layout.addWidget(self.text_edit)
+    Application Integration:
+    - Used by FileExplorerPanel
+    - Updates HistoryManager
+    - Reports to progress widget
+    """
 
-        # Close button
-        close_button = QPushButton("Close")
-        close_button.clicked.connect(self.accept)
+    def __init__(self, operation_type, paths, settings):
+        self.operation_type = operation_type
+        self.paths = paths if isinstance(paths, list) else [paths]
+        self.settings = settings.copy()
+        self.queue = Queue()
+        self.process = None
+        self.total_files = 0
+        self.processed_files = 0
+        self.manager = Manager()
+        self.should_stop = self.manager.Value('b', False)
+        self.user_email = settings.get('user_email')
+        self.auth_tokens = settings.get('auth_tokens')  # Get auth tokens from settings
 
-class CustomTreeCarrot(QProxyStyle):
-    def __init__(self, theme_manager):
-        super().__init__()
-        self.theme_manager = theme_manager
+        self.operation_id = self.settings.get('operation_id') or datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        self.settings['operation_id'] = self.operation_id
+        self.start_time = datetime.now()
+        self.settings['operation_start_time'] = self.start_time
 
-    def drawPrimitive(self, element, option, painter, widget=None):
-        if element == QStyle.PE_IndicatorBranch:
-            if option.state & QStyle.State_Children:
-                rect = option.rect
-                center = rect.center()
-                theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
-                
-                painter.save()
-                # Don't use antialiasing - we want crisp pixels
-                painter.setRenderHint(QPainter.Antialiasing, False)
-                
-                # Set up pen for single pixel drawing
-                pen = QPen(QColor(theme["accent_color"]))
-                pen.setWidth(1)
-                painter.setPen(pen)
-                
-                if option.state & QStyle.State_Open:
-                    # Down carrot (rotated 90 degrees from right carrot)
-                    base_x = center.x() - 3
-                    base_y = center.y() - 2
-                    
-                    # Left diagonal line
-                    for i in range(4):
-                        painter.drawPoint(base_x + i, base_y + i)
-                    # Right diagonal line
-                    for i in range(4):
-                        painter.drawPoint(base_x + 6 - i, base_y + i)
-                else:
-                    # Right carrot (keep the working version)
-                    base_x = center.x() - 2
-                    base_y = center.y() - 3
-                    
-                    # Draw top diagonal line down-right
-                    for i in range(4):
-                        painter.drawPoint(base_x + i, base_y + i)
-                    # Draw bottom diagonal line up-right
-                    for i in range(4):
-                        painter.drawPoint(base_x + i, base_y + 6 - i)
-                
-                painter.restore()
-            else:
-                super().drawPrimitive(element, option, painter, widget)
+    def start(self):
+        """Start the background operation"""
+        if self.operation_type == 'backup':
+            self.process = Process(target=BackgroundOperation._backup_worker, 
+                                 args=(self.paths, self.settings, self.queue, self.should_stop))
         else:
-            super().drawPrimitive(element, option, painter, widget)
-
-class ThemeManager(QObject):
-    theme_changed = pyqtSignal(str)
-
-    def __init__(self):
-        super().__init__()
-        self.themes = {
-            "Dark Age Classic Dark": self.dark_theme(),
-            "Light": self.light_theme()
-        }
-        self.current_theme = "Dark Age Classic Dark"
-
-    def get_theme(self, theme_name):
-        return self.themes.get(theme_name, self.themes["Dark Age Classic Dark"])
-
-    def set_theme(self, theme_name):
-        if theme_name in self.themes:
-            self.current_theme = theme_name
-            self.theme_changed.emit(theme_name)
-
-    def dark_theme(self):
-        return {
-            "app_background": "#202124",
-            "panel_background": "#333333",
-            "text_primary": "#e8eaed",
-            "text_secondary": "#9aa0a6",
-            "accent_color": "#4285F4",
-            "accent_color_hover": "#5294FF",
-            "accent_color_pressed": "#3275E4",
-            "panel_border": "#666",
-            "input_background": "#333",
-            "input_border": "#666",
-            "input_border_focus": "#8ab4f8",
-            "button_text": "white",
-            "list_item_hover": "#3c4043",
-            "list_item_selected": "#444",
-            "list_item_selected_text": "#8ab4f8",
-            "scroll_background": "#2a2a2a",
-            "scroll_handle": "#5a5a5a",
-            "scroll_handle_hover": "#6a6a6a",
-            "header_background": "#171717",
-            "divider_color": "#666",
-            
-            
-            "status_running": "#28A745",
-            "status_not_running": "#DC3545",
-            "status_unknown": "#FFC107",  # Amber color for unknown state
-            
-            "calendar_background": "#333",
-            "calendar_text": "#e8eaed",
-            "calendar_highlight": "#4285F4",
-            "calendar_highlight_text": "#ffffff",
-            "calendar_grid": "#444",
-            "calendar_today": "#8ab4f8",
-            "calendar_backup_day": "#66, 133, 244, 100",
-            "button_background": "#4285F4",
-            "button_hover": "#5294FF",
-            "button_pressed": "#3275E4",
-            "carrot_background": "#4285F4",
-            "carrot_foreground": "#FFFFFF",
-            "search_results_found": "#34A853",
-            "search_results_not_found": "#EA4335",
-            
-            
-            
-            "payment_success": "#28A745",
-            "payment_success_hover": "#218838",
-            "payment_failed": "#DC3545",
-            "payment_failed_hover": "#BD2130",
-            "payment_pending": "#FFC107",
-            "payment_pending_hover": "#E0A800",
-            "payment_neutral": "#6C757D",
-            "payment_neutral_hover": "#5A6268",
-            "payment_primary": "#007BFF",
-            "payment_primary_hover": "#0056b3",
-            "payment_info": "#17A2B8",
-            "payment_info_hover": "#138496",
-            "payment_high_priority": "#DC3545",
-            
-            "stylesheet": """
-                QMainWindow, QWidget#centralWidget, QWidget#gridWidget {
-                    background-color: #202124;
-                }
-                QWidget {
-                    background-color: transparent;
-                    color: #e8eaed;
-                    font-family: 'Arial', sans-serif;
-                }
-                QWidget[class="folder-item"] QLabel {
-                    min-width: 150px;
-                    padding: 2px;
-                    color: inherit;
-                }
-                #PanelWidget {
-                    background-color: #333333;
-                    border: 1px solid #666;
-                    border-radius: 5px;
-                }
-                #HeaderLabel {
-                    background-color: #202124;
-                    color: #8ab4f8;
-                    font-size: 16px;
-                    font-weight: bold;
-                    border: 1px solid #666;
-                    border-top-left-radius: 5px;
-                    border-top-right-radius: 5px;
-                    padding: 5px;
-                }
-                #ContentWidget {
-                    background-color: #333333;
-                    border: 1px solid #666; 
-                    border-radius: 5px;
-                    border-top: 0px;
-                    border-top-left-radius: 0px;
-                    border-top-right-radius: 0px;
-                }
-                QMenuBar, QStatusBar {
-                    background-color: #202124;
-                    color: #e8eaed;
-                }
-                QMenuBar::item:selected {
-                    background-color: #3c4043;
-                }
-                QMainWindow::title {
-                    background-color: #202124;
-                    color: #4285F4;
-                    font-size: 16px;
-                    font-weight: bold;
-                    padding-left: 10px;
-                }
-                QPushButton {
-                    background-color: #4285F4;
-                    color: white;
-                    border: none;
-                    padding: 5px 10px;
-                    border-radius: 5px;
-                    font-size: 14px;
-                }
-                QPushButton:hover {
-                    background-color: #5294FF;
-                }
-                QPushButton:pressed {
-                    background-color: #3275E4;
-                }
-                QPushButton#start_button:hover {
-                    background-color: #28A745;  /* Green when not running */
-                }
-                QPushButton#start_button[status="running"]:hover {
-                    background-color: #DC3545;  /* Red when running */
-                }
-                QLabel {
-                    font-size: 14px;
-                }
-                QListWidget, QTreeWidget, QTreeView {
-                    background-color: #333;
-                    border: none;
-                    border-radius: 5px;
-                    outline: 0;
-                    padding: 1px;
-                }
-                QListWidget::item, QTreeWidget::item, QTreeView::item {
-                    padding: 5px;
-                }
-                QListWidget::item:hover, QTreeWidget::item:hover, QTreeView::item:hover {
-                    background-color: #3c4043;
-                }
-                QListWidget::item:selected, QTreeWidget::item:selected, QTreeView::item:selected {
-                    background-color: #444;
-                    color: #8ab4f8;
-                }
-                #HeaderLabel[panelType="Configuration Dashboard"] {
-                    color: #2ECC71;
-                }
-                #HeaderLabel[panelType="Backup Schedule"] {
-                    color: #3498DB;
-                }
-                #HeaderLabel[panelType="File Explorer"] {
-                    color: #bf2ee8;
-                }
-                #HeaderLabel[panelType="Web & Folders"] {
-                    color: #F1C40F;
-                }
-                QLabel#SubpanelHeader {
-                    font-weight: bold;
-                }
-                QLabel#HistoryTypeLabel {
-                    color: #e8eaed;
-                    font-size: 14px;
-                }
-                #WebLink {
-                    background-color: transparent;
-                    color: #8ab4f8;
-                    text-align: left;
-                }
-                #WebLink:hover {
-                    text-decoration: underline;
-                }
-                QComboBox, QSpinBox, QTimeEdit {
-                    background-color: #333;
-                    color: #e8eaed;
-                    border: 1px solid #666;
-                    border-radius: 5px;
-                    padding: 5px;
-                    min-width: 6em;
-                }
-                QComboBox:hover, QSpinBox:hover, QTimeEdit:hover {
-                    border-color: #8ab4f8;
-                }
-                QComboBox::drop-down {
-                    subcontrol-origin: padding;
-                    subcontrol-position: center right;
-                    width: 20px;
-                    border-left: none;
-                    background: transparent;
-                }
-                QComboBox QAbstractItemView {
-                    border: 1px solid #666;
-                    background-color: #333;
-                    selection-background-color: #4285F4;
-                }
-                QFrame[frameShape="4"], QFrame[frameShape="5"] {
-                    color: #666;
-                    width: 1px;
-                    height: 1px;
-                }
-                QWidget:disabled {
-                    color: #888;
-                }
-                QComboBox:disabled, QTimeEdit:disabled, QSpinBox:disabled {
-                    background-color: #555;
-                    color: #888;
-                }
-                QPushButton:disabled {
-                    background-color: #555;
-                    color: #888;
-                }
-                QCheckBox {
-                    spacing: 5px;
-                }
-                #FootnoteLabel {
-                    color: #999;
-                    font-size: 12px;
-                    font-style: italic;
-                    padding-top: 5px;
-                    padding-bottom: 5px;
-                }
-                QScrollBar:vertical, QScrollBar:horizontal {
-                    background: #2a2a2a;
-                    width: 10px;
-                    height: 10px;
-                    margin: 0px;
-                }
-                QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
-                    background: #5a5a5a;
-                    min-height: 30px;
-                    min-width: 30px;
-                    border-radius: 5px;
-                }
-                QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
-                    background: #6a6a6a;
-                }
-                QScrollBar::add-line, QScrollBar::sub-line {
-                    height: 0px;
-                    width: 0px;
-                }
-                QScrollBar::add-page, QScrollBar::sub-page {
-                    background: none;
-                }
-                QTimeEdit::up-button, QTimeEdit::down-button,
-                QSpinBox::up-button, QSpinBox::down-button {
-                    background-color: transparent;
-                    border: none;
-                    width: 16px;
-                    height: 12px;
-                }
-                QSpinBox::up-arrow, QTimeEdit::up-arrow {
-                    image: url(up-arrow-dark.png);
-                    width: 8px;
-                    height: 8px;
-                }
-                QSpinBox::down-arrow, QTimeEdit::down-arrow {
-                    image: url(down-arrow-dark.png);
-                    width: 8px;
-                    height: 8px;
-                }
-                QWidget#BackupSchedulePanel[enabled="false"] {
-                    background-color: #555;
-                }
-                QWidget#BackupSchedulePanel[enabled="true"] {
-                    background-color: #333;
-                }
-                QCalendarWidget {
-                    background-color: #333;
-                    color: #e8eaed;
-                }
-                QCalendarWidget QTableView {
-                    alternate-background-color: #3a3a3a;
-                    background-color: #333;
-                }
-                QCalendarWidget QWidget {
-                    alternate-background-color: #3a3a3a;
-                }
-                QCalendarWidget QMenu {
-                    background-color: #333;
-                    color: #e8eaed;
-                }
-                QCalendarWidget QToolButton {
-                    background-color: transparent;
-                    color: #e8eaed;
-                }
-                QCalendarWidget QToolButton:hover {
-                    background-color: #4285F4;
-                    border-radius: 2px;
-                }
-                QCalendarWidget #qt_calendar_navigationbar {
-                    background-color: #2a2a2a;
-                }
-                QWidget#FileExplorerPanel {
-                    background-color: #333;
-                    color: #e8eaed;
-                    font-family: 'Segoe UI', Arial, sans-serif;
-                }
-                QLineEdit#SearchBox {
-                    background-color: #303134;
-                    border: 1px solid #5f6368;
-                    border-radius: 4px;
-                    padding: 8px;
-                    font-size: 12px;
-                    color: #e8eaed;
-                }
-                QLineEdit#SearchBox:focus {
-                    border-color: #8ab4f8;
-                }
-                QTableCornerButton::section {
-                    background-color: #333333;  /* Match table background */
-                    border: none;
-                }
-
-                QTableWidget {
-                    background-color: #333333;
-                    alternate-background-color: #3c4043;
-                    border: none;
-                    gridline-color: #666;
-                }
-                
-                QHeaderView::section {
-                    background-color: #303134;
-                    color: #e8eaed;
-                    padding: 8px;
-                    border: none;
-                    font-weight: bold;
-                }
-                
-                QHeaderView::section:first {
-                    background-color: #303134;
-                }
-                
-                QSplitter::handle {
-                    background-color: #666;
-                }
-                QGroupBox {
-                    font-weight: bold;
-                    border: 1px solid #666;
-                    border-radius: 5px;
-                    margin-top: 7px;
-                }
-                QGroupBox::title {
-                    subcontrol-origin: margin;
-                    left: 10px;
-                    padding: 0 3px 0 3px;
-                }
-                QTreeWidget#ResultsPanel QTreeWidgetItem {
-                    color: #e8eaed;
-                }
-                QTreeWidget#ResultsPanel QTreeWidgetItem[results="found"] {
-                    color: #34A853;
-                }
-                QTreeWidget#ResultsPanel QTreeWidgetItem[results="not_found"] {
-                    color: #EA4335;
-                }
-                
-                BackupScheduleCalendar {
-                    background-color: #202124;
-                }
-                BackupScheduleCalendar > QWidget#BackupScheduleSubpanel {
-                    background-color: #202124;
-                    border: 1px solid #666;
-                    border-radius: 5px;
-                }
-                BackupScheduleCalendar QGroupBox {
-                    background-color: #202124;
-                    border: 1px solid #666;
-                    border-radius: 5px;
-                    margin-top: 7px;
-                }
-                BackupScheduleCalendar QGroupBox::title {
-                    subcontrol-origin: margin;
-                    left: 10px;
-                    padding: 0 3px 0 3px;
-                }
-                BackupScheduleCalendar > QWidget#CalendarWidgetSubpanel {
-                    background-color: #202124;
-                    border-radius: 5px;
-                }
-                QTabWidget::pane {
-                    border-top: none;
-                    border-bottom: 2px solid #666;
-                }
-                QTabBar::tab {
-                    background-color: #202124;
-                    color: #e8eaed;
-                    padding: 8px 12px;
-                    margin-right: 4px;
-                    border-top-left-radius: 0;
-                    border-top-right-radius: 0;
-                    border-bottom-left-radius: 4px;
-                    border-bottom-right-radius: 4px;
-                }
-                QTabBar::tab:selected {
-                    background-color: #333333;
-                    border-bottom: 2px solid #4285F4;
-                }
-                QTabBar::tab:hover:!selected {
-                    background-color: #3c4043;
-                }
-                QToolBar {
-                    background-color: #202124;
-                    border-bottom: 1px solid #666;
-                    spacing: 10px;
-                    padding: 5px;
-                }
-                QToolBar QLabel {
-                    color: #e8eaed;
-                }
-                QToolBar QComboBox {
-                    background-color: #333;
-                    color: #e8eaed;
-                    border: 1px solid #666;
-                    border-radius: 3px;
-                    padding: 2px 5px;
-                }
-                
-                
-                /* Payment Processing Specific Styles */
-                .payment-group-box {
-                    background-color: #333333;
-                    border: 1px solid #666;
-                    border-radius: 5px;
-                    margin-top: 7px;
-                    padding-top: 10px;
-                    font-weight: bold;
-                }
-                
-                #payment-stripe-connect {
-                    background-color: #28A745;
-                    color: white;
-                    border: none;
-                    padding: 5px 10px;
-                    border-radius: 5px;
-                    font-size: 14px;
-                }
-                #payment-stripe-connect:hover {
-                    background-color: #34CE57;  /* Brighter green */
-                }
-
-                #payment-refresh-btn {
-                    background-color: #4285F4;  /* Match backup tab blue */
-                    color: white;
-                    border: none;
-                    padding: 5px 10px;
-                    border-radius: 5px;
-                    font-size: 14px;
-                }
-                #payment-refresh-btn:hover {
-                    background-color: #5294FF;  /* Match backup tab hover */
-                }
-
-                #payment-reminder-btn {
-                    background-color: #4285F4;
-                    color: white;
-                    border: none;  /* Explicitly remove border */
-                    padding: 5px 10px;
-                    border-radius: 5px;
-                    font-size: 14px;
-                    outline: none;  /* Remove outline */
-                }
-                #payment-reminder-btn:hover {
-                    background-color: #5294FF;
-                }
-                #payment-reminder-btn:focus {
-                    border: none;  /* Remove focus border */
-                    outline: none;  /* Remove focus outline */
-                }
-
-                #payment-all-reminders-btn {
-                    background-color: #4285F4;  /* Match backup tab blue */
-                    color: white;
-                    border: none;
-                    padding: 5px 10px;
-                    border-radius: 5px;
-                    font-size: 14px;
-                }
-                #payment-all-reminders-btn:hover {
-                    background-color: #5294FF;  /* Match backup tab hover */
-                }
-
-                #payment-export-btn {
-                    background-color: #17A2B8;
-                    color: white;
-                    border: none;
-                    padding: 5px 10px;
-                    border-radius: 5px;
-                    font-size: 14px;
-                }
-                #payment-export-btn:hover {
-                    background-color: #1FC8E3;  /* Brighter cyan */
-                }
-
-                #payment-total-outstanding {
-                    font-weight: bold;
-                    color: #e8eaed;
-                    margin: 5px;
-                }
-
-                #payment-overdue-count {
-                    font-weight: bold;
-                    color: #DC3545;
-                    margin: 5px;
-                }
-
-                #payment-demo-label {
-                    color: #FFC107;
-                    font-style: italic;
-                }
-
-                .payment-table {
-                    background-color: #333333;
-                    alternate-background-color: #3c4043;
-                    border: none;
-                    gridline-color: #666;
-                }
-
-                .payment-table-item {
-                    padding: 5px;
-                }
-            """
-    }
+            self.process = Process(target=BackgroundOperation._restore_worker, 
+                                 args=(self.paths, self.settings, self.queue, self.should_stop))
         
-    def light_theme(self):
-        return {
-            "app_background": "#f8f9fa",
-            "panel_background": "#ffffff",
-            "text_primary": "#202124",
-            "text_secondary": "#5f6368",
-            "accent_color": "#1a73e8",
-            "accent_color_hover": "#1967d2",
-            "accent_color_pressed": "#185abc",
-            "panel_border": "#dadce0",
-            "input_background": "#ffffff",
-            "input_border": "#dadce0",
-            "input_border_focus": "#1a73e8",
-            "button_text": "white",
-            "list_item_hover": "#f1f3f4",
-            "list_item_selected": "#e8f0fe",
-            "list_item_selected_text": "#1a73e8",
-            "scroll_background": "#f1f3f4",
-            "scroll_handle": "#dadce0",
-            "scroll_handle_hover": "#bdc1c6",
-            "header_background": "#f1f3f4",
-            "divider_color": "#dadce0",
+                # Ensure process starts safely
+        if __name__ == "__main__":
+            multiprocessing.freeze_support()
+            self.process.start()
             
-            "status_running": "#34a853",
-            "status_not_running": "#ea4335",
-            "status_unknown": "#FFC107",  # Amber color for unknown state
-            
-            "search_results_found": "#34A853",  # Green
-            "search_results_not_found": "#EA4335",  # Red
-            
-            "calendar_background": "#ffffff",
-            "calendar_text": "#202124",
-            "calendar_highlight": "#1a73e8",
-            "calendar_highlight_text": "#ffffff",
-            "calendar_grid": "#dadce0",
-            "calendar_today": "#1a73e8",
-            "calendar_backup_day": "rgba(26, 115, 232, 0.2)",
-            
-            "button_background": "#1a73e8",
-            "button_hover": "#1967d2",
-            "button_pressed": "#185abc",
-            
-            "file_explorer_background": "#ffffff",
-            "file_explorer_text": "#202124",
-            "file_explorer_search_background": "#f1f3f4",
-            "file_explorer_search_border": "#dadce0",
-            "file_explorer_search_focus_border": "#1a73e8",
-            "file_explorer_item_hover": "#f1f3f4",
-            "file_explorer_item_selected": "#e8f0fe",
-            "file_explorer_item_selected_text": "#1a73e8",
-            "file_explorer_scrollbar_background": "#f8f9fa",
-            "file_explorer_scrollbar_handle": "#dadce0",
-            "file_explorer_scrollbar_handle_hover": "#bdc1c6",
-            "file_explorer_header": "#f1f3f4",
-            "file_explorer_splitter": "#dadce0",
-            
-            "carrot_background": "#1a73e8",
-            "carrot_foreground": "#ffffff",
-            
-            "search_results_found": "#34A853",
-            "search_results_not_found": "#EA4335",
-            
-            "stylesheet": """
-                QMainWindow, QWidget {
-                    background-color: #f8f9fa;
-                    color: #202124;
-                    font-family: 'Arial', sans-serif;
-                }
-                QWidget[class="folder-item"] QLabel {
-                    min-width: 150px;
-                    padding: 2px;
-                    color: inherit;
-                }
-                QMenuBar {
-                    background-color: #ffffff;
-                    color: #202124;
-                }
-                QMenuBar::item:selected {
-                    background-color: #e8f0fe;
-                }
-                QMainWindow::title {
-                    background-color: #ffffff;
-                    color: #1a73e8;
-                    font-size: 16px;
-                    font-weight: bold;
-                    padding-left: 10px;
-                }
-                QPushButton {
-                    background-color: #1a73e8;
-                    color: white;
-                    border: none;
-                    padding: 5px 10px;
-                    border-radius: 5px;
-                    font-size: 14px;
-                }
-                QPushButton:hover {
-                    background-color: #1967d2;
-                }
-                QPushButton:pressed {
-                    background-color: #185abc;
-                }
-                QPushButton#start_button {
-                    font-size: 16px;
-                    font-weight: bold;
-                }
-                QPushButton#start_button:hover {
-                    background-color: #34a853;  /* Green when not running */
-                }
-                QPushButton#start_button[status="running"]:hover {
-                    background-color: #ea4335;  /* Red when running */
-                }
-                QLabel {
-                    font-size: 14px;
-                }
-                QLabel#SubpanelHeader {
-                    font-weight: bold;
-                }
-                QLabel#HistoryTypeLabel {
-                    color: #202124;
-                    font-size: 14px;
-                }
-                QListWidget, QTreeWidget {
-                    background-color: #ffffff;
-                    border: 1px solid #dadce0;
-                    border-radius: 5px;
-                    outline: 0;
-                    padding: 1px;
-                }
-                QListWidget::item, QTreeWidget::item {
-                    padding: 5px;
-                }
-                QListWidget::item:hover, QTreeWidget::item:hover {
-                    background-color: #f1f3f4;
-                }
-                QListWidget::item:selected, QTreeWidget::item:selected {
-                    background-color: #e8f0fe;
-                    color: #1a73e8;
-                }
-                #PanelWidget {
-                    background-color: #ffffff;
-                    border: 1px solid #dadce0;
-                    border-radius: 5px;
-                }
-                
-                QListWidget, QTreeWidget, QTreeView {
-                    background-color: #ffffff;
-                    border: none;
-                    border-radius: 5px;
-                    outline: 0;
-                    padding: 1px;
-                }
-                QListWidget::item, QTreeWidget::item, QTreeView::item {
-                    padding: 5px;
-                }
-                QListWidget::item:hover, QTreeWidget::item:hover, QTreeView::item:hover {
-                    background-color: #eee;
-                }
-                QListWidget::item:selected, QTreeWidget::item:selected, QTreeView::item:selected {
-                    background-color: #ddd;
-                    color: #2574f5;
-                }
-                
-                #HeaderLabel {
-                    font-size: 16px;
-                    font-weight: bold;
-                    background-color: #eee;
-                    border: 1px solid #dadce0;
-                    border-top-left-radius: 5px;
-                    border-top-right-radius: 5px;
-                    padding: 5px;
-                }
-                
-                #HeaderLabel[panelType="Configuration Dashboard"] {
-                    color: #228B22;
-                }
-                #HeaderLabel[panelType="Backup Schedule"] {
-                    color: #4169E1;
-                }
-                #HeaderLabel[panelType="File Explorer"] {
-                    color: #800080;
-                }
-                #HeaderLabel[panelType="Web & Folders"] {
-                    color: #daa520;
-                }
-                
-                #ContentWidget {
-                    background-color: transparent;
-                    border-bottom-left-radius: 5px;
-                    border-bottom-right-radius: 5px;
-                }
-                #WebLink {
-                    background-color: transparent;
-                    color: #1a73e8;
-                    text-align: left;
-                }
-                #WebLink:hover {
-                    text-decoration: underline;
-                }
-                QComboBox, QSpinBox, QTimeEdit {
-                    background-color: #ffffff;
-                    color: #202124;
-                    border: 1px solid #dadce0;
-                    border-radius: 5px;
-                    padding: 5px;
-                    min-width: 6em;
-                }
-                QComboBox:hover, QSpinBox:hover, QTimeEdit:hover {
-                    border-color: #1a73e8;
-                }
-                QComboBox::drop-down {
-                    subcontrol-origin: padding;
-                    subcontrol-position: center right;
-                    width: 20px;
-                    border-left: none;
-                    background: transparent;
-                }
-                QFrame[frameShape="4"],
-                QFrame[frameShape="5"] {
-                    color: #dadce0;
-                    width: 1px;
-                    height: 1px;
-                }
-                QWidget:disabled {
-                    color: #9aa0a6;
-                    background-color: #f1f3f4;
-                }
-                QCalendarWidget QWidget:disabled {
-                    color: #9aa0a6;
-                    background-color: #f1f3f4;
-                }
-                QComboBox:disabled, QTimeEdit:disabled, QSpinBox:disabled {
-                    background-color: #333;
-                    color: #bdc1c6;
-                }
-                QPushButton:disabled {
-                    background-color: #bdc1c6;
-                    color: #f1f3f4;
-                }
-                QCheckBox {
-                    spacing: 5px;
-                }
-                #FootnoteLabel {
-                    color: #5f6368;
-                    font-size: 12px;
-                    font-style: italic;
-                    padding-top: 5px;
-                    padding-bottom: 5px;
-                }
-                QScrollBar:vertical {
-                    border: none;
-                    background: #f1f3f4;
-                    width: 10px;
-                    margin: 0px;
-                }
-                QScrollBar::handle:vertical {
-                    background: #dadce0;
-                    min-height: 30px;
-                    border-radius: 5px;
-                }
-                QScrollBar::handle:vertical:hover {
-                    background: #bdc1c6;
-                }
-                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                    height: 0px;
-                }
-                QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
-                    background: none;
-                }
-                QScrollBar:horizontal {
-                    border: none;
-                    background: #f1f3f4;
-                    height: 10px;
-                    margin: 0px;
-                }
-                QScrollBar::handle:horizontal {
-                    background: #dadce0;
-                    min-width: 30px;
-                    border-radius: 5px;
-                }
-                QScrollBar::handle:horizontal:hover {
-                    background: #bdc1c6;
-                }
-                QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
-                    width: 0px;
-                }
-                QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
-                    background: none;
-                }
-                QTimeEdit::up-button, QTimeEdit::down-button,
-                QSpinBox::up-button, QSpinBox::down-button {
-                    background-color: transparent;
-                    border: none;
-                    width: 16px;
-                    height: 12px;
-                }
-                
-                QSpinBox::up-arrow, QTimeEdit::up-arrow {
-                    image: url(up-arrow-light.png);
-                    width: 8px;
-                    height: 8px;
-                }
-                QSpinBox::down-arrow, QTimeEdit::down-arrow {
-                    image: url(down-arrow-light.png);
-                    width: 8px;
-                    height: 8px;
-                }
-                QWidget#BackupSchedulePanel[enabled="false"] {
-                    background-color: #f1f3f4;
-                }
-                QWidget#BackupSchedulePanel[enabled="true"] {
-                    background-color: #ffffff;
-                }
-                QCalendarWidget {
-                    background-color: #ffffff;
-                    color: #202124;
-                }
-                QCalendarWidget QTableView {
-                    alternate-background-color: #f8f9fa;
-                    background-color: #ffffff;
-                }
-                QCalendarWidget QWidget {
-                    alternate-background-color: #f8f9fa;
-                }
-                QCalendarWidget QMenu {
-                    background-color: #ffffff;
-                    color: #202124;
-                }
-                QCalendarWidget QToolButton {
-                    color: #202124;
-                }
-                QCalendarWidget QToolButton:hover {
-                    background-color: #e8f0fe;
-                    border-radius: 2px;
-                }
-                QCalendarWidget #qt_calendar_navigationbar {
-                    background-color: #f1f3f4;
-                }
-                QWidget#FileExplorerPanel {
-                    background-color: #ffffff;
-                    color: #202124;
-                    font-family: 'Segoe UI', Arial, sans-serif;
-                }
+        return self.process.pid
 
-                QLineEdit#SearchBox {
-                    background-color: #f1f3f4;
-                    border: 1px solid #dadce0;
-                    border-radius: 4px;
-                    padding: 8px;
-                    font-size: 12px;
-                    color: #202124;
-                }
-                QHeaderView::section {
-                    background-color: #f1f3f4;
-                    color: #202124;
-                }
-                QGroupBox {
-                    font-weight: bold;
-                    border: 1px solid #666;
-                    border-radius: 5px;
-                    margin-top: 7px;
-                }
-                QGroupBox::title {
-                    subcontrol-origin: margin;
-                    left: 10px;
-                    padding: 0 3px 0 3px;
-                }
-                
-                QTreeWidget#ResultsPanel {
-                    background-color: #ffffff;
-                    border: 1px solid #dadce0;
-                    border-radius: 4px;
-                }
+    def stop(self):
+        """Stop the background operation"""
+        if self.process and self.process.is_alive():
+            self.should_stop.value = True
+            self.process.join(timeout=5)
+            if self.process.is_alive():
+                self.process.terminate()
 
-                QTreeWidget#ResultsPanel QTreeWidgetItem {
-                    color: #202124;
-                    padding: 4px;
-                }
+    def get_progress(self):
+        """Get progress updates from the queue without blocking"""
+        try:
+            while True:
+                update = self.queue.get_nowait()
+                if update.get('type') == 'total_files':
+                    self.total_files = update['value']
+                elif update.get('type') == 'file_progress':
+                    self.processed_files += 1
+                    # Calculate percentage
+                    if self.total_files > 0:
+                        percentage = (self.processed_files / self.total_files) * 100
+                        update['progress'] = percentage
+                yield update
+        except Empty:
+            return
 
-                QTreeWidget#ResultsPanel QTreeWidgetItem:hover {
-                    background-color: #f1f3f4;
-                }
+    def update_progress(self):
+        """Process progress updates from the background operation"""
+        if not hasattr(self, 'history_manager'):
+            return
+            
+        for update in self.get_progress():
+            update_type = update.get('type')
+            
+            if update_type == 'file_progress':
+                file_path = update.get('filepath', '')
+                success = update.get('success', False)
+                error_msg = update.get('error')
+                
+                # Update file status in history if record_file is True
+                if self.operation_id and update.get('record_file', True):
+                    status = OperationStatus.SUCCESS if success else OperationStatus.FAILED
+                    self.history_manager.add_file_to_operation(
+                        self.operation_id,
+                        file_path,
+                        status,
+                        error_msg
+                    )
+                    
+                # Calculate progress percentage
+                if self.total_files > 0:
+                    percentage = (self.processed_files / self.total_files) * 100
+                    yield {
+                        'type': 'progress',
+                        'value': percentage,
+                        'current_file': file_path,
+                        'status': status,
+                        'error': error_msg
+                    }
 
-                QTreeWidget#ResultsPanel QTreeWidgetItem:selected {
-                    background-color: #e8f0fe;
-                    color: #1a73e8;
-                }
+    @staticmethod
+    def _backup_worker(paths, settings, queue, should_stop):
+        """Worker process with authentication handling"""
+        if __name__ == "__main__":
+            multiprocessing.freeze_support()
+            
+        try:
+            operation_id = settings['operation_id']
+            
+            # Initialize authentication context
+            backup_utils.initialize_auth_context(
+                api_key=settings['API_KEY'],
+                agent_id=settings['AGENT_ID'],
+                auth_tokens=settings.get('auth_tokens')
+            )
+            
+            total_files = 0
+            success_count = 0
+            fail_count = 0
+            
+            # First count total files
+            for path in paths:
+                if os.path.isfile(path):
+                    total_files += 1
+                else:
+                    for _, _, files in os.walk(path):
+                        total_files += len(files)
+            
+            queue.put({'type': 'total_files', 'value': total_files})
+            
+            # Connect to hash database
+            hash_db_path = os.path.join(os.path.dirname(settings['settings_path']), 'schash.db')
+            dbconn = get_or_create_hash_db(hash_db_path)
+            
+            try:
+                processed = 0
+                for path in paths:
+                    if should_stop.value:
+                        break
+                        
+                    if os.path.isfile(path):
+                        try:
+                            success = backup_utils.process_file(
+                                pathlib.Path(path),
+                                settings['API_KEY'],
+                                settings['AGENT_ID'],
+                                dbconn,
+                                True
+                            )
+                            success_count += 1 if success else 0
+                            fail_count += 0 if success else 1
+                            processed += 1
+                            
+                            # Use consistent operation_id and ensure record_file is True
+                            queue.put({
+                                'type': 'file_progress',
+                                'filepath': path,
+                                'success': success,
+                                'total_files': total_files,
+                                'processed_files': processed,
+                                'operation_id': operation_id,
+                                'record_file': True
+                            })
+                            
+                        except Exception as e:
+                            logging.error(f"Failed to backup file {path}: {e}")
+                            fail_count += 1
+                            queue.put({
+                                'type': 'file_progress',
+                                'filepath': path,
+                                'success': False,
+                                'error': str(e),
+                                'total_files': total_files,
+                                'processed_files': processed,
+                                'operation_id': operation_id,
+                                'record_file': True
+                            })
+                    else:  # Directory
+                        for root, _, files in os.walk(path):
+                            if should_stop.value:
+                                break
+                            for file in files:
+                                if should_stop.value:
+                                    break
+                                    
+                                file_path = os.path.join(root, file)
+                                try:
+                                    normalized_path = file_path.replace('\\', '/')
+                                    
+                                    success = backup_utils.process_file(
+                                        pathlib.Path(normalized_path),
+                                        settings['API_KEY'],
+                                        settings['AGENT_ID'],
+                                        dbconn,
+                                        True
+                                    )
+                                    success_count += 1 if success else 0
+                                    fail_count += 0 if success else 1
+                                    processed += 1
+                                    
+                                    # Ensure record_file is True for directory contents
+                                    queue.put({
+                                        'type': 'file_progress',
+                                        'filepath': normalized_path,
+                                        'success': success,
+                                        'total_files': total_files,
+                                        'processed_files': processed,
+                                        'operation_id': operation_id,
+                                        'record_file': True,
+                                        'parent_folder': path
+                                    })
+                                    
+                                except Exception as e:
+                                    logging.error(f"Failed to backup file {file_path}: {e}")
+                                    fail_count += 1
+                                    queue.put({
+                                        'type': 'file_progress',
+                                        'filepath': normalized_path,
+                                        'success': False,
+                                        'error': str(e),
+                                        'total_files': total_files,
+                                        'processed_files': processed,
+                                        'operation_id': operation_id,
+                                        'record_file': True,
+                                        'parent_folder': path
+                                    })
+                                    
+            finally:
+                if dbconn:
+                    dbconn.close()
+            
+            # Send final completion status
+            if not should_stop.value:
+                successful = fail_count == 0 and success_count > 0
+                queue.put({
+                    'type': 'operation_complete',
+                    'success_count': success_count,
+                    'fail_count': fail_count,
+                    'total': total_files,
+                    'operation_id': operation_id,
+                    'status': OperationStatus.SUCCESS if successful else OperationStatus.FAILED
+                })
+            
+        except Exception as e:
+            logging.error(f"Backup worker failed: {e}")
+            # Use consistent operation_id for failure
+            queue.put({
+                'type': 'operation_failed',
+                'error': str(e),
+                'operation_id': operation_id
+            })
+
+    @staticmethod
+    def _restore_worker(paths, settings, queue, should_stop):
+        """Worker process for restore operations with enhanced logging"""
+        if __name__ == "__main__":
+            multiprocessing.freeze_support()
+        
+        try:
+            operation_id = settings['operation_id']
+            logging.info(f"Starting restore operation {operation_id} for paths: {paths}")
+            
+            # Count files that match our restore paths
+            total_files = 0
+            success_count = 0
+            fail_count = 0
+            
+            metadata_dir = os.path.join(os.getenv('APPDATA'), 'Stormcloud', 'file_explorer', 'manifest')
+            metadata_files = sorted([f for f in os.listdir(metadata_dir) 
+                                   if f.startswith('file_metadata_') and f.endswith('.json')],
+                                  reverse=True)
+            
+            if not metadata_files:
+                raise Exception("No metadata files found")
                 
-                QTreeWidget#ResultsPanel QTreeWidgetItem[results="found"] {
-                    color: #34A853;  /* Green color for results found */
-                }
-                QTreeWidget#ResultsPanel QTreeWidgetItem[results="not_found"] {
-                    color: #EA4335;  /* Red color for no results */
-                }
+            # Load the most recent metadata file
+            json_path = os.path.join(metadata_dir, metadata_files[0])
+            with open(json_path, 'r') as f:
+                metadata = json.load(f)
+            
+            restore_files = []
+            
+            for item in metadata:
+                file_path = item['ClientFullNameAndPathAsPosix']
+                file_size = item.get('FileSize', 0)  # Get size from metadata
                 
-                QWidget#FileExplorerPanel QTreeView {
-                    background-color: #ffffff;
-                    border: 1px solid #dadce0;
-                }
+                for restore_path in paths:
+                    if file_path.startswith(restore_path):
+                        restore_files.append((file_path, file_size))
+            
+                total_files = len(restore_files)
+            
+            logging.info(f"Found {total_files} backed up files to restore")
+            queue.put({'type': 'total_files', 'value': total_files})
+            
+            processed = 0
+            for path, file_size in restore_files:
+                if should_stop.value:
+                    logging.info("Restore operation cancelled by user")
+                    break
+                    
+                if os.path.isfile(path):
+                    try:
+                        logging.info(f"Attempting to restore file: {path}")
+                        
+                        # Use chunked restore for large files
+                        if file_size > 300 * 1024 * 1024:  # 300MB
+                            success = restore_utils.restore_large_file(
+                                path,
+                                settings['API_KEY'],
+                                settings['AGENT_ID'],
+                                lambda p: queue.put({
+                                    'type': 'chunk_progress',
+                                    'filepath': path,
+                                    'progress': p
+                                }),
+                                should_stop
+                            )
+                        else:
+                            success = restore_utils.restore_file(
+                                path,
+                                settings['API_KEY'],
+                                settings['AGENT_ID']
+                            )
+                        
+                        success_count += 1 if success else 0
+                        fail_count += 0 if success else 1
+                        processed += 1
+                        
+                        result_msg = "successfully" if success else "failed to"
+                        logging.info(f"{result_msg.capitalize()} restored file: {path}")
+                        
+                        queue.put({
+                            'type': 'file_progress',
+                            'filepath': path,
+                            'success': success,
+                            'total_files': total_files,
+                            'processed_files': processed,
+                            'operation_id': operation_id,
+                            'record_file': True,
+                            'parent_folder': os.path.dirname(path),
+                            'user_email': settings.get('user_email')
+                        })
+                        
+                    except Exception as e:
+                        error_msg = str(e)
+                        logging.error(f"Failed to restore file {path}: {error_msg}")
+                        fail_count += 1
+                        queue.put({
+                            'type': 'file_progress',
+                            'filepath': path,
+                            'success': False,
+                            'error': error_msg,
+                            'total_files': total_files,
+                            'processed_files': processed,
+                            'operation_id': operation_id,
+                            'record_file': True,
+                            'parent_folder': os.path.dirname(path),
+                            'user_email': settings.get('user_email')
+                        })
+                        
+                else:  # Directory
+                    logging.info(f"Processing directory: {path}")
+                    for root, _, files in os.walk(path):
+                        if should_stop.value:
+                            break
+                        for file in files:
+                            if should_stop.value:
+                                break
+                                
+                            file_path = os.path.join(root, file)
+                            try:
+                                normalized_path = file_path.replace('\\', '/')
+                                logging.info(f"Attempting to restore file: {normalized_path}")
+                                
+                                success = restore_utils.restore_file(
+                                    normalized_path,
+                                    settings['API_KEY'],
+                                    settings['AGENT_ID']
+                                )
+                                success_count += 1 if success else 0
+                                fail_count += 0 if success else 1
+                                processed += 1
+                                
+                                result_msg = "successfully" if success else "failed to"
+                                logging.info(f"{result_msg.capitalize()} restored file: {normalized_path}")
+                                
+                                queue.put({
+                                    'type': 'file_progress',
+                                    'filepath': normalized_path,
+                                    'success': success,
+                                    'total_files': total_files,
+                                    'processed_files': processed,
+                                    'operation_id': operation_id,
+                                    'record_file': True,
+                                    'parent_folder': path,
+                                    'user_email': settings.get('user_email')
+                                })
+                                
+                            except Exception as e:
+                                error_msg = str(e)
+                                logging.error(f"Failed to restore file {file_path}: {error_msg}")
+                                fail_count += 1
+                                queue.put({
+                                    'type': 'file_progress',
+                                    'filepath': normalized_path,
+                                    'success': False,
+                                    'error': error_msg,
+                                    'total_files': total_files,
+                                    'processed_files': processed,
+                                    'operation_id': operation_id,
+                                    'record_file': True,
+                                    'parent_folder': path,
+                                    'user_email': settings.get('user_email')
+                                })
+            
+            # Send final completion status
+            if not should_stop.value:
+                successful = fail_count == 0 and success_count > 0
+                logging.info(f"Restore operation completed. Success: {success_count}, Failed: {fail_count}, Total: {total_files}")
+                queue.put({
+                    'type': 'operation_complete',
+                    'success_count': success_count,
+                    'fail_count': fail_count,
+                    'total': total_files,
+                    'operation_id': operation_id,
+                    'status': OperationStatus.SUCCESS if successful else OperationStatus.FAILED,
+                    'user_email': settings.get('user_email')
+                })
+                    
+        except Exception as e:
+            error_msg = str(e)
+            logging.error(f"Restore worker failed: {error_msg}", exc_info=True)
+            queue.put({
+                'type': 'operation_failed',
+                'error': error_msg,
+                'operation_id': operation_id,
+                'user_email': settings.get('user_email')
+            })
+
+class OperationProgressWidget(QWidget):
+    """Progress display for file operations.
+
+    Key Functions:
+    - Shows operation progress
+    - Displays current file status
+    - Allows operation cancellation
+
+    Implementation Details:
+    - Qt progress interface
+    - Theme-aware display
+    - Operation status tracking
+
+    Application Integration:
+    - Used by FileExplorerPanel
+    - Updates operation status
+    - Theme system integration
+    """
+
+    operation_completed = pyqtSignal(dict)  # Emits final status when complete
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.theme_manager = parent.theme_manager if parent else None
+        self.history_manager = None
+        self._user_email = None
+        self.init_ui()
+        self.background_op = None
+        self.timer = None
+
+    @property
+    def user_email(self) -> Optional[str]:
+        return self._user_email
+
+    @user_email.setter
+    def user_email(self, email: Optional[str]):
+        self._user_email = email
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
+
+        # Progress information
+        info_layout = QHBoxLayout()
+        self.operation_label = QLabel("Operation: None")
+        self.file_count_label = QLabel("Files: 0/0")
+        info_layout.addWidget(self.operation_label)
+        info_layout.addWidget(self.file_count_label)
+        info_layout.addStretch()
+        
+        # Cancel button
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(self.cancel_operation)
+        self.cancel_button.setFixedWidth(70)
+        info_layout.addWidget(self.cancel_button)
+        
+        layout.addLayout(info_layout)
+
+        # Progress bar
+        self.progress_bar = QProgressBar()
+        layout.addWidget(self.progress_bar)
+
+        # Current file label
+        self.current_file_label = QLabel()
+        self.current_file_label.setWordWrap(True)
+        layout.addWidget(self.current_file_label)
+
+        self.setVisible(False)
+        self.apply_theme()
+
+    def apply_theme(self):
+        if not self.theme_manager:
+            return
+            
+        theme = self.theme_manager.get_theme(self.theme_manager.current_theme)
+        self.setStyleSheet(f"""
+            QLabel {{
+                color: {theme['text_primary']};
+            }}
+            QProgressBar {{
+                border: 1px solid {theme['input_border']};
+                border-radius: 3px;
+                text-align: center;
+                background-color: {theme['panel_background']};
+            }}
+            QProgressBar::chunk {{
+                background-color: {theme['accent_color']};
+            }}
+        """)
+
+    def start_operation(self, operation_type, paths, settings):
+        """Start a new operation with non-blocking progress updates"""
+        # Store the user email but don't update history manager
+        self._user_email = settings.get('user_email')
+        
+        self.background_op = BackgroundOperation(operation_type, paths, settings)
+        self.background_op.start()
+        
+        if self.history_manager:
+            # Remove this line - don't update history_manager's email here
+            # self.history_manager.current_user_email = settings.get('user_email')
+            pass
+        
+        self.operation_id = settings.get('operation_id')
+        self.operation_label.setText(f"Operation: {operation_type.capitalize()}")
+        self.progress_bar.setValue(0)
+        self.current_file_label.setText("Preparing...")
+        self.setVisible(True)
+        
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_progress)
+        self.timer.start(100)
+
+    def update_progress(self):
+        """Process progress updates from the background operation with enhanced logging"""
+        if not self.background_op:
+            return
                 
-                QWidget#FileExplorerPanel QLineEdit#SearchBox {
-                    background-color: #f1f3f4;
-                    border: 1px solid #dadce0;
-                    color: #202124;
-                    padding: 8px;
-                }
+        try:
+            # logging.debug("Checking for progress updates...")
+            while True:
+                try:
+                    update = self.background_op.queue.get_nowait()
+                    logging.debug(f"Received update: {update.get('type')}")
+                    
+                    if update['type'] == 'total_files':
+                        logging.info(f"Setting total files to process: {update['value']}")
+                        self.file_count_label.setText(f"Files: 0/{update['value']}")
+                        
+                    elif update['type'] == 'file_progress':
+                        file_path = update.get('filepath', '')
+                        success = update.get('success', False)
+                        error_msg = update.get('error')
+                        
+                        if self.operation_id and update.get('record_file', True):
+                            status = OperationStatus.SUCCESS if success else OperationStatus.FAILED
+                            logging.info(f"Recording file status - Path: {file_path}, Status: {status}")
+                            self.history_manager.add_file_to_operation(
+                                self.operation_id,
+                                file_path,
+                                status,
+                                error_msg
+                            )
+                        
+                        # Update progress percentage
+                        if update.get('total_files', 0) > 0:
+                            total_files = update.get('total_files', 0)
+                            processed_files = update.get('processed_files', 0)
+                            percentage = (processed_files / total_files) * 100
+                            self.progress_bar.setValue(int(percentage))
+                            self.file_count_label.setText(f"Files: {processed_files}/{total_files}")
+                            logging.info(f"Progress update: {processed_files}/{total_files} files ({percentage:.1f}%)")
+                        
+                        # Update current file label
+                        if 'filepath' in update:
+                            file_name = os.path.basename(file_path)
+                            self.current_file_label.setText(f"Processing: {file_name}")
+                            if error_msg:
+                                logging.error(f"Error processing {file_name}: {error_msg}")
+                                
+                    elif update['type'] == 'operation_complete':
+                        logging.info("Operation completed successfully")
+                        logging.info(f"Final stats - Success: {update.get('success_count', 0)}, "
+                                   f"Failed: {update.get('fail_count', 0)}, "
+                                   f"Total: {update.get('total', 0)}")
+                                   
+                        if self.history_manager:
+                            final_status = OperationStatus.SUCCESS if update['fail_count'] == 0 else OperationStatus.FAILED
+                            self.history_manager.complete_operation(
+                                update.get('operation_id'),
+                                final_status
+                            )
+                        
+                        self.operation_completed.emit({
+                            'success_count': update.get('success_count', 0),
+                            'fail_count': update.get('fail_count', 0),
+                            'total': update.get('total', 0),
+                            'operation_type': self.background_op.operation_type
+                        })
+                        self.cleanup()
+                        break
+                        
+                    elif update['type'] == 'operation_failed':
+                        logging.error(f"Operation failed: {update.get('error', 'Unknown error')}")
+                        if self.history_manager:
+                            self.history_manager.complete_operation(
+                                update.get('operation_id'),
+                                OperationStatus.FAILED,
+                                update.get('error')
+                            )
+                        
+                        self.operation_completed.emit({
+                            'error': update.get('error', 'Operation failed'),
+                            'operation_type': self.background_op.operation_type
+                        })
+                        self.cleanup()
+                        break
+                        
+                except Empty:
+                    break
+                        
+        except Exception as e:
+            logging.error(f"Error updating progress: {e}", exc_info=True)
+            self.cleanup()
+        
+    def cancel_operation(self):
+        """Cancel the current operation"""
+        if self.background_op:
+            operation_type = self.background_op.operation_type
+            operation_id = self.background_op.operation_id
+            user_email = self.user_email  # Get current user's email
+            
+            # Stop the background operation
+            self.background_op.stop()
+            
+            # Recalculate final status based on completed files
+            if self.history_manager:
+                event = self.history_manager.get_operation(operation_id)
+                if event:
+                    completed_files = [f for f in event.files 
+                                     if f.status != OperationStatus.IN_PROGRESS]
+                    if completed_files:
+                        # Determine final status based on completed files
+                        final_status = (OperationStatus.FAILED 
+                                      if any(f.status == OperationStatus.FAILED for f in completed_files)
+                                      else OperationStatus.SUCCESS)
+                        
+                        # Update the operation's status with user email
+                        self.history_manager.complete_operation(
+                            operation_id,
+                            final_status,
+                            "Operation cancelled by user",
+                            user_email  # Pass user email
+                        )
+                    else:
+                        # No files completed, mark as failed
+                        self.history_manager.complete_operation(
+                            operation_id,
+                            OperationStatus.FAILED,
+                            "Operation cancelled by user before any files were processed",
+                            user_email  # Pass user email
+                        )
+            
+            self.operation_completed.emit({
+                'error': 'Operation cancelled by user',
+                'operation_type': operation_type
+            })
+            self.cleanup()
+
+    def cleanup(self):
+        """Clean up after operation completes"""
+        if self.timer:
+            self.timer.stop()
+            self.timer = None
+            
+        if self.background_op:
+            self.background_op.stop()
+            self.background_op = None
+            
+        self.setVisible(False)
+
+class PreviewButtonDelegate(QStyledItemDelegate):
+    """Custom delegate for file preview buttons.
+
+    Key Functions:
+    - Renders preview buttons
+    - Handles preview interactions
+    - Manages preview state
+
+    Implementation Details:
+    - Custom Qt delegate
+    - Preview functionality
+    - Theme integration
+
+    Application Integration:
+    - Used in file explorer views
+    - Manages file previews
+    - Theme coordination
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._pressed = None
+        
+    def createEditor(self, parent, option, index):
+        return None
+        
+    def paint(self, painter, option, index):
+        # First draw the default item
+        super().paint(painter, option, index)
+        
+        # Debug logging
+        metadata = index.data(Qt.UserRole)
+        logging.debug(f"Item metadata: {metadata}")
+        
+        if not metadata or not isinstance(metadata, dict):
+            logging.debug(f"Invalid metadata for index")
+            return
                 
-                QWidget#ResultsPanel {
-                    background-color: #ffffff;
-                    border: 1px solid #dadce0;
-                }
+        filepath = metadata.get('ClientFullNameAndPathAsPosix')
+        logging.debug(f"Checking filepath: {filepath}")
+        if not filepath:
+            logging.debug("No filepath found")
+            return
                 
-                QLineEdit#SearchBox {
-                    background-color: #eee;
-                    border: 1px solid #ccc;
-                    border-radius: 4px;
-                    padding: 8px;
-                    font-size: 12px;
-                    color: #202124;
-                }
-                QLineEdit#SearchBox:focus {
-                    border-color: #1a73e8;
-                }
+        # Log before checking if previewable    
+        logging.debug(f"Checking if previewable: {filepath}")
+        if not restore_utils.is_previewable_file(filepath):
+            logging.debug(f"File not marked as previewable: {filepath}")
+            return
+            
+        logging.debug(f"Drawing preview button for: {filepath}")
+
+        # Draw the preview button
+        button_rect = self.get_button_rect(option.rect)
+        
+        if option.state & QStyle.State_MouseOver and self._pressed == index:
+            button_color = QColor("#1967d2")  # Darker blue when pressed
+        elif option.state & QStyle.State_MouseOver:
+            button_color = QColor("#1a73e8")  # Normal blue
+        else:
+            button_color = QColor("#4285F4")  # Light blue
+            
+        painter.save()
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(button_color)
+        painter.drawRoundedRect(button_rect, 3, 3)
+        
+        # Draw text
+        painter.setPen(Qt.white)
+        painter.drawText(button_rect, Qt.AlignCenter, "Preview")
+        painter.restore()
+        
+    def editorEvent(self, event, model, option, index):
+        if not index.isValid():
+            return False
+            
+        metadata = index.data(Qt.UserRole)
+        if not metadata or not isinstance(metadata, dict):
+            return False
+            
+        filepath = metadata.get('ClientFullNameAndPathAsPosix')
+        if not filepath or not restore_utils.is_previewable_file(filepath):
+            return False
+            
+        button_rect = self.get_button_rect(option.rect)
+        
+        if event.type() == QEvent.MouseButtonPress:
+            if button_rect.contains(event.pos()):
+                self._pressed = index
+                return True
                 
-                QListWidget#backup_paths_list {
-                    background-color: #ffffff;
-                }
-                QListWidget#backup_paths_list::item {
-                    background-color: #ffffff;
-                }
+        elif event.type() == QEvent.MouseButtonRelease:
+            if self._pressed == index and button_rect.contains(event.pos()):
+                self._pressed = None
+                self.preview_file(index)
+                return True
+            self._pressed = None
+            
+        return False
+        
+    def get_button_rect(self, item_rect):
+        button_width = 60
+        button_height = 24
+        return QRect(
+            item_rect.right() - button_width - 5,
+            item_rect.center().y() - button_height // 2,
+            button_width,
+            button_height
+        )
+        
+    def preview_file(self, index):
+        metadata = index.data(Qt.UserRole)
+        filepath = metadata.get('ClientFullNameAndPathAsPosix')  # e.g. "C:/Users/Tyler/Documents/Dark_Age/about_us.txt"
+        
+        # Extract just the relative portion from the full path
+        if ':' in filepath:
+            relative_path = filepath.split(':', 1)[1]  # "/Users/Tyler/Documents/Dark_Age/about_us.txt"
+        else:
+            relative_path = filepath
+            
+        # Calculate preview path using just the relative portion
+        preview_dir = os.path.join(os.getenv('APPDATA'), 'Stormcloud', 'restore_preview')
+        preview_path = os.path.join(preview_dir, relative_path.lstrip('/').lstrip('\\'))
+        
+        # Show progress indicator
+        tree_view = self.parent()
+        panel = tree_view.window().findChild(FileExplorerPanel)
+        if not panel:
+            logging.error("Could not find FileExplorerPanel")
+            return
+        
+        if hasattr(tree_view, 'remote_progress'):
+            tree_view.remote_progress.setVisible(True)
+            tree_view.remote_progress.setRange(0, 0)  # Indeterminate
+            
+        try:
+            settings = panel.read_settings()
+            if not settings:
+                return
+            
+            success = restore_utils.restore_file(
+                filepath,  # Use original path for restore request
+                settings['API_KEY'],
+                settings['AGENT_ID'],
+                preview_path=preview_path  # Use cleaned preview path for saving
+            )
+            
+            if success:
+                if os.path.exists(preview_path):
+                    if os.name == 'nt':  # Windows
+                        os.startfile(preview_path)
+                    else:
+                        subprocess.run(['xdg-open', preview_path])
+                        
+            else:
+                logging.error(f"Failed to preview file: {preview_path}")
                 
-                BackupScheduleCalendar {
-                    background-color: #f1f3f4;
-                }
-                BackupScheduleCalendar > QWidget#BackupScheduleSubpanel {
-                    background-color: #f1f3f4;
-                    border: 1px solid #666;
-                    border-radius: 5px;
-                }
-                BackupScheduleCalendar QGroupBox {
-                    background-color: #f1f3f4;
-                    border: 1px solid #666;
-                    border-radius: 5px;
-                    margin-top: 7px;
-                }
-                BackupScheduleCalendar QGroupBox::title {
-                    subcontrol-origin: margin;
-                    left: 10px;
-                    padding: 0 3px 0 3px;
-                }
-                BackupScheduleCalendar > QWidget#CalendarWidgetSubpanel {
-                    background-color: #f1f3f4;
-                    border-radius: 5px;
-                }
-                
-                QTabWidget::pane {
-                    border-top: 2px solid #dadce0;
-                    background-color: #ffffff;
-                }
-                QTabWidget::tab-bar {
-                    left: 5px;
-                }
-                QTabBar::tab {
-                    background-color: #f8f9fa;
-                    color: #202124;
-                    padding: 8px 12px;
-                    margin-right: 4px;
-                    border-top-left-radius: 4px;
-                    border-top-right-radius: 4px;
-                }
-                QTabBar::tab:selected {
-                    background-color: #ffffff;
-                    border-top: 2px solid #1a73e8;
-                }
-                QTabBar::tab:hover:!selected {
-                    background-color: #f1f3f4;
-                }
-                
-                QToolBar {
-                    background-color: #f8f9fa;
-                    border-bottom: 1px solid #dadce0;
-                    spacing: 10px;
-                    padding: 5px;
-                }
-                QToolBar QLabel {
-                    color: #202124;
-                }
-                QToolBar QComboBox {
-                    background-color: #ffffff;
-                    color: #202124;
-                    border: 1px solid #dadce0;
-                    border-radius: 3px;
-                    padding: 2px 5px;
-                }
-            """
-        }
+        except Exception as e:
+            logging.error(f"Error previewing file: {e}", exc_info=True)
+        finally:
+            if hasattr(tree_view, 'remote_progress'):
+                tree_view.remote_progress.setVisible(False)
+# -----------
 
 # Ensure spawn is used for multiprocessing
 multiprocessing.set_start_method("spawn", force=True)
 
 def main():
     """Main entry point."""
-    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s',
-                        filename='stormcloud_app.log', filemode='a')
+    
+    logging.basicConfig(
+        filename='%s_%s.log' % ("sc_app", datetime.now().strftime("%Y-%m-%d")),
+        filemode='a',
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S',
+        level=logging.DEBUG,
+        force=True
+    )
 
     # Multiprocessing freeze support for Windows
     multiprocessing.freeze_support()
