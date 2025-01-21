@@ -17,6 +17,7 @@ API_ENDPOINT_REGISTER_BACKUP_FOLDERS = 'https://%s:%d/api/register-backup-folder
 API_ENDPOINT_FILE_METADATA           = 'https://%s:%d/api/file-metadata'           % (SERVER_NAME,SERVER_PORT)
 # API_ENDPOINT_AUTHENTICATE            = 'https://%s:%d/api/validate-api-key'        % (SERVER_NAME,SERVER_PORT)
 API_ENDPOINT_LOGIN                   = 'https://%s:%d/api/login'                   % (SERVER_NAME,SERVER_PORT)
+API_ENDPOINT_SUMMARIZE_FILE          = 'https://%s:%d/api/summarize-file'          % (SERVER_NAME,SERVER_PORT)
 
 def fetch_file_metadata(api_key, agent_id):
     url = API_ENDPOINT_FILE_METADATA
@@ -29,6 +30,7 @@ def fetch_file_metadata(api_key, agent_id):
     try:
         response = requests.post(url, headers=headers, json=data)
         response.raise_for_status()
+        logging.info("Received %d records from fetch_file_metadata" % len(response.json()['data']))
         return response.json()['data']
     except requests.RequestException as e:
         logging.error(f"Error fetching file metadata: {e}")
@@ -103,6 +105,7 @@ def ship_file_to_server(api_key,agent_id,path):
             path
         )
 
+    #crypto_utils.remove_temp_file(unencrypted_path_to_encrypted_file)
     return ret
 
 def stream_upload_file(api_key,agent_id,local_file_path):
@@ -249,3 +252,25 @@ def sync_backup_folders(settings):
     except Exception as e:
         logging.error(f"Error synchronizing backup folders: {str(e)}")
         return False
+        
+def summarize_file_with_ai(api_key: str, agent_id: str, filepath: str, content: str) -> dict:
+    """Request AI summary of file from server."""
+    url = API_ENDPOINT_SUMMARIZE_FILE
+    headers = {'Content-Type': 'application/json'}
+    data = {
+        'api_key': api_key,
+        'agent_id': agent_id,
+        'filepath': base64.b64encode(str(filepath).encode("utf-8")).decode('utf-8'),
+        'content': base64.b64encode(content.encode("utf-8")).decode('utf-8')
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=data)
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        logging.error(f"Error getting file summary: {e}")
+        return {
+            'success': False, 
+            'message': f"Failed to get summary: {str(e)}"
+        }
