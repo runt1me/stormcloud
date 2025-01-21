@@ -10,6 +10,7 @@ import backup_handlers, keepalive_handlers, restore_handlers
 import generic_handlers
 import new_customer_handlers
 import stripe_handlers
+import claude_handlers
 
 from werkzeug.formparser import parse_form_data
 from werkzeug.formparser import default_stream_factory
@@ -551,6 +552,8 @@ def authenticate():
             "message": "Invalid credentials"
         }), 401
 
+# Stripe calls
+# -------------------------
 @app.route('/api/stripe/create-customer', methods=['POST'])
 def create_stripe_customer():
     logger.info(flask.request)
@@ -612,6 +615,27 @@ def list_stripe_customers():
         return response_data, ret_code, {'Content-Type': 'application/json'}
     else:
         return RESPONSE_400_BAD_REQUEST
+# -------------------------
+
+# Claude/External LLM calls
+# -------------------------
+@app.route('/api/summarize-file', methods=['POST'])
+def summarize_file():
+    logger.info(flask.request)
+    if flask.request.headers['Content-Type'] != 'application/json':
+        return RESPONSE_400_MUST_BE_JSON
+
+    data = flask.request.get_json()
+    if data:
+        result, response = validate_request_generic(data)
+        if not result:
+            return response
+
+        ret_code, response_data = claude_handlers.handle_summarize_file_request(data)
+        return response_data, ret_code, {'Content-Type': 'application/json'}
+    else:
+        return RESPONSE_400_BAD_REQUEST
+# -------------------------
 
 @app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE'])
 def catch_all(path):
