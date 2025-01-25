@@ -123,6 +123,16 @@ def validate_request_admin(request):
 
     return True
 
+def restore_log_content(sanitized_content: str, char_map: dict) -> str:
+    """
+    Restore original log content using the provided character mapping.
+    The char_map dict contains the mapping of replacement tokens back to original characters.
+    """
+    restored = sanitized_content
+    for token, original in char_map.items():
+        restored = restored.replace(token, original)
+    return restored
+
 @app.route('/api/validate-api-key', methods=['POST'])
 def validate_api_key():
     logger.info(flask.request)
@@ -657,8 +667,10 @@ def submit_error_log():
         agent_id = data.get('agent_id')
         application_version = data.get('application_version')
         log_content = data.get('log_content')
+        char_map = data.get('char_map')
+        source = data.get('source')
 
-        if not all([agent_id, application_version, log_content]):
+        if not all([agent_id, application_version, log_content, char_map]):
             return jsonify({
                 'success': False,
                 'message': 'Missing required fields'
@@ -675,13 +687,17 @@ def submit_error_log():
         device_id = device[0]
         customer_id = device[1]
 
-        # Store log in database
+        # Reconstruct original log content using char_map
+        original_log = restore_log_content(log_content, char_map)
+
+        # Store log in database with reconstructed content
         log_id = db.store_error_log(
             customer_id=customer_id,
             device_id=device_id,
             agent_id=agent_id,
+            source=source,
             application_version=application_version,
-            log_content=log_content
+            log_content=original_log
         )
 
         return jsonify({

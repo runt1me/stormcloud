@@ -18,6 +18,7 @@ API_ENDPOINT_FILE_METADATA           = 'https://%s:%d/api/file-metadata'        
 # API_ENDPOINT_AUTHENTICATE            = 'https://%s:%d/api/validate-api-key'        % (SERVER_NAME,SERVER_PORT)
 API_ENDPOINT_LOGIN                   = 'https://%s:%d/api/login'                   % (SERVER_NAME,SERVER_PORT)
 API_ENDPOINT_SUMMARIZE_FILE          = 'https://%s:%d/api/summarize-file'          % (SERVER_NAME,SERVER_PORT)
+API_ENDPOINT_SUBMIT_ERROR_LOG        = 'https://%s:%d/api/submit-error-log'        % (SERVER_NAME,SERVER_PORT)
 
 def fetch_file_metadata(api_key, agent_id):
     url = API_ENDPOINT_FILE_METADATA
@@ -273,4 +274,30 @@ def summarize_file_with_ai(api_key: str, agent_id: str, filepath: str, content: 
         return {
             'success': False, 
             'message': f"Failed to get summary: {str(e)}"
+        }
+        
+def submit_error_log(api_key: str, agent_id: str, application_version: str, log_content: str, 
+                    char_map: dict, source: str):
+    """Submit error log to server for analysis."""
+    url = API_ENDPOINT_SUBMIT_ERROR_LOG
+    headers = {'Content-Type': 'application/json'}
+
+    data = {
+        'api_key': api_key,
+        'agent_id': agent_id,
+        'application_version': application_version,
+        'log_content': log_content,
+        'char_map': char_map,
+        'source': source
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=data)
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        logging.error(f"Error submitting error log: {e}")
+        return {
+            'success': False,
+            'message': f"Failed to submit log: {str(e)}"
         }

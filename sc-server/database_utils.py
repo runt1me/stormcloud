@@ -768,7 +768,7 @@ def get_file_metadata_for_agent(agent_id):
         __teardown__(cursor, cnx)
         return ret
 
-def store_error_log(customer_id, device_id, agent_id, application_version, log_content):
+def store_error_log(customer_id, device_id, agent_id, source, application_version, log_content):
     """Store an error log and return the log ID"""
     ret = None
     cnx = __connect_to_db__()
@@ -779,6 +779,7 @@ def store_error_log(customer_id, device_id, agent_id, application_version, log_c
             customer_id,
             device_id,
             agent_id,
+            source,
             application_version,
             log_content
         ))
