@@ -768,6 +768,35 @@ def get_file_metadata_for_agent(agent_id):
         __teardown__(cursor, cnx)
         return ret
 
+def store_error_log(customer_id, device_id, agent_id, application_version, log_content):
+    """Store an error log and return the log ID"""
+    ret = None
+    cnx = __connect_to_db__()
+    cursor = cnx.cursor(buffered=True)
+
+    try:
+        cursor.callproc('store_error_log', (
+            customer_id,
+            device_id,
+            agent_id,
+            application_version,
+            log_content
+        ))
+
+        for result in cursor.stored_results():
+            row = result.fetchone()
+            if row:
+                ret = row[0]  # Get the log_id
+
+    except Error as e:
+        __logger__().error(f"Error storing error log: {e}")
+        raise
+
+    finally:
+        cnx.commit()
+        __teardown__(cursor, cnx)
+        return ret
+
 def validate_user_credentials(username, password):
     """
     Validate user credentials using stored procedure and SHA-512 hash

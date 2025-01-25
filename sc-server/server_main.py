@@ -637,6 +637,67 @@ def summarize_file():
         return RESPONSE_400_BAD_REQUEST
 # -------------------------
 
+@app.route('/api/submit-error-log', methods=['POST'])
+def submit_error_log():
+    logger.info(flask.request)
+    if flask.request.headers['Content-Type'] != 'application/json':
+        return RESPONSE_400_MUST_BE_JSON
+
+    data = flask.request.get_json()
+    if not data:
+        return RESPONSE_400_BAD_REQUEST
+
+    # Validate request and authenticate
+    result, response = validate_request_generic(data)
+    if not result:
+        return response
+
+    try:
+        # Extract required fields
+        agent_id = data.get('agent_id')
+        application_version = data.get('application_version')
+        log_content = data.get('log_content')
+
+        if not all([agent_id, application_version, log_content]):
+            return jsonify({
+                'success': False,
+                'message': 'Missing required fields'
+            }), 400
+
+        # Get device and customer info
+        device = db.get_device_by_agent_id(agent_id)
+        if not device:
+            return jsonify({
+                'success': False,
+                'message': 'Invalid agent ID'
+            }), 401
+
+        device_id = device[0]
+        customer_id = device[1]
+
+        # Store log in database
+        log_id = db.store_error_log(
+            customer_id=customer_id,
+            device_id=device_id,
+            agent_id=agent_id,
+            application_version=application_version,
+            log_content=log_content
+        )
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'log_id': log_id
+            }
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error processing error log submission: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': 'Internal server error'
+        }), 500
+
 @app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE'])
 def catch_all(path):
     logger.warning(f"Unmatched route: {path}")
