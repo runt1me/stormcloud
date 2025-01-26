@@ -123,11 +123,23 @@ def validate_request_admin(request):
 
     return True
 
-def restore_log_content(sanitized_content: str, char_map: dict) -> str:
+def restore_log_content(sanitized_content: str) -> str:
     """
     Restore original log content using the provided character mapping.
     The char_map dict contains the mapping of replacement tokens back to original characters.
     """
+    
+    SAFE_CHAR_MAP = {
+        ':': 'x7F9qL3n',
+        ';': 'kR5mP8vY',
+        "'": 'tH2wJ4cX',
+        '"': 'bN6gK9dQ',
+        '\\': 'sA4hM7pZ',
+        '--': 'uE8fV5yW',
+        '*': 'iB3cT6rU'
+    }
+    char_map = {v: k for k, v in SAFE_CHAR_MAP.items()}
+    
     restored = sanitized_content
     for token, original in char_map.items():
         restored = restored.replace(token, original)
@@ -667,10 +679,9 @@ def submit_error_log():
         agent_id = data.get('agent_id')
         application_version = data.get('application_version')
         log_content = data.get('log_content')
-        char_map = data.get('char_map')
         source = data.get('source')
 
-        if not all([agent_id, application_version, log_content, char_map]):
+        if not all([agent_id, application_version, log_content]):
             return jsonify({
                 'success': False,
                 'message': 'Missing required fields'
@@ -688,7 +699,7 @@ def submit_error_log():
         customer_id = device[1]
 
         # Reconstruct original log content using char_map
-        original_log = restore_log_content(log_content, char_map)
+        original_log = restore_log_content(log_content)
 
         # Store log in database with reconstructed content
         log_id = db.store_error_log(

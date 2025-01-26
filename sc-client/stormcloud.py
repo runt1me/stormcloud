@@ -792,6 +792,116 @@ class DriveDetectionDialog(QDialog):
         
         return None
 
+class LogMonitor:
+    """Monitors application and core logs for errors."""
+
+    def __init__(self, install_directory: str, api_key: str, agent_id: str):
+        self.install_directory = install_directory
+        self.api_key = api_key
+        self.agent_id = agent_id
+        self.last_check_positions = {'application': 0, 'core': 0}
+        
+        # Define character mapping for sanitization
+        self.char_map = {
+            ':': 'x7F9qL3n',
+            ';': 'kR5mP8vY',
+            "'": 'tH2wJ4cX',
+            '"': 'bN6gK9dQ',
+            '\\': 'sA4hM7pZ',
+            '--': 'uE8fV5yW',
+            '*': 'iB3cT6rU'
+        }
+        
+        # Get log file paths
+        self.log_files = {
+            'application': os.path.join(install_directory, 'logs',
+                                      f'sc_app_{datetime.now().strftime("%Y-%m-%d")}.log'),
+            'core': os.path.join(install_directory, 'logs',
+                               f'sc_core_{datetime.now().strftime("%Y-%m-%d")}.log')
+        }
+
+    def sanitize_log_content(self, content: str) -> tuple[str, dict]:
+        """
+        Sanitize log content by replacing problematic characters with safe tokens.
+        Returns sanitized content and the mapping dictionary for reversal.
+        """
+        
+        sanitized = content
+        for char, replacement in self.char_map.items():
+            sanitized = sanitized.replace(char, replacement)
+        
+        return sanitized
+
+    def scan_logs(self):
+        """Scan logs for errors and return any found error content."""
+        errors_found = []
+
+        for source, log_path in self.log_files.items():
+            if not os.path.exists(log_path):
+                continue
+
+            try:
+                with open(log_path, 'r') as f:
+                    # Seek to last checked position
+                    f.seek(self.last_check_positions[source])
+                    
+                    # Read new content
+                    new_content = f.read()
+                    
+                    # Update position
+                    self.last_check_positions[source] = f.tell()
+
+                    # Look for error indicators
+                    lines = new_content.split('\n')
+                    error_block = []
+                    in_error_block = False
+
+                    for line in lines:
+                        if 'ERROR' in line or 'CRITICAL' in line:
+                            if not in_error_block:
+                                in_error_block = True
+                                error_block = [line]
+                            else:
+                                error_block.append(line)
+                        elif in_error_block:
+                            if line.strip():  # Continue collecting related lines
+                                error_block.append(line)
+                            else:  # Empty line marks end of error block
+                                if error_block:
+                                    errors_found.append({
+                                        'source': source,
+                                        'content': self.sanitize_log_content('\n'.join(error_block))
+                                    })
+                                in_error_block = False
+                                error_block = []
+
+                    # Add any remaining error block
+                    if error_block:
+                        errors_found.append({
+                            'source': source,
+                            'content': self.sanitize_log_content('\n'.join(error_block))
+                        })
+
+            except Exception as e:
+                logging.error(f"Error scanning log file {log_path}: {e}")
+
+        return errors_found
+
+    def check_date_transition(self):
+        """Update log file paths if date has changed."""
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        
+        new_paths = {
+            'application': os.path.join(self.install_directory, 'logs', f'sc_app_{current_date}.log'),
+            'core': os.path.join(self.install_directory, 'logs', f'sc_core_{current_date}.log')
+        }
+
+        if new_paths != self.log_files:
+            self.log_files = new_paths
+            self.last_check_positions = {
+                'application': 0,
+                'core': 0
+            }
 
 def should_backup(schedule, last_check_time, backup_state):
     """Check if backup should run based on schedule"""
@@ -1025,8 +1135,31 @@ def action_loop_and_sleep(settings, settings_file_path, dbconn, ignore_hash, sys
     install_path = stable_settings.get('install_path', '')
     history_manager = CoreHistoryManager(install_path)
 
+    # Initialize log monitor
+    log_monitor = LogMonitor(
+        install_path,
+        settings['API_KEY'],
+        settings['AGENT_ID']
+    )
+
     while True:
         try:
+            # Check for date transition in logs
+            log_monitor.check_date_transition()
+            
+            # Scan for errors
+            errors = log_monitor.scan_logs()
+            if errors:
+                app_version = stable_settings.get('version', 'unknown')
+                for error in errors:
+                    network_utils.submit_error_log(
+                        settings['API_KEY'],
+                        settings['AGENT_ID'],
+                        app_version,
+                        error['content'],
+                        error['source']
+                    )
+        
             settings = read_yaml_settings_file(settings_file_path)
             network_utils.sync_backup_folders(settings)
 

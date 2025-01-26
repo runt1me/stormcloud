@@ -276,8 +276,7 @@ def summarize_file_with_ai(api_key: str, agent_id: str, filepath: str, content: 
             'message': f"Failed to get summary: {str(e)}"
         }
         
-def submit_error_log(api_key: str, agent_id: str, application_version: str, log_content: str, 
-                    char_map: dict, source: str):
+def submit_error_log(api_key: str, agent_id: str, application_version: str, log_content: str, source: str):
     """Submit error log to server for analysis."""
     url = API_ENDPOINT_SUBMIT_ERROR_LOG
     headers = {'Content-Type': 'application/json'}
@@ -287,12 +286,12 @@ def submit_error_log(api_key: str, agent_id: str, application_version: str, log_
         'agent_id': agent_id,
         'application_version': application_version,
         'log_content': log_content,
-        'char_map': char_map,
         'source': source
     }
 
     try:
         response = requests.post(url, headers=headers, json=data)
+        print(response)
         response.raise_for_status()
         return response.json()
     except requests.RequestException as e:
